@@ -114,8 +114,9 @@ cd /opt/rumi/deploy
 docker run --rm amir20/dozzle:v10.6.6 generate admin \
   --name 'RUMI Ops' --password 'STRONG_PASSWORD_HERE' > dozzle-users.yml
 ./deploy.sh                                                   # brings up the dozzle service
-# Caddyfile change (the /logs route) needs a reload:
-docker compose -f docker-compose.prod.yml exec caddy caddy reload --config /etc/caddy/Caddyfile
+# Caddyfile change (the /logs route) needs the caddy container recreated, NOT
+# just reloaded — see the warning under "Updating infra files" below for why.
+docker compose -f docker-compose.prod.yml up -d --force-recreate caddy
 ```
 The `dozzle-users.yml` file **must exist before** the stack starts — otherwise Docker
 creates a directory at that bind-mount path and Dozzle fails to read users. See
@@ -125,6 +126,42 @@ Security: Dozzle mounts the docker socket **read-only** and is never published t
 host port — it is reachable only through Caddy at `/logs`, gated by its own login.
 Logs can contain PII, so the login is mandatory; rotate the password by regenerating
 `dozzle-users.yml` and restarting the `dozzle` service.
+
+---
+
+## Developer Portal (`/dev-portal`)
+
+An internal ops dashboard (frontend repo: `src/app/dev-portal/page.tsx`) showing
+combined frontend+backend version info, backend diagnostics (DB connectivity,
+migrations), and a link to the Dozzle log viewer. It is **deliberately not part of
+the tenant app** — no i18n, no tenant login — because RUMI is moving toward
+multi-tenant SaaS and this tool must stay decoupled from any one tenant's auth/UI.
+
+Access is gated by **Caddy Basic Auth** at the proxy layer (see `Caddyfile`'s
+`/dev-portal` + `/dev-portal/*` block), independent of the restaurant's Admin/Staff
+role system — same pattern as Dozzle above, just HTTP Basic Auth instead of Dozzle's
+own login page.
+
+**One-time setup / password rotation on the box:**
+```bash
+ssh rumi@159.195.137.101
+cd /opt/rumi/deploy
+docker run --rm caddy:2-alpine caddy hash-password --plaintext 'STRONG_PASSWORD_HERE'
+# Paste the resulting hash into .env as DEV_PORTAL_AUTH_HASH=... (see .env.example)
+docker compose -f docker-compose.prod.yml up -d --force-recreate caddy
+# Verify the hash reached the container unmangled (bcrypt hashes contain `$`):
+docker compose -f docker-compose.prod.yml exec caddy printenv DEV_PORTAL_AUTH_HASH
+```
+The diagnostics card additionally requires the developer to be logged into the
+restaurant's `/admin` UI as Admin in the same browser (it calls the backend's
+admin-gated `/api/diagnostics` via the normal tenant auth token, unchanged) —
+the page degrades gracefully if that token is absent.
+
+The frontend's own `/api/frontend/version` route needs a matching exact-path
+`handle` block in the Caddyfile. Caddy matches `handle` blocks by path specificity
+(exact paths beat the `/api/*` wildcard) regardless of document order, so this
+works even though the block also happens to be placed above the generic `/api/*`
+block for readability. See the comment above that block in `Caddyfile`.
 
 ---
 
@@ -147,8 +184,14 @@ Edit here, open a PR, merge to `main` → `sync-to-box.yml` rsyncs to the box.
 The sync **copies files only** — it does not restart anything:
 
 - A `docker-compose.prod.yml` change takes effect on the next `./deploy.sh`.
-- A `Caddyfile` change needs a reload:
-  `bash .ssh/box.sh 'cd /opt/rumi/deploy && docker compose -f docker-compose.prod.yml exec caddy caddy reload --config /etc/caddy/Caddyfile'`.
+- A `Caddyfile` change needs the **caddy container recreated**, not just reloaded:
+  `bash .ssh/box.sh 'cd /opt/rumi/deploy && docker compose -f docker-compose.prod.yml up -d --force-recreate caddy'`.
+  **Do not use `caddy reload`** — `sync-to-box.yml`'s rsync replaces `Caddyfile` via an
+  atomic rename, which leaves the caddy container's single-file bind mount pinned to
+  the *old* inode. `caddy reload` re-parses a file the container can no longer see as
+  changed, so it silently no-ops on the new content. Verify the fix took with
+  `bash .ssh/box.sh 'cd /opt/rumi/deploy && md5sum Caddyfile && docker compose -f docker-compose.prod.yml exec caddy md5sum /etc/caddy/Caddyfile'`
+  — both hashes must match.
 
 `.env` and `app-secrets.json` are **never** synced (excluded) — edit those on the
 box directly.

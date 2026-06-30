@@ -1,8 +1,10 @@
 # RUMI reverse proxy — automatic HTTPS via Let's Encrypt.
 # Routing mirrors the legacy ingress:
-#   /api/*     -> backend  (:8080)
-#   /uploads/* -> static files (Local file-storage), served straight off the volume
-#   everything else -> frontend (Next.js :3000)
+#   /api/frontend/version -> frontend (Next.js :3000) — exception carved out of /api/*
+#   /api/*                -> backend  (:8080)
+#   /uploads/*             -> static files (Local file-storage), served straight off the volume
+#   /dev-portal             -> frontend (Next.js :3000), gated by its own Basic Auth
+#   everything else        -> frontend (Next.js :3000)
 
 www.rumirestaurant.ch {
 	encode zstd gzip
@@ -14,12 +16,35 @@ www.rumirestaurant.ch {
 		file_server
 	}
 
+	# Frontend's own version-aggregation route (combines frontend build info +
+	# a server-to-server call to the backend's /api/version). Caddy's `handle`
+	# matches by path specificity, not document order, so this exact path
+	# always wins over the /api/* wildcard below regardless of placement —
+	# kept above it here purely for readability, not because order matters.
+	handle /api/frontend/version {
+		reverse_proxy frontend:3000
+	}
+
 	# API (includes SSE order-event stream). flush_interval -1 disables response
 	# buffering so Server-Sent Events reach the cashier/kitchen UIs immediately.
 	handle /api/* {
 		reverse_proxy backend:8080 {
 			flush_interval -1
 		}
+	}
+
+	# Internal developer/operator tool — gated independently of tenant auth,
+	# same pattern as Dozzle below. Hash lives in the box's environment, never
+	# in git (see DEV_PORTAL_AUTH_HASH in docker-compose.prod.yml). Stays
+	# decoupled from any one tenant's auth/UI as RUMI moves toward SaaS.
+	# Exact `/dev-portal` + `/dev-portal/*` (not `/dev-portal*`), matching the
+	# Dozzle pattern below, so unrelated paths like /dev-portal-x aren't captured.
+	@devportal path /dev-portal /dev-portal/*
+	handle @devportal {
+		basic_auth {
+			dev {env.DEV_PORTAL_AUTH_HASH}
+		}
+		reverse_proxy frontend:3000
 	}
 
 	# Ops only: container log viewer (Dozzle) at /logs. Dozzle enforces its own
