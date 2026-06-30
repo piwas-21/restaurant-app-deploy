@@ -1,0 +1,114 @@
+# RUMI — Deployment & Rollback runbook
+
+Canonical runbook for shipping RUMI to production and rolling back. Production is
+a single Netcup box running the stack via Docker Compose; images are built in CI
+and pulled from GHCR. The app repos link here.
+
+> **Audience:** anyone promoting a release or responding to a bad deploy.
+> **Box / secrets setup:** see [README.md](README.md).
+
+---
+
+## Topology
+
+```
+merge to main ─► build-image.yml ─► GHCR (:latest, :sha-<commit>) ─► deploy.yml ─► SSH ─► box: deploy.sh
+ (app repo)       (build + push)        (image registry)            (auto/manual)        (pull + up -d)
+
+push to main ─► sync-to-box.yml ─► rsync ─► box: /opt/rumi/deploy   (this repo: infra files only)
+ (this repo)
+```
+
+- **Two app repos, one box.** `restaurant-app-backend` and `restaurant-app-frontend`
+  each build their own image and each have their own `deploy.yml`. A deploy from
+  one repo only re-points **that repo's** service.
+- **This repo is the source of truth for infra files** (compose, Caddyfile,
+  `deploy.sh`, scripts). `sync-to-box.yml` rsyncs them to the box on every push;
+  the box is a plain directory, not a git checkout.
+- **Image tags.** Every push to `main` publishes `latest` (moving) and
+  `sha-<40-hex-commit>` (immutable). Rollbacks target the immutable `sha-` tag.
+- **`.env` on the box pins what's running:** `BACKEND_TAG` / `FRONTEND_TAG`.
+  `deploy.sh` persists whatever tag it deploys, so a rollback survives restarts
+  and the next real release moves the service forward again.
+
+---
+
+## Normal deployment (automatic)
+
+1. Merge your PR into `develop`; validate on the test environment.
+2. Promote `develop` → `main` (the release PR).
+3. The push to `main` triggers `build-image` → publishes `:latest` + `:sha-<commit>`.
+4. On success, `deploy.yml` fires automatically (`workflow_run`) and deploys
+   `latest` for that repo's service. **No manual step.**
+
+## Manual deploy / redeploy (no rollback)
+
+In the app repo: **Actions → deploy → Run workflow** → leave `image_tag = latest`.
+Identical to the automatic path; use it to re-run a deploy without a new merge.
+
+---
+
+## Rollback
+
+Re-points the running container at an **already-published** image — builds nothing,
+fast, and only affects the service whose repo you run it from.
+
+1. **Find the last-good `sha-` tag.** From the app repo: `git log --oneline main`
+   → copy the full 40-char SHA of the known-good commit → the tag is `sha-<sha>`.
+   (Or browse the GHCR package's **Tags** and pick the `sha-…` before the bad one.)
+2. **Run it.** In the affected app repo: **Actions → deploy → Run workflow** →
+   `image_tag = sha-<40hex>` → Run. Sets `BACKEND_TAG` / `FRONTEND_TAG` in the box
+   `.env`, pulls that image, restarts that one service.
+3. **Confirm** (see below).
+
+**Roll forward again:** merge+promote a fix (auto-deploys `latest`), or run the
+workflow with `image_tag = latest` to clear the pin.
+
+> ⚠️ **Backend schema caveat.** The backend auto-runs EF migrations on startup, so
+> rolling the **backend** image back does **not** revert migrations the bad build
+> already applied. Prefer rolling *forward* with a fix for schema problems; only
+> hard-rollback the backend when the bad build added no migration.
+
+---
+
+## Verifying a deploy
+
+```bash
+# from a machine with box SSH access (see .ssh/box.sh — runs as root):
+bash .ssh/box.sh 'cd /opt/rumi/deploy && grep -E "^(BACKEND|FRONTEND)_TAG=" .env && docker compose -f docker-compose.prod.yml ps'
+```
+```bash
+curl -sS -o /dev/null -w '%{http_code}\n' https://www.rumirestaurant.ch/          # frontend -> 200
+curl -sS -o /dev/null -w '%{http_code}\n' https://www.rumirestaurant.ch/api/health  # backend  -> 200
+```
+Backend startup / migration logs:
+```bash
+bash .ssh/box.sh 'cd /opt/rumi/deploy && docker compose -f docker-compose.prod.yml logs --tail=80 backend'
+```
+
+---
+
+## Emergency manual deploy (CI/SSH-from-Actions unavailable)
+
+```bash
+ssh rumi@159.195.137.101
+cd /opt/rumi/deploy
+BACKEND_TAG=sha-<40hex> ./deploy.sh      # rollback backend
+FRONTEND_TAG=latest    ./deploy.sh       # redeploy frontend
+./deploy.sh                              # deploy whatever .env currently pins
+```
+`deploy.sh` is idempotent and persists the tag to `.env`.
+
+---
+
+## Updating infra files (compose / Caddyfile / deploy.sh)
+
+Edit here, open a PR, merge to `main` → `sync-to-box.yml` rsyncs to the box.
+The sync **copies files only** — it does not restart anything:
+
+- A `docker-compose.prod.yml` change takes effect on the next `./deploy.sh`.
+- A `Caddyfile` change needs a reload:
+  `bash .ssh/box.sh 'cd /opt/rumi/deploy && docker compose -f docker-compose.prod.yml exec caddy caddy reload --config /etc/caddy/Caddyfile'`.
+
+`.env` and `app-secrets.json` are **never** synced (excluded) — edit those on the
+box directly.
