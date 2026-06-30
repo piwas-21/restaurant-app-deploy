@@ -86,6 +86,46 @@ Backend startup / migration logs:
 bash .ssh/box.sh 'cd /opt/rumi/deploy && docker compose -f docker-compose.prod.yml logs --tail=80 backend'
 ```
 
+**What's actually deployed** — one URL shows both services' build identity (commit
++ build time), reflecting the *running* containers rather than `.env`:
+```bash
+curl -sS https://www.rumirestaurant.ch/api/version          # { frontend:{commit,buildTime,...}, backend:{...} }
+```
+Richer, admin-only diagnostics (full SHA, .NET version, DB status, last applied
+migration) — requires an Admin bearer token:
+```bash
+curl -sS https://www.rumirestaurant.ch/api/diagnostics -H "Authorization: Bearer <admin-jwt>"
+```
+
+---
+
+## Viewing logs in the browser (Dozzle)
+
+Live container logs are available at **https://www.rumirestaurant.ch/logs** behind a
+login (Dozzle simple auth). This complements the SSH `docker compose logs` commands
+above — no shell access needed for read-only log viewing.
+
+**One-time setup on the box** (the credentials file is gitignored + excluded from CI
+sync; it lives only on the server, like `app-secrets.json`):
+```bash
+ssh rumi@159.195.137.101
+cd /opt/rumi/deploy
+# Generate the login (bcrypt-hashed); pick a strong password:
+docker run --rm amir20/dozzle:v10.6.6 generate admin \
+  --name 'RUMI Ops' --password 'STRONG_PASSWORD_HERE' > dozzle-users.yml
+./deploy.sh                                                   # brings up the dozzle service
+# Caddyfile change (the /logs route) needs a reload:
+docker compose -f docker-compose.prod.yml exec caddy caddy reload --config /etc/caddy/Caddyfile
+```
+The `dozzle-users.yml` file **must exist before** the stack starts — otherwise Docker
+creates a directory at that bind-mount path and Dozzle fails to read users. See
+`dozzle-users.example.yml` for the schema.
+
+Security: Dozzle mounts the docker socket **read-only** and is never published to a
+host port — it is reachable only through Caddy at `/logs`, gated by its own login.
+Logs can contain PII, so the login is mandatory; rotate the password by regenerating
+`dozzle-users.yml` and restarting the `dozzle` service.
+
 ---
 
 ## Emergency manual deploy (CI/SSH-from-Actions unavailable)
