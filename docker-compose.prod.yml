@@ -91,6 +91,23 @@ services:
       retries: 5
     networks: [rumi]
 
+  # Container log viewer (web UI) for ops/debugging. Reads the docker socket
+  # read-only. NOT published to a host port — only reachable through Caddy at
+  # /logs, and Dozzle enforces its own login (DOZZLE_AUTH_PROVIDER=simple, users
+  # in ./dozzle-users.yml — gitignored, generated on the box like app-secrets.json).
+  # See DEPLOYMENT.md "Viewing logs in the browser".
+  dozzle:
+    image: amir20/dozzle:v10.6.6
+    restart: unless-stopped
+    environment:
+      DOZZLE_BASE: /logs           # must match the Caddy /logs route
+      DOZZLE_AUTH_PROVIDER: simple # login page + bcrypt + sessions
+      DOZZLE_NO_ANALYTICS: "true"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./dozzle-users.yml:/data/users.yml:ro
+    networks: [rumi]
+
 networks:
   rumi:
     driver: bridge

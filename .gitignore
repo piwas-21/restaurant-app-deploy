@@ -1,6 +1,7 @@
 # Secrets — never commit
 .env
 app-secrets.json
+dozzle-users.yml
 
 # SSH private keys — never commit (only box.sh + known_hosts are tracked under .ssh/)
 .ssh/id_*

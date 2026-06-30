@@ -22,6 +22,17 @@ www.rumirestaurant.ch {
 		}
 	}
 
+	# Ops only: container log viewer (Dozzle) at /logs. Dozzle enforces its own
+	# login (DOZZLE_AUTH_PROVIDER=simple); Caddy just proxies over the internal
+	# network. DOZZLE_BASE=/logs must match this path so asset/websocket URLs
+	# resolve. Matched before the catch-all so it doesn't fall through to the
+	# Next.js app. Named matcher with exact `/logs` + `/logs/*` (not `/logs*`)
+	# so unrelated paths like /logsomething are NOT captured.
+	@logs path /logs /logs/*
+	handle @logs {
+		reverse_proxy dozzle:8080
+	}
+
 	# Next.js app
 	handle {
 		reverse_proxy frontend:3000

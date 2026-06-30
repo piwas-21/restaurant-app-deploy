@@ -1,0 +1,16 @@
+# Dozzle simple-auth users (DOZZLE_AUTH_PROVIDER=simple).
+#
+# Copy to dozzle-users.yml ON THE BOX (it is gitignored and excluded from CI
+# sync — it lives only on the server, like app-secrets.json). Do NOT commit the
+# real file. Generate it with a bcrypt-hashed password instead of editing by hand:
+#
+#   docker run --rm amir20/dozzle:v10.6.6 generate admin \
+#     --name 'RUMI Ops' --password 'CHOOSE_A_STRONG_PASSWORD' > dozzle-users.yml
+#
+# Then deploy/recreate the stack. Dozzle mounts this at /data/users.yml.
+#
+# Schema (the `password` value MUST be a bcrypt hash, never plaintext):
+users:
+  admin:
+    name: "RUMI Ops"
+    password: "$2a$11$REPLACE_WITH_A_REAL_BCRYPT_HASH_FROM_THE_GENERATE_COMMAND"
