@@ -1,8 +1,19 @@
 # RUMI deploy — single-box (Netcup RS 2000), tenant 1: rumirestaurant.ch
 
+Source of truth for the production box's infra. **Deploy/rollback runbook:**
+[DEPLOYMENT.md](DEPLOYMENT.md).
+
 Self-contained Docker Compose deployment. **No AWS, no DB recovery required** to go live — the
 backend auto-migrates and seeds a fresh Postgres on first boot, and file uploads use the built-in
 **Local** storage provider (served off the box), so the deferred AWS database/S3 work does not block this.
+
+## How the box stays in sync
+This repo is the source of truth; the box (`/opt/rumi/deploy`) is a plain directory, not a git
+checkout. On every push to `main`, **`.github/workflows/sync-to-box.yml` rsyncs these files to the
+box** over SSH (read-only deploy access; `.env` and `app-secrets.json` are excluded and never
+touched — edit those on the box directly). Requires `rsync` on the box (installed) and repo secrets
+`DEPLOY_HOST` / `DEPLOY_USER` / `DEPLOY_SSH_KEY` / `DEPLOY_KNOWN_HOSTS`. App **image** rollouts are
+separate — each app repo's own `deploy.yml` handles those (see [DEPLOYMENT.md](DEPLOYMENT.md)).
 
 ## Stack
 Caddy (auto-TLS) → frontend (Next.js :3000) / backend (.NET 10 :8080) → Postgres 16 + Redis 7.
