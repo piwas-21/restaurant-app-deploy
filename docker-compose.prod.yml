@@ -1,0 +1,104 @@
+# RUMI production stack — single Netcup RS 2000 box, tenant 1 (rumirestaurant.ch)
+# Images are prebuilt in CI and pulled from GHCR (see each repo's
+# .github/workflows/build-image.yml) — no source checkout or on-box build.
+# Only this folder is needed on the server:
+#   /opt/rumi/deploy   <- compose, Caddyfile, .env, app-secrets.json
+#
+# Per-service image tags are pinned in .env: BACKEND_TAG / FRONTEND_TAG (each
+# default: latest). deploy.sh persists these, so a rollback pins one service
+# without touching the other. Deploy/rollback via each repo's deploy workflow,
+# or on the box:  BACKEND_TAG=sha-<hex> ./deploy.sh
+# Deploy:  docker compose -f docker-compose.prod.yml pull && docker compose -f docker-compose.prod.yml up -d
+# Logs:    docker compose -f docker-compose.prod.yml logs -f backend
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - uploads:/srv/uploads:ro        # serve /uploads/* straight off the backend's upload volume
+      - caddy_data:/data               # ACME certs/keys — persist so we don't re-issue
+      - caddy_config:/config
+    depends_on:
+      - frontend
+      - backend
+    networks: [rumi]
+
+  frontend:
+    # NEXT_PUBLIC_* are baked into this image at CI build time (see the repo's
+    # build-image.yml). Changing the API URL/domain requires a CI rebuild.
+    image: ghcr.io/piwas-21/restaurant-app-frontend:${FRONTEND_TAG:-latest}
+    pull_policy: always
+    restart: unless-stopped
+    depends_on:
+      - backend
+    networks: [rumi]
+
+  backend:
+    image: ghcr.io/piwas-21/restaurant-app-backend:${BACKEND_TAG:-latest}
+    pull_policy: always
+    restart: unless-stopped
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      # Aspire components: AddNpgsqlDataSource("restaurantdb") + AddRedisDistributedCache("redis")
+      # expect connection strings named "restaurantdb" / "redis" (NOT DefaultConnection).
+      ConnectionStrings__restaurantdb: "Host=postgres;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}"
+      ConnectionStrings__redis: "redis:6379"
+    volumes:
+      - ./app-secrets.json:/app/app-secrets.json:ro   # all app secrets/config (git-ignored)
+      - backend_keys:/app/keys                          # DataProtection keys — persist or every redeploy invalidates tokens/sessions
+      - uploads:/app/wwwroot/uploads                    # Local file-storage provider writes here; Caddy serves it
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks: [rumi]
+    # Backend auto-runs EF migrations + seeders on startup (MigrateApplicationDatabaseAsync()).
+    # No manual migration step needed on a fresh DB.
+
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [rumi]
+    # No host port published — DB reachable only on the internal docker network.
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [rumi]
+
+networks:
+  rumi:
+    driver: bridge
+
+volumes:
+  pgdata:
+  redisdata:
+  backend_keys:
+  uploads:
+  caddy_data:
+  caddy_config:

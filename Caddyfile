@@ -1,0 +1,34 @@
+# RUMI reverse proxy — automatic HTTPS via Let's Encrypt.
+# Routing mirrors the legacy ingress:
+#   /api/*     -> backend  (:8080)
+#   /uploads/* -> static files (Local file-storage), served straight off the volume
+#   everything else -> frontend (Next.js :3000)
+
+www.rumirestaurant.ch {
+	encode zstd gzip
+
+	# Uploaded product/category images. handle_path strips the /uploads prefix,
+	# so /uploads/products/x.jpg -> /srv/uploads/products/x.jpg
+	handle_path /uploads/* {
+		root * /srv/uploads
+		file_server
+	}
+
+	# API (includes SSE order-event stream). flush_interval -1 disables response
+	# buffering so Server-Sent Events reach the cashier/kitchen UIs immediately.
+	handle /api/* {
+		reverse_proxy backend:8080 {
+			flush_interval -1
+		}
+	}
+
+	# Next.js app
+	handle {
+		reverse_proxy frontend:3000
+	}
+}
+
+# Apex -> www (301), matching the legacy redirect behaviour.
+rumirestaurant.ch {
+	redir https://www.rumirestaurant.ch{uri} permanent
+}
