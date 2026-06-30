@@ -1,0 +1,68 @@
+name: sync-to-box
+
+# Push the deploy artifacts (compose, Caddyfile, deploy.sh, provision/gen
+# scripts, templates) to the production box on every change. The box is a plain
+# directory, not a git checkout — this repo is the source of truth and CI keeps
+# the box in sync. App image rollouts are handled by each app repo's deploy.yml;
+# this only syncs the static infra files.
+#
+# Secrets: DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY (matches a key in
+# rumi@box:~/.ssh/authorized_keys), DEPLOY_KNOWN_HOSTS (box host keys, pins
+# against MITM).
+#
+# Note: a compose/Caddyfile change only takes effect on the next deploy
+# (`./deploy.sh` / a `caddy reload`); this job copies files, it does not restart
+# the stack.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "README.md"
+      - "DEPLOYMENT.md"
+      - ".gitignore"
+  workflow_dispatch:
+
+concurrency:
+  group: prod-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    name: rsync deploy files to prod box
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Configure SSH (pinned host key)
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Rsync to /opt/rumi/deploy
+        env:
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+        # No --delete: never risk removing on-box runtime files. Protected files
+        # (.env, app-secrets.json) and CI/local-only paths are excluded outright.
+        run: |
+          rsync -az --human-readable --itemize-changes \
+            --exclude='.git/' \
+            --exclude='.github/' \
+            --exclude='.ssh/' \
+            --exclude='.env' \
+            --exclude='app-secrets.json' \
+            --exclude='*.bak' \
+            --exclude='*.bak.*' \
+            -e "ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes -o ConnectTimeout=15" \
+            ./ "${DEPLOY_USER}@${DEPLOY_HOST}:/opt/rumi/deploy/"
