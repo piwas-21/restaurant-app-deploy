@@ -147,9 +147,17 @@ own login page.
 ssh rumi@159.195.137.101
 cd /opt/rumi/deploy
 docker run --rm caddy:2-alpine caddy hash-password --plaintext 'STRONG_PASSWORD_HERE'
-# Paste the resulting hash into .env as DEV_PORTAL_AUTH_HASH=... (see .env.example)
+# IMPORTANT: double every literal $ in the hash before pasting into .env — Compose
+# interpolates .env values when substituting them into docker-compose.prod.yml, so
+# a raw `$2a$14$abc...` gets partially swallowed (e.g. `$Gkg` silently resolves to
+# "" if no such shell/compose variable exists), corrupting the hash. Escape as $$:
+#   $2a$14$Gkg.abc...   ->   $$2a$$14$$Gkg.abc...
+# Paste the ESCAPED hash into .env as DEV_PORTAL_AUTH_HASH=... (see .env.example)
 docker compose -f docker-compose.prod.yml up -d --force-recreate caddy
-# Verify the hash reached the container unmangled (bcrypt hashes contain `$`):
+# Verify the hash reached the container unmangled (compare byte-for-byte against
+# what `caddy hash-password` printed — no warnings like `The "Xyz" variable is not
+# set` should appear in the `up` output above; that warning means the escaping was
+# missed):
 docker compose -f docker-compose.prod.yml exec caddy printenv DEV_PORTAL_AUTH_HASH
 ```
 The diagnostics card additionally requires the developer to be logged into the
