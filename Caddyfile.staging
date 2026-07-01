@@ -3,11 +3,13 @@
 # see docker-compose.prod.yml). Routing mirrors the prod Caddyfile exactly so staging
 # is a faithful rehearsal of prod — the ONLY difference is the site address.
 #
-# Host: the staging box's Netcup reverse-DNS name. It's a real, per-box hostname so
-# Let's Encrypt issues for it reliably (unlike nip.io/sslip.io shared domains). Swap
-# this for the SaaS brand domain (e.g. staging.<brand>) once one is registered.
+# Host: {$STAGING_DOMAIN} is injected from the staging box's .env via the caddy
+# service in docker-compose.prod.yml (default = the box's Netcup reverse-DNS name,
+# a real per-box hostname Let's Encrypt issues for reliably — unlike nip.io/sslip.io
+# shared domains). To move to a SaaS brand domain later, just set STAGING_DOMAIN in
+# the box's .env — no edit to this file.
 
-v2202607374190477434.megasrv.de {
+{$STAGING_DOMAIN} {
 	encode zstd gzip
 
 	# Uploaded product/category images — served straight off the backend's volume.

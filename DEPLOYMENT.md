@@ -65,13 +65,18 @@ ssh root@159.195.34.105 'bash -s' < provision.sh      # SEED SSH_PUBKEY first (s
 # 2. Get infra files onto the box (manual until sync-to-staging.yml is enabled):
 rsync -az --exclude='.git/' --exclude='.env' --exclude='app-secrets.json' \
   ./ rumi@159.195.34.105:/opt/rumi/deploy/
-# 3. On the box: generate secrets, then fill staging URLs/CORS/email:
+# 3. On the box: scaffold .env + app-secrets.json FROM THE STAGING TEMPLATES with
+#    fresh random secrets (gen-secrets skips files that already exist, so let it
+#    create them — do NOT pre-copy):
 ssh rumi@159.195.34.105
 cd /opt/rumi/deploy
-cp .env.staging.example .env && cp app-secrets.staging.example.json app-secrets.json
-./gen-secrets.sh          # fills POSTGRES_PASSWORD / JWT / printer key
-#   then edit .env (CADDYFILE, DEV_PORTAL_AUTH_HASH) + app-secrets.json (Resend key, AdminEmail)
-# 4. Deploy (DNS already resolves — it's the box's own hostname):
+ENV_EXAMPLE=.env.staging.example SECRETS_EXAMPLE=app-secrets.staging.example.json ./gen-secrets.sh
+#   then edit .env (DEV_PORTAL_AUTH_HASH) + app-secrets.json (ResendApiKey, AdminEmail).
+#   CADDYFILE / STAGING_DOMAIN / FRONTEND_TAG=staging are already set by the template.
+# 4. Dozzle login must exist BEFORE the stack starts, or Docker creates a directory at
+#    the bind-mount path and dozzle fails to start:
+docker run --rm amir20/dozzle:v10.6.6 generate admin --name 'RUMI Staging Ops' --password 'CHOOSE_ONE' > dozzle-users.yml
+# 5. Deploy (DNS already resolves — it's the box's own hostname):
 ./deploy.sh
 ```
 Verify: `https://v2202607374190477434.megasrv.de/` (200) and
