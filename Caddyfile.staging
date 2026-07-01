@@ -1,0 +1,55 @@
+# RUMI STAGING reverse proxy — automatic HTTPS via Let's Encrypt.
+# Mounted on the staging box only (CADDYFILE=./Caddyfile.staging in that box's .env;
+# see docker-compose.prod.yml). Routing mirrors the prod Caddyfile exactly so staging
+# is a faithful rehearsal of prod — the ONLY difference is the site address.
+#
+# Host: {$STAGING_DOMAIN} is injected from the staging box's .env via the caddy
+# service in docker-compose.prod.yml (default = the box's Netcup reverse-DNS name,
+# a real per-box hostname Let's Encrypt issues for reliably — unlike nip.io/sslip.io
+# shared domains). To move to a SaaS brand domain later, just set STAGING_DOMAIN in
+# the box's .env — no edit to this file.
+
+{$STAGING_DOMAIN} {
+	encode zstd gzip
+
+	# Uploaded product/category images — served straight off the backend's volume.
+	handle_path /uploads/* {
+		root * /srv/uploads
+		file_server
+	}
+
+	# Frontend's version-aggregation route — must win over /api/* (Caddy matches by
+	# path specificity, so this is safe regardless of order).
+	handle /api/frontend/version {
+		reverse_proxy frontend:3000
+	}
+
+	# API + SSE order-event stream. flush_interval -1 disables buffering so SSE reaches
+	# the cashier/kitchen UIs immediately.
+	handle /api/* {
+		reverse_proxy backend:8080 {
+			flush_interval -1
+		}
+	}
+
+	# Internal developer/operator tool, gated by its own Basic Auth (hash from the box's
+	# .env, never in git). Exact /dev-portal + /dev-portal/* only.
+	@devportal path /dev-portal /dev-portal/*
+	handle @devportal {
+		basic_auth {
+			dev {env.DEV_PORTAL_AUTH_HASH}
+		}
+		reverse_proxy frontend:3000
+	}
+
+	# Ops-only container log viewer (Dozzle) at /logs — enforces its own login.
+	@logs path /logs /logs/*
+	handle @logs {
+		reverse_proxy dozzle:8080
+	}
+
+	# Next.js app
+	handle {
+		reverse_proxy frontend:3000
+	}
+}

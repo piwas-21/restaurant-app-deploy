@@ -1,0 +1,70 @@
+name: sync-to-staging
+
+# Push the deploy artifacts to the STAGING box. Mirrors sync-to-box.yml but targets
+# the staging host secrets and the shared infra files (compose, Caddyfiles, scripts).
+# The staging box selects Caddyfile.staging via CADDYFILE in its own .env.
+#
+# Trigger is workflow_dispatch ONLY for now: flip on the `push: branches: [main]`
+# trigger once the STAGING_* secrets are set and the box is provisioned, so staging
+# tracks infra changes automatically like prod does.
+#
+# Secrets (add in the deploy repo): STAGING_HOST, STAGING_USER, STAGING_SSH_KEY
+# (matches a key in rumi@staging:~/.ssh/authorized_keys), STAGING_KNOWN_HOSTS
+# (staging box host keys — pin against MITM; get via `ssh-keyscan v2202607374190477434.megasrv.de`).
+#
+# Note: this copies files only; it does not restart the stack. Apply with
+# `./deploy.sh` (or `caddy reload` / force-recreate) on the box afterwards.
+
+on:
+  # push:
+  #   branches: [main]
+  #   paths-ignore:
+  #     - "README.md"
+  #     - "DEPLOYMENT.md"
+  #     - ".gitignore"
+  workflow_dispatch:
+
+concurrency:
+  group: staging-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    name: rsync deploy files to staging box
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Configure SSH (pinned host key)
+        env:
+          STAGING_SSH_KEY: ${{ secrets.STAGING_SSH_KEY }}
+          STAGING_KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$STAGING_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$STAGING_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Rsync to /opt/rumi/deploy
+        env:
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+        # No --delete: never risk removing on-box runtime files. Protected files
+        # (.env, app-secrets.json) and CI/local-only paths are excluded outright.
+        run: |
+          rsync -az --human-readable --itemize-changes \
+            --exclude='.git/' \
+            --exclude='.github/' \
+            --exclude='.ssh/' \
+            --exclude='.env' \
+            --exclude='app-secrets.json' \
+            --exclude='dozzle-users.yml' \
+            --exclude='*.bak' \
+            --exclude='*.bak.*' \
+            -e "ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes -o ConnectTimeout=15" \
+            ./ "${STAGING_USER}@${STAGING_HOST}:/opt/rumi/deploy/"

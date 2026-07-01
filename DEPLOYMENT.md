@@ -33,6 +33,61 @@ push to main ─► sync-to-box.yml ─► rsync ─► box: /opt/rumi/deploy   
 
 ---
 
+## Staging environment (separate box)
+
+A **second, independent Netcup box** (`v2202607374190477434.megasrv.de`,
+`159.195.34.105`) runs the same stack as a staging/rehearsal environment, fully
+isolated from the client's prod box. Purpose: validate fixes and the SaaS
+transition live before promoting to the one production tenant (rumirestaurant.ch).
+
+**How staging differs from prod — three files only:**
+- `Caddyfile.staging` — same routing, different site address (the box's own
+  `*.megasrv.de` host, which Let's Encrypt issues for reliably). Selected via
+  `CADDYFILE=./Caddyfile.staging` in the staging box's `.env` — the compose file
+  (`docker-compose.prod.yml`) and `deploy.sh` are **shared, unchanged**.
+- `.env.staging.example` → the box's `.env`: `FRONTEND_TAG=staging`,
+  `BACKEND_TAG=latest`, fresh Postgres creds.
+- `app-secrets.staging.example.json` → the box's `app-secrets.json`: staging URLs,
+  CORS = the staging origin, and email via `onboarding@resend.dev` so staging
+  **cannot dent rumirestaurant.ch's sending reputation**.
+
+**Image model:** the **backend image is domain-agnostic** (URLs/CORS come from
+`app-secrets.json`), so staging runs the **same `:latest` backend** as prod. Only
+the **frontend** bakes `NEXT_PUBLIC_*` at build time, so it needs a
+staging-specific **`:staging`** image (built by the frontend repo's
+`build-image.yml` from `develop`). So the staging **frontend** tracks `develop`,
+while the **backend** image is shared with prod (`:latest`, built from `main`).
+
+**First-time bring-up (once the box is provisioned):**
+```bash
+# 1. Provision (as root on the staging box) — installs Docker, rumi user, hardening:
+ssh root@159.195.34.105 'bash -s' < provision.sh      # SEED SSH_PUBKEY first (see README)
+# 2. Get infra files onto the box (manual until sync-to-staging.yml is enabled):
+rsync -az --exclude='.git/' --exclude='.env' --exclude='app-secrets.json' \
+  ./ rumi@159.195.34.105:/opt/rumi/deploy/
+# 3. On the box: scaffold .env + app-secrets.json FROM THE STAGING TEMPLATES with
+#    fresh random secrets (gen-secrets skips files that already exist, so let it
+#    create them — do NOT pre-copy):
+ssh rumi@159.195.34.105
+cd /opt/rumi/deploy
+ENV_EXAMPLE=.env.staging.example SECRETS_EXAMPLE=app-secrets.staging.example.json ./gen-secrets.sh
+#   then edit .env (DEV_PORTAL_AUTH_HASH) + app-secrets.json (ResendApiKey, AdminEmail).
+#   CADDYFILE / STAGING_DOMAIN / FRONTEND_TAG=staging are already set by the template.
+# 4. Dozzle login must exist BEFORE the stack starts, or Docker creates a directory at
+#    the bind-mount path and dozzle fails to start:
+docker run --rm amir20/dozzle:v10.6.6 generate admin --name 'RUMI Staging Ops' --password 'CHOOSE_ONE' > dozzle-users.yml
+# 5. Deploy (DNS already resolves — it's the box's own hostname):
+./deploy.sh
+```
+Verify: `https://v2202607374190477434.megasrv.de/` (200) and
+`.../api/health` (200), same as the prod checks below.
+
+**Auto-sync:** `sync-to-staging.yml` is currently `workflow_dispatch`-only. Once the
+`STAGING_*` repo secrets are set, uncomment its `push: [main]` trigger so staging
+tracks infra changes automatically (like `sync-to-box.yml` does for prod).
+
+---
+
 ## Normal deployment (automatic)
 
 1. Merge your PR into `develop`; validate on the test environment.
