@@ -24,7 +24,11 @@ services:
       # the plaintext password, and never committed.
       DEV_PORTAL_AUTH_HASH: "${DEV_PORTAL_AUTH_HASH}"
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Which Caddyfile to mount is env-selectable so the SAME compose file drives
+      # both boxes: prod leaves CADDYFILE unset (-> ./Caddyfile, www.rumirestaurant.ch),
+      # the staging box sets CADDYFILE=./Caddyfile.staging in its .env. Behaviour is
+      # byte-identical to before on prod (the default resolves to ./Caddyfile).
+      - ${CADDYFILE:-./Caddyfile}:/etc/caddy/Caddyfile:ro
       - uploads:/srv/uploads:ro        # serve /uploads/* straight off the backend's upload volume
       - caddy_data:/data               # ACME certs/keys — persist so we don't re-issue
       - caddy_config:/config
