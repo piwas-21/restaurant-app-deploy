@@ -18,6 +18,11 @@ services:
     ports:
       - "80:80"
       - "443:443"
+    environment:
+      # Bcrypt hash for the /dev-portal Basic Auth gate (see Caddyfile). Set in
+      # the box's .env (gitignored), generated via `caddy hash-password`. Never
+      # the plaintext password, and never committed.
+      DEV_PORTAL_AUTH_HASH: "${DEV_PORTAL_AUTH_HASH}"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - uploads:/srv/uploads:ro        # serve /uploads/* straight off the backend's upload volume
