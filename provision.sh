@@ -15,13 +15,21 @@ apt-get update -y
 apt-get upgrade -y
 
 echo "==> Base packages"
-apt-get install -y ca-certificates curl gnupg git ufw fail2ban unattended-upgrades
+# rsync is required by sync-to-box.yml / sync-to-staging.yml (they rsync the deploy
+# folder onto the box); the minimal Netcup image does not ship it.
+apt-get install -y ca-certificates curl gnupg git ufw fail2ban unattended-upgrades rsync
 
 echo "==> Non-root deploy user: ${DEPLOY_USER}"
 if ! id "${DEPLOY_USER}" &>/dev/null; then
   adduser --disabled-password --gecos "" "${DEPLOY_USER}"
 fi
 usermod -aG sudo "${DEPLOY_USER}"
+# deploy.sh runs non-interactive `sudo chown` (to hand app-secrets.json to the
+# backend container's gid). The deploy user is created --disabled-password, so a
+# normal sudo prompt can never be answered — grant passwordless sudo via a drop-in.
+echo "${DEPLOY_USER} ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/${DEPLOY_USER}"
+chmod 440 "/etc/sudoers.d/${DEPLOY_USER}"
+visudo -cf "/etc/sudoers.d/${DEPLOY_USER}"
 if [[ -n "${SSH_PUBKEY}" ]]; then
   install -d -m 700 -o "${DEPLOY_USER}" -g "${DEPLOY_USER}" "/home/${DEPLOY_USER}/.ssh"
   echo "${SSH_PUBKEY}" > "/home/${DEPLOY_USER}/.ssh/authorized_keys"

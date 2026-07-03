@@ -4,24 +4,24 @@ name: sync-to-staging
 # the staging host secrets and the shared infra files (compose, Caddyfiles, scripts).
 # The staging box selects Caddyfile.staging via CADDYFILE in its own .env.
 #
-# Trigger is workflow_dispatch ONLY for now: flip on the `push: branches: [main]`
-# trigger once the STAGING_* secrets are set and the box is provisioned, so staging
-# tracks infra changes automatically like prod does.
+# Triggers on push to main (like sync-to-box.yml) so the staging box tracks infra
+# changes automatically, plus workflow_dispatch for manual re-syncs. Enabled once the
+# STAGING_* secrets were set and the box was provisioned (2026-07-03).
 #
-# Secrets (add in the deploy repo): STAGING_HOST, STAGING_USER, STAGING_SSH_KEY
+# Secrets (set in the deploy repo): STAGING_HOST, STAGING_USER, STAGING_SSH_KEY
 # (matches a key in rumi@staging:~/.ssh/authorized_keys), STAGING_KNOWN_HOSTS
-# (staging box host keys — pin against MITM; get via `ssh-keyscan v2202607374190477434.megasrv.de`).
+# (staging box host keys — pin against MITM; get via `ssh-keyscan 159.195.34.105`).
 #
 # Note: this copies files only; it does not restart the stack. Apply with
-# `./deploy.sh` (or `caddy reload` / force-recreate) on the box afterwards.
+# `./deploy.sh` (or a caddy force-recreate) on the box afterwards.
 
 on:
-  # push:
-  #   branches: [main]
-  #   paths-ignore:
-  #     - "README.md"
-  #     - "DEPLOYMENT.md"
-  #     - ".gitignore"
+  push:
+    branches: [main]
+    paths-ignore:
+      - "README.md"
+      - "DEPLOYMENT.md"
+      - ".gitignore"
   workflow_dispatch:
 
 concurrency:
