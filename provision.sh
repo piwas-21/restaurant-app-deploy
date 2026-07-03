@@ -24,12 +24,14 @@ if ! id "${DEPLOY_USER}" &>/dev/null; then
   adduser --disabled-password --gecos "" "${DEPLOY_USER}"
 fi
 usermod -aG sudo "${DEPLOY_USER}"
-# deploy.sh runs non-interactive `sudo chown` (to hand app-secrets.json to the
-# backend container's gid). The deploy user is created --disabled-password, so a
-# normal sudo prompt can never be answered — grant passwordless sudo via a drop-in.
-echo "${DEPLOY_USER} ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/${DEPLOY_USER}"
-chmod 440 "/etc/sudoers.d/${DEPLOY_USER}"
-visudo -cf "/etc/sudoers.d/${DEPLOY_USER}"
+# deploy.sh runs exactly one non-interactive privileged command — `sudo chown` to
+# hand app-secrets.json to the backend container's gid. The deploy user is created
+# --disabled-password, so a normal sudo prompt can never be answered. Grant ONLY
+# that command passwordless (never NOPASSWD:ALL — a compromised deploy user must not
+# get full root). Matches the rule documented in README.md.
+echo "${DEPLOY_USER} ALL=(root) NOPASSWD: /usr/bin/chown" > "/etc/sudoers.d/${DEPLOY_USER}-deploy"
+chmod 440 "/etc/sudoers.d/${DEPLOY_USER}-deploy"
+visudo -cf "/etc/sudoers.d/${DEPLOY_USER}-deploy"
 if [[ -n "${SSH_PUBKEY}" ]]; then
   install -d -m 700 -o "${DEPLOY_USER}" -g "${DEPLOY_USER}" "/home/${DEPLOY_USER}/.ssh"
   echo "${SSH_PUBKEY}" > "/home/${DEPLOY_USER}/.ssh/authorized_keys"
