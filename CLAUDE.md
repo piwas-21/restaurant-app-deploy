@@ -8,15 +8,10 @@
 - Two environments: **prod** (`www.rumirestaurant.ch`, box `159.195.137.101`) and **staging** (`staging.fooderist.com`, box `159.195.34.105`).
 - One of three repos under the [rumi-workspace](../); cross-repo plans + roadmap live at the workspace root.
 
-## Subagents (delegate to the right one)
+## Skills & tooling
 
-Versioned subagents live in [.claude/agents/](.claude/agents/):
-
-| Agent | Lives in | Use for |
-|---|---|---|
-| **devops** | this repo ([.claude/agents/devops.md](.claude/agents/devops.md)) | any infra/deploy/ops task — boxes, Caddy/TLS, DNS, secrets, provisioning, release. It knows the exact commands + traps so it uses the wrappers/scripts instead of experimenting on live infra. |
-| **backend** | backend repo | .NET code work |
-| **frontend** | frontend repo | Next.js code work |
+- Infra / deploy / ops work → load the **`operating-rumi-infra`** skill (from the **rumi-agent-kit** plugin). It carries the exact commands + hard traps so you use the wrappers/scripts (`.ssh/box.sh`, `.ssh/staging.sh`, `verify-env.sh`, `domainio-dns.sh`) instead of experimenting on live infra.
+- Raising a PR → the **`pr-workflow`** skill.
 
 ## Critical files to read
 

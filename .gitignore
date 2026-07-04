@@ -15,6 +15,5 @@ dozzle-users.yml
 *.bak
 *.bak.*
 
-# Claude Code per-repo settings (machine-local) — EXCEPT versioned subagents
-.claude/*
-!.claude/agents/
+# Claude Code per-repo settings (machine-local)
+.claude/
