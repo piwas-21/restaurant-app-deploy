@@ -14,3 +14,7 @@ dozzle-users.yml
 # Local backups created by on-box edits
 *.bak
 *.bak.*
+
+# Claude Code per-repo settings (machine-local) — EXCEPT versioned subagents
+.claude/*
+!.claude/agents/
