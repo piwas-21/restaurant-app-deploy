@@ -116,10 +116,10 @@ docker compose -f docker-compose.prod.yml exec postgres \
 container start):
 
 ```bash
-docker pull ghcr.io/piwas-21/sofra-migrate:latest
+docker pull ghcr.io/piwas-21/sofra:migrate
 docker run --rm --network deploy_rumi \
   -e DATABASE_URL="postgresql://sofra:<SOFRA_DB_PASSWORD>@postgres:5432/sofra" \
-  ghcr.io/piwas-21/sofra-migrate:latest          # = prisma migrate deploy
+  ghcr.io/piwas-21/sofra:migrate          # = prisma migrate deploy
 docker compose -f docker-compose.prod.yml up -d sofra
 ```
 
@@ -129,7 +129,7 @@ docker compose -f docker-compose.prod.yml up -d sofra
 docker run --rm --network deploy_rumi \
   -e DATABASE_URL="postgresql://sofra:<SOFRA_DB_PASSWORD>@postgres:5432/sofra" \
   -e ADMIN_EMAIL=<founder email> -e ADMIN_NAME=Founder -e ADMIN_PASSWORD=<throwaway ≥12 chars> \
-  ghcr.io/piwas-21/sofra-migrate:latest node scripts/seed-admin.mjs
+  ghcr.io/piwas-21/sofra:migrate node scripts/seed-admin.mjs
 ```
 
 Verify: `https://sofrapiwas.com/login` 200, sign-in works, and the RUMI
