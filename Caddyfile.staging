@@ -53,3 +53,21 @@
 		reverse_proxy frontend:3000
 	}
 }
+
+# ── Sofra marketing site (Track S) ─────────────────────────────────────────────
+# {$SOFRA_DOMAIN} / {$SOFRA_WWW_DOMAIN} come from the staging box's .env via the
+# caddy service. On a box that doesn't set them, compose injects http:// placeholder
+# hosts (see docker-compose.prod.yml) so this file always parses and Caddy never
+# attempts TLS for an unset address. The sofra container only runs when the box
+# opts in with COMPOSE_PROFILES=sofra; if it's down, Caddy answers 502 here without
+# affecting the RUMI staging site above.
+
+{$SOFRA_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy sofra:3000
+}
+
+# www -> apex, preserving path/query.
+{$SOFRA_WWW_DOMAIN} {
+	redir https://{$SOFRA_DOMAIN}{uri} permanent
+}
