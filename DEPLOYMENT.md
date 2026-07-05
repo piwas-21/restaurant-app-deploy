@@ -86,6 +86,19 @@ Verify: `https://v2202607374190477434.megasrv.de/` (200) and
 `STAGING_*` repo secrets are set, uncomment its `push: [main]` trigger so staging
 tracks infra changes automatically (like `sync-to-box.yml` does for prod).
 
+### Sofra marketing site (staging box only)
+
+The staging box also serves the Sofra landing page (`https://sofrapiwas.com`,
+image `ghcr.io/piwas-21/sofra`) — see the `sofra` service in
+`docker-compose.prod.yml`. It is gated behind the `sofra` compose profile: the
+staging box sets `COMPOSE_PROFILES=sofra` (plus `SOFRA_DOMAIN`,
+`SOFRA_WWW_DOMAIN`, and the waitlist vars — see `.env.staging.example`) in its
+`.env`; prod sets none of them, so nothing changes there. Roll out with
+`docker compose -f docker-compose.prod.yml up -d sofra` and remember a changed
+`Caddyfile.staging` needs `up -d --force-recreate caddy` (bind-mount inode
+gotcha). Verify: `https://sofrapiwas.com/en` (200) and the RUMI staging URL
+still healthy.
+
 ---
 
 ## Normal deployment (automatic)
