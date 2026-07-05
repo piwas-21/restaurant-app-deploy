@@ -96,6 +96,16 @@ services:
       RESEND_API_KEY: "${RESEND_API_KEY:-}"
       WAITLIST_TO: "${WAITLIST_TO:-}"
       WAITLIST_FROM: "${WAITLIST_FROM:-Sofra Waitlist <onboarding@resend.dev>}"
+      # Control plane (partner program — sofra ADR-008/009). Own DB + role on
+      # the shared postgres server; RUMI's restaurantdb untouched. Migrations
+      # are founder-run one-offs via ghcr.io/piwas-21/sofra-migrate — never on
+      # container start (see DEPLOYMENT.md "Sofra control plane").
+      DATABASE_URL: "postgresql://sofra:${SOFRA_DB_PASSWORD:-}@postgres:5432/sofra"
+      AUTH_SECRET: "${SOFRA_AUTH_SECRET:-}"
+      NEXTAUTH_URL: "${SOFRA_APP_URL:-https://sofrapiwas.com}"
+    depends_on:
+      postgres:
+        condition: service_healthy
     networks: [rumi]
 
   postgres:

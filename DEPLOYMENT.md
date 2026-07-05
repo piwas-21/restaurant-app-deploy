@@ -99,6 +99,43 @@ staging box sets `COMPOSE_PROFILES=sofra` (plus `SOFRA_DOMAIN`,
 gotcha). Verify: `https://sofrapiwas.com/en` (200) and the RUMI staging URL
 still healthy.
 
+#### Sofra control plane (partner program — DB + migrations)
+
+The sofra app has its own database (`sofra` DB + role) on the shared postgres
+container (sofra ADR-008). One-time setup:
+
+```bash
+cd /opt/rumi/deploy
+# role + database (password = SOFRA_DB_PASSWORD from .env)
+docker compose -f docker-compose.prod.yml exec postgres \
+  psql -U rumi -d postgres -c "CREATE ROLE sofra LOGIN PASSWORD '<SOFRA_DB_PASSWORD>'" \
+                            -c "CREATE DATABASE sofra OWNER sofra"
+```
+
+**Every release that ships migrations** (founder-run — migrations never run on
+container start):
+
+```bash
+docker pull ghcr.io/piwas-21/sofra-migrate:latest
+docker run --rm --network deploy_rumi \
+  -e DATABASE_URL="postgresql://sofra:<SOFRA_DB_PASSWORD>@postgres:5432/sofra" \
+  ghcr.io/piwas-21/sofra-migrate:latest          # = prisma migrate deploy
+docker compose -f docker-compose.prod.yml up -d sofra
+```
+
+**One-time admin seed** (then use the site's "Forgot password" to set your own):
+
+```bash
+docker run --rm --network deploy_rumi \
+  -e DATABASE_URL="postgresql://sofra:<SOFRA_DB_PASSWORD>@postgres:5432/sofra" \
+  -e ADMIN_EMAIL=<founder email> -e ADMIN_NAME=Founder -e ADMIN_PASSWORD=<throwaway ≥12 chars> \
+  ghcr.io/piwas-21/sofra-migrate:latest node scripts/seed-admin.mjs
+```
+
+Verify: `https://sofrapiwas.com/login` 200, sign-in works, and the RUMI
+staging URL still healthy. The sofra DB is covered by the per-DB `pg_dump`
+backup guidance (back up `sofra` alongside `restaurantdb`).
+
 ---
 
 ## Normal deployment (automatic)
