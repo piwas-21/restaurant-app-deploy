@@ -1,8 +1,8 @@
-# RUMI — Deployment & Rollback runbook
+# RUMI + Sofra — Deployment & Rollback runbook
 
-Canonical runbook for shipping RUMI to production and rolling back. Production is
-a single Netcup box running the stack via Docker Compose; images are built in CI
-and pulled from GHCR. The app repos link here.
+Canonical runbook for shipping RUMI to production (and Sofra to the staging box)
+and rolling back. Each environment is a single Netcup box running the stack via
+Docker Compose; images are built in CI and pulled from GHCR. The app repos link here.
 
 > **Audience:** anyone promoting a release or responding to a bad deploy.
 > **Box / secrets setup:** see [README.md](README.md).
