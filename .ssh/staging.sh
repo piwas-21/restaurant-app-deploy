@@ -12,7 +12,7 @@
 # tasks (editing /etc/sudoers.d, etc.) use `su -` on the box interactively — the root
 # password is the STAGING_PASSWORD line in the workspace-root .env. Do NOT `ssh root@`.
 set -euo pipefail
-DIR="/Users/mahmutkaya/workspace/rumi-workspace/deploy/.ssh"
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 exec ssh -i ~/.ssh/rumi_staging_ed25519 \
   -o UserKnownHostsFile="$DIR/staging_known_hosts" \
   -o StrictHostKeyChecking=yes \

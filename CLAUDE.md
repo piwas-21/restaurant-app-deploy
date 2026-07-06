@@ -19,7 +19,7 @@
 |---|---|
 | Deploy / rollback | [DEPLOYMENT.md](DEPLOYMENT.md) (canonical runbook) |
 | Box setup / secrets / topology | [README.md](README.md) |
-| Any infra op | the **devops** agent above — it encodes the deploy model + hard traps |
+| Any infra op | the **`operating-rumi-infra`** skill above — it encodes the deploy model + hard traps |
 
 ## Discipline (hard)
 
@@ -29,4 +29,4 @@
 - Changes ship as PRs through the review-gate (Stop + pre-push hooks). **No `--no-verify`, no bypasses.** Deploy-user sudo stays scoped to `chown -h` — never `NOPASSWD:ALL`.
 - Staging exists to protect the one prod client: validate there first, then promote.
 
-See the **devops** agent for the full command set and the environment/deploy-model tables.
+See the **`operating-rumi-infra`** skill for the full command set and the environment/deploy-model tables.
