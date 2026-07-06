@@ -34,6 +34,16 @@ services:
       # absent. Values live only in the tenant .env on the box.
       SeedSettings__AdminEmail: "${TENANT_ADMIN_EMAIL:-}"
       SeedSettings__AdminPassword: "${TENANT_ADMIN_PASSWORD:-}"
+      # Tenant identity seed (backend #120): fills the RestaurantInfo singleton
+      # on the first boot of an empty DB while the row is pristine. No-op when
+      # Name/Email are empty, and on any already-seeded DB — so existing
+      # tenants keep their current identity even after a re-provision.
+      RestaurantInfoSeed__Name: "${TENANT_NAME:-}"
+      RestaurantInfoSeed__City: "${TENANT_CITY:-}"
+      RestaurantInfoSeed__Email: "${TENANT_ADMIN_EMAIL:-}"
+      # Emits the `tenant` claim in access tokens (backend #117) — makes a
+      # token from this instance attributable to this tenant.
+      JwtSettings__TenantSlug: "__SLUG__"
       # Registry-recorded tenant facts (ADR-007/ADR-010). Inert until module
       # enforcement ships (S11) — recorded now so re-provisioning is the only
       # mechanism that changes them.

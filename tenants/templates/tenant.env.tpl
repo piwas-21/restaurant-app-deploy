@@ -5,6 +5,11 @@
 # same way BACKEND_TAG/FRONTEND_TAG work for the main stack.
 TENANT_SLUG=__SLUG__
 TENANT_DOMAIN=__DOMAIN__
+# Tenant identity (deploy#16): seeds the RestaurantInfo singleton on the first
+# boot of an empty DB via RestaurantInfoSeed__* in the compose template
+# (backend #120). Free text — provision-tenant.sh escapes sed metacharacters.
+TENANT_NAME=__NAME__
+TENANT_CITY=__CITY__
 BACKEND_TAG=__BACKEND_TAG__
 FRONTEND_TAG=__FRONTEND_TAG__
 TENANT_DB=__DB__
