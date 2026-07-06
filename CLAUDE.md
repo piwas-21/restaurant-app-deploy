@@ -10,7 +10,7 @@
 
 ## Skills & tooling
 
-- Infra / deploy / ops work → load the **`operating-rumi-infra`** skill (from the **rumi-agent-kit** plugin). It carries the exact commands + hard traps so you use the wrappers/scripts (`.ssh/box.sh`, `.ssh/staging.sh`, `verify-env.sh`, `domainio-dns.sh`) instead of experimenting on live infra.
+- Infra / deploy / ops work → load the **`operating-rumi-infra`** skill (from the **rumi-agent-kit** plugin). It carries the exact commands + hard traps so you use the wrappers/scripts (`.ssh/box.sh`, `.ssh/staging.sh`, `verify-env.sh`, `domainio-dns.sh`, `provision-tenant.sh`/`deprovision-tenant.sh`) instead of experimenting on live infra.
 - Raising a PR → the **`pr-workflow`** skill.
 
 ## Critical files to read
@@ -18,6 +18,7 @@
 | When | Read |
 |---|---|
 | Deploy / rollback | [DEPLOYMENT.md](DEPLOYMENT.md) (canonical runbook) |
+| Tenant provisioning / teardown (S14, sofra ADR-003) | [DEPLOYMENT.md §Tenant provisioning](DEPLOYMENT.md) + [tenants/registry.yml](tenants/registry.yml) |
 | Box setup / secrets / topology | [README.md](README.md) |
 | Any infra op | the **`operating-rumi-infra`** skill above — it encodes the deploy model + hard traps |
 
