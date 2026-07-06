@@ -15,5 +15,10 @@ dozzle-users.yml
 *.bak
 *.bak.*
 
+# Tenant site blocks are rendered ON THE BOX by provision-tenant.sh — only the
+# glob-keeper placeholder is committed (see caddy-tenants/00-placeholder.caddy)
+caddy-tenants/*.caddy
+!caddy-tenants/00-placeholder.caddy
+
 # Claude Code per-repo settings (machine-local)
 .claude/

@@ -1,0 +1,60 @@
+# Sofra tenant registry — sofra ADR-007 (committed YAML in the deploy repo is the
+# source of truth until >3 tenants, then it graduates to a Postgres table).
+#
+# Consumed by provision-tenant.sh / deprovision-tenant.sh ON THE BOX (this file
+# rsyncs there via sync-to-{box,staging}.yml). Scripts only READ this file —
+# lifecycle changes (status flips, new tenants) are committed here in git first,
+# then synced, then the script is run. No script ever edits the registry.
+#
+# Field notes:
+#   managed:  legacy  = provisioned before S14 (RUMI prod) — scripts REFUSE to touch it (ADR-006:
+#                       tenant 1 is registered, never migrated; its box/domain/secrets don't change)
+#             scripts = stamped out by provision-tenant.sh
+#   box:      prod (159.195.137.101) | staging (159.195.34.105) — must match BOX_ROLE in the box .env
+#   domain_mode: subdomain ({slug}.sofrapiwas.com via the wildcard A record, added 2026-07-06)
+#                | byo (tenant-owned domain, explicit DNS + Caddy block)  [ADR-002]
+#   frontend_tag: per-tenant image tag — NEXT_PUBLIC_* are baked per domain; built by the frontend
+#                 repo's build-tenant-image.yml workflow (convention: tenant-<slug>)
+#   backend_tag:  backend image is domain-agnostic — tenants ride :latest unless pinned
+#   currency / languages / modules: recorded per ADR-010; provisioning writes them into the
+#                 tenant instance env. INERT today — enforcement ships with S11 (module gates).
+#   status:   provisioning -> active -> retired (descriptive; keep honest)
+
+version: 1
+
+tenants:
+  rumi:
+    name: RUMI Restaurant
+    status: active
+    managed: legacy
+    box: prod
+    domain: www.rumirestaurant.ch
+    domain_mode: byo
+    db: restaurantdb
+    db_role: rumi
+    compose_project: deploy
+    backend_tag: latest
+    frontend_tag: latest
+    currency: CHF
+    languages: [en, de, tr, it, ar, fr, nl, es, ru, zh]
+    # Grandfathered: tenant 1 keeps every module (ADR-010 v1 scope).
+    modules: [core, kitchen-board, cashier, server, reservations, loyalty, printing, extra-languages]
+
+  # Throwaway tenant used for the S14 provisioning-v1 DoD (stand up on staging,
+  # order from it, tear down). Safe to re-provision any time for rehearsals.
+  demo:
+    name: Sofra Demo
+    status: retired
+    managed: scripts
+    box: staging
+    domain: demo.sofrapiwas.com
+    domain_mode: subdomain
+    db: tenant_demo
+    db_role: tenant_demo
+    compose_project: tenant-demo
+    backend_tag: latest
+    frontend_tag: tenant-demo
+    currency: EUR
+    languages: [en, nl]
+    modules: [core]
+    admin_email: mahmutkaya.nl@gmail.com

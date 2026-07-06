@@ -41,6 +41,17 @@ services:
       # byte-identical to before on prod (the default resolves to ./Caddyfile).
       - ${CADDYFILE:-./Caddyfile}:/etc/caddy/Caddyfile:ro
       - uploads:/srv/uploads:ro        # serve /uploads/* straight off the backend's upload volume
+      # Tenant provisioning (S14, sofra ADR-001/003): per-tenant site blocks
+      # rendered by provision-tenant.sh, imported by Caddyfile.staging. A
+      # DIRECTORY mount on purpose — new files appear without a recreate and a
+      # plain `caddy reload` re-globs the imports (the inode gotcha only bites
+      # single-file mounts). Prod's ./Caddyfile has no import line, so this is
+      # inert there.
+      - ./caddy-tenants:/etc/caddy/tenants:ro
+      # Parent dir of every tenant's bind-mounted uploads/ — lets the shared
+      # Caddy file_server tenant uploads at /srv/tenants/<slug>/uploads. Auto-
+      # created empty on boxes with no tenants; unreferenced by prod's Caddyfile.
+      - /opt/rumi/tenants:/srv/tenants:ro
       - caddy_data:/data               # ACME certs/keys — persist so we don't re-issue
       - caddy_config:/config
     depends_on:
