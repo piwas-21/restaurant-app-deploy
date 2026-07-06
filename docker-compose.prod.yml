@@ -114,6 +114,9 @@ services:
       DATABASE_URL: "postgresql://sofra:${SOFRA_DB_PASSWORD:-}@postgres:5432/sofra"
       AUTH_SECRET: "${SOFRA_AUTH_SECRET:-}"
       NEXTAUTH_URL: "${SOFRA_APP_URL:-https://sofrapiwas.com}"
+      # Mollie subscription billing (S9, sofra ADR-011 Job A). Unset -> billing
+      # UI shows "not configured" and the webhook 503s; the site still serves.
+      MOLLIE_API_KEY: "${MOLLIE_API_KEY:-}"
     depends_on:
       postgres:
         condition: service_healthy
