@@ -162,9 +162,11 @@ plane later calls the same scripts (ADR-003 — no parallel mechanism).
    ```
    Idempotent: re-running re-pins image tags from the registry and re-applies
    compose/caddy, but never regenerates existing secrets or the DB password.
-5. **Verify**: `./verify-env.sh https://<domain>` (200 + 200), then log into
-   `/admin` and **change the seeded admin password immediately** — a fresh DB
-   seeds a well-known default (provisioning-v2 hardening item).
+5. **Verify**: `./verify-env.sh https://<domain>` (200 + 200). The script has
+   already smoke-checked that the seeded admin can log in — a **fresh random
+   password per tenant** (backend #116), injected via `SeedSettings__*` env
+   vars and stored only as `TENANT_ADMIN_PASSWORD` in the tenant `.env`
+   (mode 600). Log in with it and **change it** before handing the tenant over.
 
 **Tear down:**
 
@@ -181,7 +183,7 @@ never edit the registry.
 dir-mounted into Caddy so a plain `caddy reload` applies changes — the
 single-file inode gotcha does not apply here).
 
-**v1 limitations (tracked):** seeded admin credentials must be rotated by hand;
+**v1 limitations (tracked):** the generated admin bootstrap password should still be changed at first login (it sits in the tenant `.env`);
 Google login is off per tenant (OAuth origins); `currency/languages/modules`
 are recorded in the registry and written into the instance env but **not yet
 enforced** (S11); tenant email sends via `onboarding@resend.dev`.

@@ -62,7 +62,7 @@ PY
 
 [[ "$REG_MANAGED" == "scripts" ]] || { echo "ERROR: tenant '$SLUG' is managed:'$REG_MANAGED' — this script only touches managed:scripts tenants (ADR-006 protects tenant 1)"; exit 1; }
 [[ "$REG_BOX" == "$BOX_ROLE" ]] || { echo "ERROR: tenant '$SLUG' belongs on box '$REG_BOX' but this box is '$BOX_ROLE'"; exit 1; }
-for f in name domain db db_role compose_project frontend_tag; do
+for f in name domain db db_role compose_project frontend_tag admin_email; do
   var="REG_$(echo "$f" | tr '[:lower:]' '[:upper:]')"
   [[ -n "${!var}" ]] || { echo "ERROR: registry entry '$SLUG' missing required field '$f'"; exit 1; }
 done
@@ -87,6 +87,7 @@ install -d "$TENANT_DIR" "$TENANT_DIR/uploads"
 rand() { openssl rand -base64 "$1" | tr -d '/+=' | cut -c1-"$2"; }
 
 echo "==> Tenant .env"
+FRESH_ENV=0
 if [[ -f "$TENANT_DIR/.env" ]]; then
   echo "   keep: .env exists (DB password preserved). Registry tag changes ARE re-applied below."
   # Re-pin image tags from the registry on every run (they're the one thing
@@ -94,7 +95,12 @@ if [[ -f "$TENANT_DIR/.env" ]]; then
   sed -i -e "s|^BACKEND_TAG=.*|BACKEND_TAG=${REG_BACKEND_TAG:-latest}|" \
          -e "s|^FRONTEND_TAG=.*|FRONTEND_TAG=${REG_FRONTEND_TAG}|" "$TENANT_DIR/.env"
 else
+  FRESH_ENV=1
   TENANT_DB_PASSWORD="$(rand 48 32)"
+  # Admin bootstrap password (backend #116): the "!Aa1" suffix guarantees the
+  # upper/lower/digit/symbol classes the backend's Identity policy requires —
+  # random alnum alone can miss a class and the seeder would silently skip.
+  TENANT_ADMIN_PASSWORD="$(rand 48 24)!Aa1"
   sed -e "s|__SLUG__|${SLUG}|g" \
       -e "s|__DOMAIN__|${REG_DOMAIN}|g" \
       -e "s|__BACKEND_TAG__|${REG_BACKEND_TAG:-latest}|g" \
@@ -102,12 +108,14 @@ else
       -e "s|__DB__|${REG_DB}|g" \
       -e "s|__DB_ROLE__|${REG_DB_ROLE}|g" \
       -e "s|__DB_PASSWORD__|${TENANT_DB_PASSWORD}|g" \
+      -e "s|__ADMIN_EMAIL__|${REG_ADMIN_EMAIL}|g" \
+      -e "s|__ADMIN_PASSWORD__|${TENANT_ADMIN_PASSWORD}|g" \
       -e "s|__CURRENCY__|${REG_CURRENCY}|g" \
       -e "s|__LANGUAGES__|${REG_LANGUAGES}|g" \
       -e "s|__MODULES__|${REG_MODULES}|g" \
       tenants/templates/tenant.env.tpl > "$TENANT_DIR/.env"
   chmod 600 "$TENANT_DIR/.env"
-  echo "   wrote .env (fresh DB password)"
+  echo "   wrote .env (fresh DB password + admin bootstrap credentials)"
 fi
 TENANT_DB_PASSWORD="$(grep '^TENANT_DB_PASSWORD=' "$TENANT_DIR/.env" | cut -d= -f2-)"
 
@@ -195,6 +203,34 @@ for i in $(seq 1 60); do
   sleep 5
 done
 
+echo "==> Admin bootstrap smoke check (seeded admin can log in)"
+# Catches the silent-failure mode where an injected password fails the
+# backend's Identity policy: the seeder logs an error but startup succeeds,
+# leaving a tenant with no admin. Only meaningful on the boot that actually
+# seeds — i.e. when this run rendered a fresh .env for a fresh DB. On
+# re-provision the operator may have rotated the password (as instructed),
+# so checking the bootstrap value again would falsely abort a healthy run.
+ADMIN_EMAIL_CHECK="$(grep '^TENANT_ADMIN_EMAIL=' "$TENANT_DIR/.env" | cut -d= -f2- || true)"
+ADMIN_PW_CHECK="$(grep '^TENANT_ADMIN_PASSWORD=' "$TENANT_DIR/.env" | cut -d= -f2- || true)"
+if [[ "$FRESH_ENV" == 1 && -n "$ADMIN_EMAIL_CHECK" && -n "$ADMIN_PW_CHECK" ]]; then
+  LOGIN_BODY="{\"email\":\"${ADMIN_EMAIL_CHECK}\",\"password\":\"${ADMIN_PW_CHECK}\"}"
+  if docker run --rm --network deploy_rumi curlimages/curl:8.10.1 -sf -X POST \
+       -H 'Content-Type: application/json' -d "$LOGIN_BODY" \
+       "http://backend-${SLUG}:8080/api/auth/login" | grep -q '"success":true'; then
+    echo "   admin login OK (${ADMIN_EMAIL_CHECK})"
+  else
+    echo "ERROR: seeded admin login FAILED — check backend logs for the seeder warning/error"
+    echo "       (cd $TENANT_DIR && docker compose logs backend-${SLUG} | grep -i -A2 seed)"
+    echo "       Note: the seeder only creates the admin on an EMPTY database; on an existing"
+    echo "       DB the bootstrap credentials in .env do not apply (use the app's password reset)."
+    exit 1
+  fi
+elif [[ "$FRESH_ENV" == 0 ]]; then
+  echo "   skip: re-provision (bootstrap creds only apply to the first boot; the admin may have rotated the password since)"
+else
+  echo "   skip: no TENANT_ADMIN_* in the tenant .env (pre-#116 tenant — adopting needs a DB reset: deprovision --drop-db, then provision fresh)"
+fi
+
 echo "==> Caddy site block + validate + reload"
 sed -e "s|__SLUG__|${SLUG}|g" \
     -e "s|__DOMAIN__|${REG_DOMAIN}|g" \
@@ -218,7 +254,7 @@ cat <<EOF
     Verify    : ./verify-env.sh https://${REG_DOMAIN}
     Containers: (cd ${TENANT_DIR} && docker compose ps)
     Logs      : (cd ${TENANT_DIR} && docker compose logs -f backend-${SLUG})
-    ⚠ The backend seeds a default admin (admin@email.com) with a WELL-KNOWN
-      password on a fresh DB — log in and change it BEFORE handing the tenant
-      to anyone (tracked as a provisioning-v2 hardening item).
+    Admin     : ${REG_ADMIN_EMAIL} — the generated bootstrap password is the
+                TENANT_ADMIN_PASSWORD line in ${TENANT_DIR}/.env (mode 600).
+                Log in and CHANGE IT before handing the tenant to anyone.
 EOF
