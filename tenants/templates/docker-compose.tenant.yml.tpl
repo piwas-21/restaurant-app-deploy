@@ -29,6 +29,11 @@ services:
       # The DB lives on the shared postgres server under the tenant's own database+role.
       ConnectionStrings__restaurantdb: "Host=postgres;Port=5432;Database=${TENANT_DB};Username=${TENANT_DB_ROLE};Password=${TENANT_DB_PASSWORD}"
       ConnectionStrings__redis: "redis-__SLUG__:6379"
+      # Fresh per-tenant admin bootstrap (backend #116): the seeder creates the
+      # admin from these on first boot of an empty DB and skips when they're
+      # absent. Values live only in the tenant .env on the box.
+      SeedSettings__AdminEmail: "${TENANT_ADMIN_EMAIL:-}"
+      SeedSettings__AdminPassword: "${TENANT_ADMIN_PASSWORD:-}"
       # Registry-recorded tenant facts (ADR-007/ADR-010). Inert until module
       # enforcement ships (S11) — recorded now so re-provisioning is the only
       # mechanism that changes them.
