@@ -121,14 +121,24 @@ else
   [[ -n "$RESEND_KEY" ]] || echo "   WARN: no ResendApiKey found in the box app-secrets.json — tenant email will fail until set"
   JWT_SECRET="$(openssl rand -base64 48)"
   PRINTER_APIKEY="$(openssl rand -hex 32)"
-  sed -e "s|__SLUG__|${SLUG}|g" \
-      -e "s|__DOMAIN__|${REG_DOMAIN}|g" \
-      -e "s|__TENANT_NAME__|${REG_NAME}|g" \
-      -e "s|__ADMIN_EMAIL__|${REG_ADMIN_EMAIL}|g" \
-      -e "s|__JWT_SECRET__|${JWT_SECRET}|g" \
-      -e "s|__PRINTER_APIKEY__|${PRINTER_APIKEY}|g" \
-      -e "s|__RESEND_API_KEY__|${RESEND_KEY}|g" \
-      tenants/templates/app-secrets.tenant.json.tpl > "$TENANT_DIR/app-secrets.json"
+  # Rendered with python3, not sed: values like the base64 JWT secret or a
+  # free-text tenant name can contain sed metacharacters (&, |) that would
+  # silently corrupt the JSON. Also parse-checks the result before writing.
+  T_SLUG="$SLUG" T_DOMAIN="$REG_DOMAIN" T_NAME="$REG_NAME" T_ADMIN="$REG_ADMIN_EMAIL" \
+  T_JWT="$JWT_SECRET" T_PRINTER="$PRINTER_APIKEY" T_RESEND="$RESEND_KEY" \
+  T_OUT="$TENANT_DIR/app-secrets.json" python3 - <<'PY'
+import json, os
+tpl = open("tenants/templates/app-secrets.tenant.json.tpl").read()
+for token, env in (("__SLUG__", "T_SLUG"), ("__DOMAIN__", "T_DOMAIN"),
+                   ("__TENANT_NAME__", "T_NAME"), ("__ADMIN_EMAIL__", "T_ADMIN"),
+                   ("__JWT_SECRET__", "T_JWT"), ("__PRINTER_APIKEY__", "T_PRINTER"),
+                   ("__RESEND_API_KEY__", "T_RESEND")):
+    tpl = tpl.replace(token, json.dumps(os.environ[env])[1:-1])
+json.loads(tpl)  # refuse to write corrupt JSON
+os.umask(0o177)
+with open(os.environ["T_OUT"], "w") as f:
+    f.write(tpl)
+PY
   chmod 600 "$TENANT_DIR/app-secrets.json"
   echo "   wrote app-secrets.json (fresh JWT + printer key, mode 600)"
 fi
@@ -138,7 +148,9 @@ sed -e "s|__SLUG__|${SLUG}|g" \
     tenants/templates/docker-compose.tenant.yml.tpl > "$TENANT_DIR/docker-compose.yml"
 
 echo "==> Database (role + db on the shared postgres, idempotent)"
-psql_deploy() { $DEPLOY_COMPOSE exec -T postgres psql -v ON_ERROR_STOP=1 -U "$(grep '^POSTGRES_USER=' .env | cut -d= -f2-)" -d postgres "$@"; }
+PGUSER="$(grep '^POSTGRES_USER=' .env | cut -d= -f2- || true)"
+[[ -n "$PGUSER" ]] || { echo "ERROR: POSTGRES_USER not set in .env"; exit 1; }
+psql_deploy() { $DEPLOY_COMPOSE exec -T postgres psql -v ON_ERROR_STOP=1 -U "$PGUSER" -d postgres "$@"; }
 if psql_deploy -tAc "SELECT 1 FROM pg_roles WHERE rolname='${REG_DB_ROLE}'" | grep -q 1; then
   echo "   keep: role ${REG_DB_ROLE} exists"
 else
@@ -152,10 +164,15 @@ else
   echo "   created database ${REG_DB} (owner ${REG_DB_ROLE})"
 fi
 
+echo "==> Pull images (project tenant-${SLUG})"
+(cd "$TENANT_DIR" && docker compose pull)
+
 echo "==> Fix file ownership for the backend container user"
 # Backend runs non-root; app-secrets.json must be group-readable by its gid and
 # the uploads bind dir writable by its uid. rumi's docker-group membership is
-# the privilege here — no sudo (box sudo is deliberately scoped).
+# the privilege here — no sudo (box sudo is deliberately scoped). Runs after
+# the pull so the uid:gid inspection never triggers (or fails on) an implicit
+# image pull of its own.
 BE_IDS="$(docker run --rm --entrypoint sh "${BE_REPO}:${REG_BACKEND_TAG:-latest}" -c 'echo "$(id -u):$(id -g)"' 2>/dev/null || true)"
 if [[ -n "$BE_IDS" ]]; then
   docker run --rm -v "$TENANT_DIR":/t alpine:3 sh -c \
@@ -165,8 +182,8 @@ else
   echo "   WARN: could not determine backend uid:gid; secrets/uploads may be unreadable by the container"
 fi
 
-echo "==> Pull + up (project tenant-${SLUG})"
-(cd "$TENANT_DIR" && docker compose pull && docker compose up -d)
+echo "==> Up (project tenant-${SLUG})"
+(cd "$TENANT_DIR" && docker compose up -d)
 
 echo "==> Wait for backend health (migrations + seed run on first boot)"
 for i in $(seq 1 60); do

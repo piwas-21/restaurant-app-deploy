@@ -17,6 +17,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 SLUG="${1:?usage: $0 <slug> [--drop-db] [--purge]}"
+[[ "$SLUG" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]] || { echo "ERROR: slug must be lowercase [a-z0-9-], 2-31 chars"; exit 2; }
 shift || true
 DROP_DB=false; PURGE=false
 for a in "$@"; do
@@ -33,6 +34,7 @@ BACKUP_DIR="/opt/rumi/tenant-backups"
 DEPLOY_COMPOSE="docker compose -f docker-compose.prod.yml"
 
 echo "==> Preflight"
+[[ -f .env ]] || { echo "ERROR: box .env missing"; exit 1; }
 [[ -f "$REGISTRY" ]] || { echo "ERROR: $REGISTRY missing"; exit 1; }
 BOX_ROLE="$(grep -E '^BOX_ROLE=' .env | cut -d= -f2- || true)"
 [[ -n "$BOX_ROLE" ]] || { echo "ERROR: BOX_ROLE not set in the box .env"; exit 1; }
@@ -80,8 +82,13 @@ fi
 
 if $DROP_DB; then
   echo "==> Backup + drop database ${REG_DB} (role ${REG_DB_ROLE})"
-  PGUSER="$(grep '^POSTGRES_USER=' .env | cut -d= -f2-)"
+  PGUSER="$(grep '^POSTGRES_USER=' .env | cut -d= -f2- || true)"
+  [[ -n "$PGUSER" ]] || { echo "ERROR: POSTGRES_USER not set in .env"; exit 1; }
   install -d "$BACKUP_DIR"
+  # Fail loudly if postgres itself is unreachable — otherwise a down container
+  # would be indistinguishable from "database does not exist" below and the
+  # drop would be silently skipped while reporting success.
+  $DEPLOY_COMPOSE exec -T postgres psql -U "$PGUSER" -d postgres -c 'SELECT 1' >/dev/null
   if $DEPLOY_COMPOSE exec -T postgres psql -U "$PGUSER" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='${REG_DB}'" | grep -q 1; then
     TS="$(date -u +%Y%m%dT%H%M%SZ)"
     $DEPLOY_COMPOSE exec -T postgres pg_dump -U "$PGUSER" "${REG_DB}" | gzip > "${BACKUP_DIR}/${SLUG}-${REG_DB}-${TS}.sql.gz"
