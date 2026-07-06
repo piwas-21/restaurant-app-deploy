@@ -54,7 +54,11 @@ $COMPOSE pull
 echo "==> Fix app-secrets.json perms for the backend container user"
 BE_GID=$(docker run --rm --entrypoint sh "${BE_REPO}:${BE_TAG}" -c 'id -g' 2>/dev/null || echo "")
 if [[ -n "$BE_GID" ]]; then
-  sudo chown "$(id -un):${BE_GID}" app-secrets.json && chmod 640 app-secrets.json
+  # -h (no-dereference) + an absolute path so this matches the tightly-scoped
+  # sudoers rule (see provision.sh / README) and can't be redirected at a
+  # symlink: the deploy user owns this dir, so without -h it could swap
+  # app-secrets.json for a link to /etc/shadow and chown that instead.
+  sudo chown -h "$(id -un):${BE_GID}" "$PWD/app-secrets.json" && chmod 640 app-secrets.json
   echo "   app-secrets.json -> group ${BE_GID}, mode 640"
 else
   echo "   WARN: could not determine backend gid; ensure app-secrets.json is readable by the container user"

@@ -15,13 +15,28 @@ apt-get update -y
 apt-get upgrade -y
 
 echo "==> Base packages"
-apt-get install -y ca-certificates curl gnupg git ufw fail2ban unattended-upgrades
+# rsync is required by sync-to-box.yml / sync-to-staging.yml (they rsync the deploy
+# folder onto the box); the minimal Netcup image does not ship it.
+apt-get install -y ca-certificates curl gnupg git ufw fail2ban unattended-upgrades rsync
 
 echo "==> Non-root deploy user: ${DEPLOY_USER}"
 if ! id "${DEPLOY_USER}" &>/dev/null; then
   adduser --disabled-password --gecos "" "${DEPLOY_USER}"
 fi
 usermod -aG sudo "${DEPLOY_USER}"
+# deploy.sh runs exactly one non-interactive privileged command — `sudo chown -h`
+# to hand app-secrets.json to the backend container's gid. The deploy user is
+# created --disabled-password, so a normal sudo prompt can never be answered.
+# Grant ONLY that exact invocation (pinned command + `-h` + absolute target path),
+# never NOPASSWD:ALL and never bare `chown` (the deploy user owns this dir, so an
+# unpinned/deref'able chown could be aimed at /etc/shadow via a symlink → root).
+# First remove any prior over-broad drop-in so upgrading from an older provision.sh
+# is idempotent (the earlier file was named ${DEPLOY_USER}, not ${DEPLOY_USER}-deploy,
+# so a plain re-run would otherwise leave the old NOPASSWD:ALL grant in place).
+rm -f "/etc/sudoers.d/${DEPLOY_USER}"
+echo "${DEPLOY_USER} ALL=(root) NOPASSWD: /usr/bin/chown -h * /opt/rumi/deploy/app-secrets.json" > "/etc/sudoers.d/${DEPLOY_USER}-deploy"
+chmod 440 "/etc/sudoers.d/${DEPLOY_USER}-deploy"
+visudo -cf "/etc/sudoers.d/${DEPLOY_USER}-deploy"
 if [[ -n "${SSH_PUBKEY}" ]]; then
   install -d -m 700 -o "${DEPLOY_USER}" -g "${DEPLOY_USER}" "/home/${DEPLOY_USER}/.ssh"
   echo "${SSH_PUBKEY}" > "/home/${DEPLOY_USER}/.ssh/authorized_keys"

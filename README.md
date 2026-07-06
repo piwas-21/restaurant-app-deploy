@@ -123,9 +123,11 @@ via `workflow_dispatch` (manual deploy/rollback to a chosen GHCR tag) and SSHes 
    | `DEPLOY_USER` | `rumi` |
    | `DEPLOY_SSH_KEY` | contents of the **private** `rumi_ci_deploy` |
    | `DEPLOY_SSH_FINGERPRINT` | `ssh-keyscan -t ed25519 159.195.137.101` (the host key line) |
-3. **Passwordless sudo** for the one `sudo chown` in `deploy.sh` (non-interactive SSH can't answer a
-   password prompt). As root: `echo 'rumi ALL=(root) NOPASSWD: /usr/bin/chown' > /etc/sudoers.d/rumi-deploy && chmod 440 /etc/sudoers.d/rumi-deploy`
-   (or drop the `chown` from `deploy.sh` if `app-secrets.json` perms are already correct).
+3. **Passwordless sudo** for the one `sudo chown -h` in `deploy.sh` (non-interactive SSH can't answer a
+   password prompt). `provision.sh` sets this up automatically; to do it by hand, as root:
+   `echo 'rumi ALL=(root) NOPASSWD: /usr/bin/chown -h * /opt/rumi/deploy/app-secrets.json' > /etc/sudoers.d/rumi-deploy && chmod 440 /etc/sudoers.d/rumi-deploy`.
+   The rule is pinned to that exact invocation (with `-h`, so it can't be pointed at a symlink) — **never** `NOPASSWD:ALL` or bare `chown`, which a compromised deploy user could turn into root.
+   **Upgrading a box provisioned before 2026-07-03:** an earlier version wrote `/etc/sudoers.d/rumi` with `NOPASSWD:ALL`. Re-run `provision.sh` (it now `rm -f`s that file) or delete it by hand: `rm -f /etc/sudoers.d/rumi`.
 4. `deploy.yml` wraps the remote call in `flock -n /tmp/rumi-deploy.lock` so a frontend and
    backend deploy firing at the same moment serialize instead of racing, and passes the chosen
    tag via appleboy `envs` (not string-interpolated).
