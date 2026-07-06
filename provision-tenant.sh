@@ -52,7 +52,7 @@ if not t:
     sys.exit(0)
 for k in ("name", "status", "managed", "box", "domain", "domain_mode", "db",
           "db_role", "compose_project", "backend_tag", "frontend_tag",
-          "currency", "languages", "modules", "admin_email"):
+          "currency", "languages", "modules", "admin_email", "city"):
     v = t.get(k, "")
     if isinstance(v, list):
         v = ",".join(map(str, v))
@@ -86,14 +86,34 @@ install -d "$TENANT_DIR" "$TENANT_DIR/uploads"
 # URL/connection-string-safe randoms (same recipe as gen-secrets.sh).
 rand() { openssl rand -base64 "$1" | tr -d '/+=' | cut -c1-"$2"; }
 
+# Escape free-text registry values (name, city) for use in a sed REPLACEMENT:
+# backslash, ampersand, and the | delimiter would otherwise corrupt the render.
+sed_escape() { printf '%s' "$1" | sed -e 's/[\\&|]/\\&/g'; }
+
+# Free-text values landing in the tenant .env are interpolated by docker
+# compose — a literal $ must be doubled or compose silently mangles it (same
+# trap as DEV_PORTAL_AUTH_HASH; see DEPLOYMENT.md §Developer Portal).
+ENV_NAME="$(printf '%s' "$REG_NAME" | sed -e 's/\$/$$/g')"
+ENV_CITY="$(printf '%s' "$REG_CITY" | sed -e 's/\$/$$/g')"
+
 echo "==> Tenant .env"
 FRESH_ENV=0
 if [[ -f "$TENANT_DIR/.env" ]]; then
-  echo "   keep: .env exists (DB password preserved). Registry tag changes ARE re-applied below."
-  # Re-pin image tags from the registry on every run (they're the one thing
-  # that legitimately drifts); everything else in .env is stable per tenant.
+  echo "   keep: .env exists (DB password preserved). Registry tag/identity changes ARE re-applied below."
+  # Re-apply the registry-owned values on every run (tags + identity are the
+  # things that legitimately drift); generated secrets stay stable per tenant.
   sed -i -e "s|^BACKEND_TAG=.*|BACKEND_TAG=${REG_BACKEND_TAG:-latest}|" \
          -e "s|^FRONTEND_TAG=.*|FRONTEND_TAG=${REG_FRONTEND_TAG}|" "$TENANT_DIR/.env"
+  # Identity lines may be absent on a pre-#16 .env — replace or append.
+  set_env_line() { # $1=key $2=value (free text)
+    if grep -q "^$1=" "$TENANT_DIR/.env"; then
+      sed -i "s|^$1=.*|$1=$(sed_escape "$2")|" "$TENANT_DIR/.env"
+    else
+      printf '%s=%s\n' "$1" "$2" >> "$TENANT_DIR/.env"
+    fi
+  }
+  set_env_line TENANT_NAME "$ENV_NAME"
+  set_env_line TENANT_CITY "$ENV_CITY"
 else
   FRESH_ENV=1
   TENANT_DB_PASSWORD="$(rand 48 32)"
@@ -103,6 +123,8 @@ else
   TENANT_ADMIN_PASSWORD="$(rand 48 24)!Aa1"
   sed -e "s|__SLUG__|${SLUG}|g" \
       -e "s|__DOMAIN__|${REG_DOMAIN}|g" \
+      -e "s|__NAME__|$(sed_escape "$ENV_NAME")|g" \
+      -e "s|__CITY__|$(sed_escape "$ENV_CITY")|g" \
       -e "s|__BACKEND_TAG__|${REG_BACKEND_TAG:-latest}|g" \
       -e "s|__FRONTEND_TAG__|${REG_FRONTEND_TAG}|g" \
       -e "s|__DB__|${REG_DB}|g" \

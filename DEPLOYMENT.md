@@ -148,14 +148,18 @@ plane later calls the same scripts (ADR-003 — no parallel mechanism).
 **Provision a tenant (in order):**
 
 1. **Registry**: add the tenant to `tenants/registry.yml` (slug, domain, db,
-   tags, currency/languages/modules), PR → merge → sync to the box.
+   tags, currency/languages/modules, `city` for the seeded RestaurantInfo
+   identity), PR → merge → sync to the box.
 2. **DNS**: subdomain tenants ride the `*.sofrapiwas.com` wildcard A record
    (already points at the staging box, added 2026-07-06 via
    `./domainio-dns.sh add-a sofrapiwas.com '*' 159.195.34.105`). BYO domains
    need their own A record + nothing else — the same script provisions them.
 3. **Frontend image**: `NEXT_PUBLIC_*` are baked per domain, so build the
    tenant's image first (frontend repo):
-   `gh workflow run build-tenant-image.yml -f tenant_domain=<domain> -f image_tag=tenant-<slug>`
+   `gh workflow run build-tenant-image.yml -f tenant_domain=<domain> -f image_tag=tenant-<slug> -f restaurant_name="<registry name>"`
+   — `restaurant_name` bakes the page-metadata `<title>` (frontend #125 part 1).
+   It's optional (empty ⇒ neutral "Restaurant" title) so old dispatches still
+   work, but every real tenant should pass the registry `name`.
 4. **Provision** (on the box):
    ```bash
    bash .ssh/staging.sh 'cd /opt/rumi/deploy && ./provision-tenant.sh <slug>'
@@ -167,6 +171,10 @@ plane later calls the same scripts (ADR-003 — no parallel mechanism).
    password per tenant** (backend #116), injected via `SeedSettings__*` env
    vars and stored only as `TENANT_ADMIN_PASSWORD` in the tenant `.env`
    (mode 600). Log in with it and **change it** before handing the tenant over.
+   Tenant identity (deploy#16): `curl -s https://<domain>/api/restaurant-info`
+   should return the registry name/city/admin_email (not RUMI values), the
+   page `<title>` and footer © should show the tenant name, and a decoded
+   access token should carry `tenant: <slug>` (backend #117).
 
 **Tear down:**
 
