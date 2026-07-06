@@ -71,3 +71,11 @@
 {$SOFRA_WWW_DOMAIN} {
 	redir https://{$SOFRA_DOMAIN}{uri} permanent
 }
+
+# ── Sofra tenant instances (S14 provisioning v1, sofra ADR-001/003) ───────────
+# Per-tenant site blocks rendered on the box by provision-tenant.sh into
+# caddy-tenants/ (dir-mounted at /etc/caddy/tenants). The committed
+# 00-placeholder.caddy guarantees the glob always matches, so this file parses
+# on a box with zero tenants. Apply changes with a plain `caddy reload` —
+# the directory mount makes new/removed files visible without a recreate.
+import /etc/caddy/tenants/*.caddy

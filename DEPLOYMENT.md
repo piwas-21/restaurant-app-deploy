@@ -138,6 +138,56 @@ backup guidance (back up `sofra` alongside `restaurantdb`).
 
 ---
 
+## Tenant provisioning (S14 v1 — sofra ADR-001/003/007)
+
+Each tenant is its **own compose project** (backend + frontend + redis) behind
+the box's shared Caddy and Postgres, stamped out by `provision-tenant.sh` from
+the committed registry (`tenants/registry.yml`). Founder-operated; the control
+plane later calls the same scripts (ADR-003 — no parallel mechanism).
+
+**Provision a tenant (in order):**
+
+1. **Registry**: add the tenant to `tenants/registry.yml` (slug, domain, db,
+   tags, currency/languages/modules), PR → merge → sync to the box.
+2. **DNS**: subdomain tenants ride the `*.sofrapiwas.com` wildcard A record
+   (already points at the staging box, added 2026-07-06 via
+   `./domainio-dns.sh add-a sofrapiwas.com '*' 159.195.34.105`). BYO domains
+   need their own A record + nothing else — the same script provisions them.
+3. **Frontend image**: `NEXT_PUBLIC_*` are baked per domain, so build the
+   tenant's image first (frontend repo):
+   `gh workflow run build-tenant-image.yml -f tenant_domain=<domain> -f image_tag=tenant-<slug>`
+4. **Provision** (on the box):
+   ```bash
+   bash .ssh/staging.sh 'cd /opt/rumi/deploy && ./provision-tenant.sh <slug>'
+   ```
+   Idempotent: re-running re-pins image tags from the registry and re-applies
+   compose/caddy, but never regenerates existing secrets or the DB password.
+5. **Verify**: `./verify-env.sh https://<domain>` (200 + 200), then log into
+   `/admin` and **change the seeded admin password immediately** — a fresh DB
+   seeds a well-known default (provisioning-v2 hardening item).
+
+**Tear down:**
+
+```bash
+bash .ssh/staging.sh 'cd /opt/rumi/deploy && ./deprovision-tenant.sh <slug>'            # traffic + containers only
+bash .ssh/staging.sh 'cd /opt/rumi/deploy && ./deprovision-tenant.sh <slug> --drop-db --purge'  # + DB (after pg_dump to /opt/rumi/tenant-backups/) + volumes + files
+```
+
+Then flip the tenant's `status` in `tenants/registry.yml` in git — scripts
+never edit the registry.
+
+**Layout on the box:** `/opt/rumi/tenants/<slug>/{.env,app-secrets.json,docker-compose.yml,uploads/}`
+(generated, never synced) · `caddy-tenants/<slug>.caddy` (generated, gitignored;
+dir-mounted into Caddy so a plain `caddy reload` applies changes — the
+single-file inode gotcha does not apply here).
+
+**v1 limitations (tracked):** seeded admin credentials must be rotated by hand;
+Google login is off per tenant (OAuth origins); `currency/languages/modules`
+are recorded in the registry and written into the instance env but **not yet
+enforced** (S11); tenant email sends via `onboarding@resend.dev`.
+
+---
+
 ## Normal deployment (automatic)
 
 1. Merge your PR into `develop`; validate on the test environment.

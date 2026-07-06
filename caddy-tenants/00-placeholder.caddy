@@ -1,0 +1,5 @@
+# Placeholder so Caddyfile.staging's `import /etc/caddy/tenants/*.caddy` glob
+# always matches at least one file (an empty glob would fail Caddyfile parsing
+# on a box with no tenants). Committed + synced; real tenant blocks
+# (<slug>.caddy) are rendered on the box by provision-tenant.sh and are
+# gitignored — rsync runs without --delete, so they survive syncs.
