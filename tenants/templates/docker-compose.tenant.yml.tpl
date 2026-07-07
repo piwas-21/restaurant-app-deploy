@@ -88,7 +88,17 @@ services:
     restart: unless-stopped
     mem_limit: 256m
     cpus: 1.0
-    command: ["redis-server", "--appendonly", "yes"]
+    # maxmemory below the 256m container cap (Gemini triage on #22): the
+    # backend uses redis as IDistributedCache — volatile-lru evicts only
+    # TTL'd cache entries under pressure (graceful) instead of the container
+    # getting OOM-killed; keys without TTL are never evicted.
+    command:
+      [
+        "redis-server",
+        "--appendonly", "yes",
+        "--maxmemory", "192mb",
+        "--maxmemory-policy", "volatile-lru",
+      ]
     volumes:
       - redisdata:/data
     healthcheck:
