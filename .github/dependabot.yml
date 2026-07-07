@@ -1,0 +1,13 @@
+# Dependabot — keep the sync workflows' actions current (DEV-PHASES-PLAN W0).
+# Compose image tags (postgres:16, redis:7, caddy, dozzle) are pinned majors by
+# design and are NOT dependabot-managed — bump them deliberately via PR + runbook.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Amsterdam
+    open-pull-requests-limit: 3
