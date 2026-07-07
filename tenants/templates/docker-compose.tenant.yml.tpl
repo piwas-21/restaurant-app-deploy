@@ -18,11 +18,16 @@
 
 name: tenant-__SLUG__
 
+# Per-tenant resource guardrails (DEV-PHASES-PLAN W0, sized 2026-07-07 like the
+# base stack's): each tenant instance is capped at ~1.75g total so a runaway
+# tenant can't starve the box or its neighbours.
 services:
   backend-__SLUG__:
     image: ghcr.io/piwas-21/restaurant-app-backend:${BACKEND_TAG:-latest}
     pull_policy: always
     restart: unless-stopped
+    mem_limit: 1g
+    cpus: 2.0
     environment:
       ASPNETCORE_ENVIRONMENT: Production
       # Aspire components expect connection strings named "restaurantdb" / "redis".
@@ -70,6 +75,8 @@ services:
     image: ghcr.io/piwas-21/restaurant-app-frontend:${FRONTEND_TAG:?FRONTEND_TAG must be set in the tenant .env}
     pull_policy: always
     restart: unless-stopped
+    mem_limit: 512m
+    cpus: 1.0
     depends_on:
       - backend-__SLUG__
     networks: [rumi]
@@ -79,6 +86,8 @@ services:
   redis-__SLUG__:
     image: redis:7-alpine
     restart: unless-stopped
+    mem_limit: 256m
+    cpus: 1.0
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - redisdata:/data

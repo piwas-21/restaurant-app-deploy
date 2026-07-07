@@ -11,10 +11,19 @@
 # Deploy:  docker compose -f docker-compose.prod.yml pull && docker compose -f docker-compose.prod.yml up -d
 # Logs:    docker compose -f docker-compose.prod.yml logs -f backend
 
+# Container resource limits (DEV-PHASES-PLAN W0/§4.5, sized 2026-07-07 from
+# `docker stats` on BOTH boxes — prod idles ~315MiB total on 15.6GiB, staging
+# ~505MiB on 7.8GiB): limits are generous OOM/runaway guardrails (3-8x observed
+# peak), not tight quotas. mem_limit OOM-kills just the container (restart:
+# unless-stopped recovers it) instead of letting a leak take down the box.
+# Must fit the SMALLER staging box: base+sofra = 3.75g of 7.8g, leaving ~1.75g
+# per provisioned tenant (see tenants/templates/docker-compose.tenant.yml.tpl).
 services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    mem_limit: 256m
+    cpus: 1.0
     ports:
       - "80:80"
       - "443:443"
@@ -65,6 +74,8 @@ services:
     image: ghcr.io/piwas-21/restaurant-app-frontend:${FRONTEND_TAG:-latest}
     pull_policy: always
     restart: unless-stopped
+    mem_limit: 512m
+    cpus: 1.0
     depends_on:
       - backend
     networks: [rumi]
@@ -73,6 +84,8 @@ services:
     image: ghcr.io/piwas-21/restaurant-app-backend:${BACKEND_TAG:-latest}
     pull_policy: always
     restart: unless-stopped
+    mem_limit: 1g
+    cpus: 2.0
     environment:
       ASPNETCORE_ENVIRONMENT: Production
       # Aspire components: AddNpgsqlDataSource("restaurantdb") + AddRedisDistributedCache("redis")
@@ -100,6 +113,8 @@ services:
     image: ghcr.io/piwas-21/sofra:${SOFRA_TAG:-latest}
     pull_policy: always
     restart: unless-stopped
+    mem_limit: 512m
+    cpus: 1.0
     profiles: [sofra]
     environment:
       # Waitlist intake (see the sofra repo's .env.example). Unset -> the API
@@ -133,6 +148,8 @@ services:
   postgres:
     image: postgres:16
     restart: unless-stopped
+    mem_limit: 1g
+    cpus: 2.0
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -150,6 +167,8 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    mem_limit: 256m
+    cpus: 1.0
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - redisdata:/data
@@ -168,6 +187,8 @@ services:
   dozzle:
     image: amir20/dozzle:v10.6.6
     restart: unless-stopped
+    mem_limit: 256m
+    cpus: 0.5
     environment:
       DOZZLE_BASE: /logs           # must match the Caddy /logs route
       DOZZLE_AUTH_PROVIDER: simple # login page + bcrypt + sessions
