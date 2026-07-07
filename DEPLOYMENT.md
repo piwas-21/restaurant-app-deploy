@@ -368,3 +368,21 @@ The sync **copies files only** — it does not restart anything:
 
 `.env` and `app-secrets.json` are **never** synced (excluded) — edit those on the
 box directly.
+
+## Container resource limits (DEV-PHASES W0, since 2026-07-07)
+
+Every service in `docker-compose.prod.yml` (and each tenant instance via
+`tenants/templates/docker-compose.tenant.yml.tpl`) carries `mem_limit` + `cpus`:
+backend/postgres **1g / 2 cpu**, frontend/sofra **512m / 1 cpu**,
+caddy/redis/dozzle **256m**. These are OOM/runaway *guardrails* (3–8× the peaks
+observed in the 2026-07-07 `docker stats` sizing snapshot), not tight quotas — a
+leaking container gets OOM-killed and restarted (`restart: unless-stopped`)
+instead of taking the box down.
+
+- Limit changes take effect on the next `up -d` (containers are recreated).
+- If a service starts getting OOM-killed legitimately (check
+  `docker inspect <ctr> --format '{{.State.OOMKilled}}'` / Dozzle), raise its
+  limit in a PR — don't remove it.
+- **Quarterly re-tune** (DEV-PHASES §4.6): snapshot
+  `docker stats --no-stream` on both boxes, compare against the limits, adjust
+  in a PR with the new numbers in the commit message.
