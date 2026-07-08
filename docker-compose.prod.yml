@@ -136,6 +136,17 @@ services:
       # same synced YAML the provision scripts consume. The control plane
       # never writes it — lifecycle stays git + scripts (ADR-003).
       TENANT_REGISTRY_PATH: /data/tenants/registry.yml
+      # Data-retention cron (POST /api/cron/retention, GDPR storage-limitation).
+      # CRON_SECRET must MATCH the CRON_SECRET GitHub Actions secret (the caller
+      # workflow's bearer). DATA-LOSS class: the sweep purges nothing unless
+      # RETENTION_ENABLED=true. Windows are left EMPTY here so the app's own
+      # defaults (30d/18mo/12mo, in lib/retention-policy.ts) stay the single source
+      # of truth — set a SOFRA_RETENTION_* box var only to override one.
+      CRON_SECRET: "${SOFRA_CRON_SECRET:-}"
+      RETENTION_ENABLED: "${SOFRA_RETENTION_ENABLED:-false}"
+      RETENTION_INVITE_TOKEN_DAYS: "${SOFRA_RETENTION_INVITE_TOKEN_DAYS:-}"
+      RETENTION_AUDIT_LOG_MONTHS: "${SOFRA_RETENTION_AUDIT_LOG_MONTHS:-}"
+      RETENTION_REJECTED_APPLICATION_MONTHS: "${SOFRA_RETENTION_REJECTED_APPLICATION_MONTHS:-}"
     volumes:
       # DIRECTORY mount (like caddy-tenants): rsync replaces registry.yml by
       # inode, a single-file mount would go stale after the first sync.
