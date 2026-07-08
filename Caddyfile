@@ -30,6 +30,11 @@ www.rumirestaurant.ch {
 	handle /api/* {
 		reverse_proxy backend:8080 {
 			flush_interval -1
+			# Overwrite X-Forwarded-For with the real client IP so a client-supplied
+			# value can't reach the backend. Defense-in-depth for the backend's
+			# last-hop IP read (rate-limit partitioning); Caddy is the sole edge proxy,
+			# so {http.request.remote.host} IS the real client.
+			header_up X-Forwarded-For {http.request.remote.host}
 		}
 	}
 
