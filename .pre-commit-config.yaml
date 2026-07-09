@@ -1,0 +1,27 @@
+# RUMI deploy — pre-commit configuration
+#
+# Primary purpose: the **no-commit-to-branch** guard. This repo is the LIVE
+# box-infra source of truth and every merge rsyncs to BOTH boxes, so a direct
+# commit to `main` must be blocked — branch + PR always. The app repos already
+# had this; the deploy repo did not (a direct commit to `main` slipped through
+# on 2026-07-09), which is what this closes.
+#
+# Install (commit-stage only — deliberately NOT `--hook-type pre-push`, which
+# would clobber the review-gate pre-push symlink; see memory
+# review-gate-precommit-clobber):
+#     bash setup_hooks.sh        # or: pre-commit install
+# Run manually:  pre-commit run --all-files
+#
+# Only non-file-modifying checks are enabled so a first run on this long-lived
+# infra tree can't rewrite files unexpectedly.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: no-commit-to-branch
+        # `master` included defensively against an accidental rename/fork.
+        # `develop` is intentionally omitted — the deploy repo has no develop.
+        args: ["--branch", "main", "--branch", "master"]
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=1000"]
