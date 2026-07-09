@@ -32,7 +32,9 @@ services:
       ASPNETCORE_ENVIRONMENT: Production
       # Aspire components expect connection strings named "restaurantdb" / "redis".
       # The DB lives on the shared postgres server under the tenant's own database+role.
-      ConnectionStrings__restaurantdb: "Host=postgres;Port=5432;Database=${TENANT_DB};Username=${TENANT_DB_ROLE};Password=${TENANT_DB_PASSWORD}"
+      # Maximum Pool Size caps this tenant's Npgsql pool (default 100) so tenants
+      # can't exhaust the shared server's max_connections=300 (cost plan §5.2).
+      ConnectionStrings__restaurantdb: "Host=postgres;Port=5432;Database=${TENANT_DB};Username=${TENANT_DB_ROLE};Password=${TENANT_DB_PASSWORD};Maximum Pool Size=20"
       ConnectionStrings__redis: "redis-__SLUG__:6379"
       # Fresh per-tenant admin bootstrap (backend #116): the seeder creates the
       # admin from these on first boot of an empty DB and skips when they're
