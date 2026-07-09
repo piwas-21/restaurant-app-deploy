@@ -133,8 +133,8 @@ docker run --rm --network deploy_rumi \
 ```
 
 Verify: `https://sofrapiwas.com/login` 200, sign-in works, and the RUMI
-staging URL still healthy. The sofra DB is covered by the per-DB `pg_dump`
-backup guidance (back up `sofra` alongside `restaurantdb`).
+staging URL still healthy. The sofra DB is covered by the nightly
+cluster-wide `pg_dumpall` (see §Backups & restore).
 
 ---
 
@@ -414,6 +414,68 @@ kills** — the guardrails hold with ~5–6× headroom, nothing to tune.
 Prod box: 15 GiB RAM, ~14 GiB free at snapshot. (This also confirms a
 *co-located* self-hosted Sentry is a non-starter — its ~16 GiB minimum would
 starve the live client stack — so error tracking stays on Sentry SaaS EU.)
+
+## Backups & restore (cross-box, since 2026-07-09)
+
+**Design** (workspace cost plan §10.1 — box loss must not mean data loss): both
+boxes dump nightly to a local dir; prod then ships everything off-box with
+restic. Each box's data ends up **encrypted on the other box**:
+
+| Script | Runs on | Produces |
+|---|---|---|
+| `backup-dump.sh` | both boxes, 02:15 box-local (cron) | `/opt/rumi/backups/dumps/`: `pg_dumpall` of the whole cluster (all DBs + roles), uploads-volume tar, `/opt/rumi/tenants` tar, box-config tar (`.env`, `app-secrets.json`, `dozzle-users.yml`); keeps 7 days locally |
+| `backup-offsite.sh` | **prod only**, 03:00 (cron, root) | restic **repo A** `sftp:rumi@staging:/opt/rumi/backups/restic-prod` ← prod dumps · restic **repo B** `/opt/rumi/backups/restic-staging` (on prod) ← staging dumps (rsync-pulled first) · per repo: `forget --keep-daily 7 --keep-weekly 4 --keep-monthly 6 --prune` + `check --read-data-subset=10%` |
+
+Key direction is deliberately one-way: **prod holds the only cross-box key**
+(`/root/.ssh/rumi_backup_ed25519` → `rumi@staging`, `restrict,from=` pinned in
+staging's `authorized_keys`). Staging never gets a key to prod — no
+privilege-escalation path from the weaker box to the client box. Both repos are
+restic-encrypted with the password in `/root/.rumi-backup-env` (prod, mode 600);
+**escrow that password off-box** (owner's workspace-root `.env` + password
+manager) — after a prod loss the staging-held repo A is unreadable without it.
+
+`/root/.rumi-backup-env` template (never in git):
+
+```
+RESTIC_PASSWORD=<generated once — escrowed>
+# Optional overrides (defaults live in backup-offsite.sh):
+# STAGING_HOST=159.195.34.105   STAGING_USER=rumi
+# SSH_KEY=/root/.ssh/rumi_backup_ed25519
+# REPO_PROD=sftp:rumi@159.195.34.105:/opt/rumi/backups/restic-prod
+#   -> later, swap to an s3:/b2: URL for a third-party off-site tier
+#      (true provider-level DR — cost plan §10.1's ~€4-6/mo upgrade).
+```
+
+**One-time setup** (done 2026-07-09; repeat only on a box rebuild):
+
+1. prod: `apt-get install -y restic` · `ssh-keygen -t ed25519 -f /root/.ssh/rumi_backup_ed25519 -N '' -C rumi-backup-prod` · `ssh-keyscan 159.195.34.105 >> /root/.ssh/known_hosts`
+2. staging: `install -d -m 700 /opt/rumi/backups` · append to `~rumi/.ssh/authorized_keys`: `restrict,from="159.195.137.101" <pubkey>`
+3. prod: write `/root/.rumi-backup-env` (template above, `chmod 600`) · `restic init` on both repos — **repo A needs the same `-o "sftp.command=ssh -i /root/.ssh/rumi_backup_ed25519 -o IdentitiesOnly=yes rumi@159.195.34.105 -s sftp"` as backup-offsite.sh** (non-default key name; plain ssh won't offer it)
+4. crontabs — staging (`crontab -e` as rumi): `15 2 * * * /opt/rumi/deploy/backup-dump.sh >> /opt/rumi/backups/backup.log 2>&1` · prod (root): the same at 02:15 → `/var/log/rumi-backup.log`, plus `0 3 * * * /opt/rumi/deploy/backup-offsite.sh >> /var/log/rumi-backup.log 2>&1`
+
+**Verify** any time: `restic -r <repo> snapshots` shows last night's pair; the
+nightly `check --read-data-subset=10%` continuously exercises repo integrity.
+Logs: `/var/log/rumi-backup.log` (prod), `/opt/rumi/backups/backup.log`
+(staging). Check freshness during the quarterly `docker stats` re-tune ritual.
+
+**Restore — single database** (inspect or recover one DB, e.g. `restaurantdb`):
+
+```bash
+# restic restores ABSOLUTE paths under --target — the two repos hold different dirs:
+#   repo B (staging's data, local on prod):  .../staging-mirror/cluster-<ts>.sql.gz
+#   repo A (prod's data, sftp on staging):   .../dumps/cluster-<ts>.sql.gz  (add the
+#   same -o "sftp.command=…" as backup-offsite.sh)
+restic -r /opt/rumi/backups/restic-staging restore latest --target /tmp/r
+gunzip /tmp/r/opt/rumi/backups/staging-mirror/cluster-<ts>.sql.gz
+# cluster dump is plain SQL: load it into a scratch postgres:16 container on the
+# private network, then pg_dump just the database you need out of it.
+```
+
+**Restore — full box loss**: provision the replacement (provision.sh §Phase 0/1),
+restore the latest snapshot from the *surviving* box's repo, load the cluster
+dump into the fresh postgres (`gunzip -c cluster-*.sql.gz | docker compose exec -T postgres psql -U <user> -d postgres`),
+untar uploads into the volume and `deploy-config`/`tenants` into place, `up -d`,
+re-point DNS. Drill this quarterly alongside the re-tune.
 
 ## Error tracking (Sentry — DEV-PHASES W3)
 
