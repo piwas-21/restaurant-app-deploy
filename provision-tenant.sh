@@ -30,7 +30,6 @@ REGISTRY="tenants/registry.yml"
 TENANT_DIR="/opt/rumi/tenants/${SLUG}"
 DEPLOY_COMPOSE="docker compose -f docker-compose.prod.yml"
 BE_REPO="ghcr.io/piwas-21/restaurant-app-backend"
-FE_REPO="ghcr.io/piwas-21/restaurant-app-frontend"
 
 echo "==> Preflight"
 [[ -f .env ]] || { echo "ERROR: box .env missing"; exit 1; }
