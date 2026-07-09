@@ -16,8 +16,11 @@
 # ~505MiB on 7.8GiB): limits are generous OOM/runaway guardrails (3-8x observed
 # peak), not tight quotas. mem_limit OOM-kills just the container (restart:
 # unless-stopped recovers it) instead of letting a leak take down the box.
-# Must fit the SMALLER staging box: base+sofra = 3.75g of 7.8g, leaving ~1.75g
-# per provisioned tenant (see tenants/templates/docker-compose.tenant.yml.tpl).
+# Must fit the SMALLER staging box: base+sofra = 4.75g of 7.8g (postgres cap
+# 1g→2g with max_connections=300, 2026-07-09 — headroom for per-tenant Npgsql
+# pools; workspace cost plan §5.2). Tenant capacity/placement math lives in the
+# workspace docs/plans/SOFRA-COST-AND-CAPACITY-PLAN.md §3 — provisioned tenants
+# belong on prod; each is capped ~1.75g (tenants/templates/docker-compose.tenant.yml.tpl).
 services:
   caddy:
     image: caddy:2-alpine
@@ -96,7 +99,9 @@ services:
       ASPNETCORE_ENVIRONMENT: Production
       # Aspire components: AddNpgsqlDataSource("restaurantdb") + AddRedisDistributedCache("redis")
       # expect connection strings named "restaurantdb" / "redis" (NOT DefaultConnection).
-      ConnectionStrings__restaurantdb: "Host=postgres;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}"
+      # Maximum Pool Size caps this backend's Npgsql pool (default 100) so N
+      # backends can't exhaust the shared postgres (cost plan §5.2).
+      ConnectionStrings__restaurantdb: "Host=postgres;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD};Maximum Pool Size=20"
       ConnectionStrings__redis: "redis:6379"
     volumes:
       - ./app-secrets.json:/app/app-secrets.json:ro   # all app secrets/config (git-ignored)
@@ -171,8 +176,13 @@ services:
   postgres:
     image: postgres:16
     restart: unless-stopped
-    mem_limit: 1g
+    mem_limit: 2g
     cpus: 2.0
+    # max_connections raised from the 100 default: every backend instance brings
+    # its own Npgsql pool (capped at 20 here + in the tenant tpl), plus sofra's
+    # Prisma pool — the 100-conn default was the first multi-tenant limit
+    # (cost plan §5.2). mem_limit 1g→2g sized for the higher connection ceiling.
+    command: ["postgres", "-c", "max_connections=300"]
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}

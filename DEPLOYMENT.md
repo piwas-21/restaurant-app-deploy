@@ -373,11 +373,19 @@ box directly.
 
 Every service in `docker-compose.prod.yml` (and each tenant instance via
 `tenants/templates/docker-compose.tenant.yml.tpl`) carries `mem_limit` + `cpus`:
-backend/postgres **1g / 2 cpu**, frontend/sofra **512m / 1 cpu**,
+backend **1g / 2 cpu**, postgres **2g / 2 cpu**, frontend/sofra **512m / 1 cpu**,
 caddy/redis/dozzle **256m**. These are OOM/runaway *guardrails* (3–8× the peaks
 observed in the 2026-07-07 `docker stats` sizing snapshot), not tight quotas — a
 leaking container gets OOM-killed and restarted (`restart: unless-stopped`)
 instead of taking the box down.
+
+**Postgres connections (2026-07-09, workspace cost plan §5.2):** the shared
+postgres runs `max_connections=300` (compose `command`), and every backend
+connection string carries `Maximum Pool Size=20` (base compose + tenant tpl) so
+N backends can't exhaust the server (Npgsql's default pool is 100 *per
+backend*). Postgres `mem_limit` is 2g to match the higher ceiling. Already-
+rendered tenant composes keep their old connection string until the tenant is
+re-provisioned (idempotent re-run re-renders compose).
 
 - Limit changes take effect on the next `up -d` (containers are recreated).
 - If a service starts getting OOM-killed legitimately (check
