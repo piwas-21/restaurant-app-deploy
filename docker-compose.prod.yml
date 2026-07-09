@@ -76,6 +76,12 @@ services:
     restart: unless-stopped
     mem_limit: 512m
     cpus: 1.0
+    environment:
+      # Error tracking (DEV-PHASES W3) — SERVER-SIDE only (SSR/route-handler/RSC).
+      # Browser capture is deferred (needs a CSP change, frontend §9). Read at
+      # runtime; empty -> the SDK is a no-op. SENTRY_ENVIRONMENT labels per box.
+      SENTRY_DSN: "${SENTRY_DSN:-}"
+      SENTRY_ENVIRONMENT: "${SENTRY_ENVIRONMENT:-}"
     depends_on:
       - backend
     networks: [rumi]
@@ -147,6 +153,12 @@ services:
       RETENTION_INVITE_TOKEN_DAYS: "${SOFRA_RETENTION_INVITE_TOKEN_DAYS:-}"
       RETENTION_AUDIT_LOG_MONTHS: "${SOFRA_RETENTION_AUDIT_LOG_MONTHS:-}"
       RETENTION_REJECTED_APPLICATION_MONTHS: "${SOFRA_RETENTION_REJECTED_APPLICATION_MONTHS:-}"
+      # Error tracking (DEV-PHASES W3). SENTRY_DSN = server-side, read at runtime;
+      # the BROWSER DSN (NEXT_PUBLIC_SENTRY_DSN) is a build arg, not here — sofra's
+      # browser capture needs an image rebuild. Empty -> the SDK is a no-op.
+      # SENTRY_ENVIRONMENT labels events per box (e.g. staging vs prod).
+      SENTRY_DSN: "${SENTRY_DSN:-}"
+      SENTRY_ENVIRONMENT: "${SENTRY_ENVIRONMENT:-}"
     volumes:
       # DIRECTORY mount (like caddy-tenants): rsync replaces registry.yml by
       # inode, a single-file mount would go stale after the first sync.

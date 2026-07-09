@@ -386,3 +386,55 @@ instead of taking the box down.
 - **Quarterly re-tune** (DEV-PHASES §4.6): snapshot
   `docker stats --no-stream` on both boxes, compare against the limits, adjust
   in a PR with the new numbers in the commit message.
+
+### Snapshot 2026-07-09 (DEV-PHASES W3 — first quarterly re-tune) → **no change**
+
+Read-only `docker stats --no-stream` + `docker inspect .State.OOMKilled` on both
+boxes. **Every container is under 19 % of its limit; zero restarts, zero OOM
+kills** — the guardrails hold with ~5–6× headroom, nothing to tune.
+
+| Service | Limit | Prod (159.195.137.101) | Staging (159.195.34.105) |
+|---|---|---|---|
+| backend | 1g | 178 MiB (17 %) | 164 MiB (16 %) |
+| frontend | 512m | 75 MiB (15 %) | 71 MiB (14 %) |
+| sofra | 512m | — (staging-only) | 95 MiB (19 %) |
+| postgres | 1g | 24 MiB (2 %) | 24 MiB (2 %) |
+| redis | 256m | 8 MiB (3 %) | 8 MiB (3 %) |
+| caddy | 256m | 25 MiB (10 %) | 22 MiB (9 %) |
+| dozzle | 256m | 14 MiB (6 %) | 15 MiB (6 %) |
+
+Prod box: 15 GiB RAM, ~14 GiB free at snapshot. (This also confirms a
+*co-located* self-hosted Sentry is a non-starter — its ~16 GiB minimum would
+starve the live client stack — so error tracking stays on Sentry SaaS EU.)
+
+## Error tracking (Sentry — DEV-PHASES W3)
+
+Sentry is wired into the apps but **inert until a DSN is set** (the SDK is a
+no-op with no DSN, so merging the code changed nothing live):
+
+- **sofra** — full capture (server + browser + root React errors). Browser
+  capture needs `NEXT_PUBLIC_SENTRY_DSN` at **image build** time (a build arg in
+  the sofra repo's `build-image.yml`) plus the CSP allow it already derives.
+- **frontend** (RUMI) — **server-side only** (SSR / route handlers / RSC).
+  Browser capture is deferred: it needs a CSP `connect-src` change in the
+  frontend `next.config.ts`, a §9 explicit-instruction-only edit.
+- **backend** (.NET) — not wired yet (follow-up).
+
+**Enable server-side capture** (no image rebuild — just env + recreate):
+
+1. Add to the box `.env` (both boxes; value is the Sentry **SaaS EU** DSN —
+   low-sensitivity, but config lives on the box, never committed):
+   ```
+   SENTRY_DSN=https://<key>@<org>.ingest.de.sentry.io/<project>
+   SENTRY_ENVIRONMENT=prod   # or "staging" on the staging box
+   ```
+2. Recreate the services that read it:
+   `docker compose -f docker-compose.prod.yml up -d frontend` (+ `sofra` on
+   staging). Same image, one added env var — Sentry just starts reporting.
+3. Verify: trigger a server error and confirm it lands in the Sentry EU
+   dashboard; check `docker logs` shows no Sentry init error.
+
+**Self-host later?** The provided DSN is Sentry SaaS EU (EU data residency).
+Going self-hosted is just **swapping the DSN value** — no code change — but it
+needs its own box (Sentry self-hosted ≈ 16 GiB RAM / ~20 containers; don't
+co-locate on a live app box).
