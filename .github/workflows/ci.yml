@@ -1,0 +1,75 @@
+# ============================================================================
+# CI — lint + config-scan the deploy repo's infra files
+# ----------------------------------------------------------------------------
+# Until now this repo (the source of truth for box infra) had NO CI: the shell
+# scripts and the production compose went un-linted while being the live SaaS's
+# deploy surface. DEV-PHASES-PLAN §4.5 (deploy CI additions), closing the
+# D1/D9/D10 gaps in the §2 matrix for this repo.
+#
+# Two gates, both on PRs + pushes to main:
+#   - shellcheck  : BLOCKING. Static analysis of every *.sh (warning severity —
+#                   the tree is already clean at this level, so it's a real gate).
+#   - trivy config: NON-BLOCKING bed-in (DEV-PHASES §8 "warnings-first, tighten
+#                   by ratchet"). Misconfig scan of docker-compose.prod.yml that
+#                   surfaces findings in the job log without failing the run, so
+#                   the first landing can't red-gate on an un-baselined finding.
+#                   Follow-up: once the CI baseline is confirmed clean, flip
+#                   `exit-code` to "1" at CRITICAL,HIGH to make it blocking;
+#                   accept a specific finding with `#trivy:ignore:<AVD-id>`.
+#
+# This repo is PRIVATE → Actions bills paid minutes, so both jobs are small +
+# pinned; pushes to main are path-filtered, PRs run on every change (linting is
+# cheap and we want it on any diff). permissions: contents: read only. No box
+# secrets are touched here (that's sync-to-box.yml); this only reads + lints.
+# ============================================================================
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    paths:
+      - "**.sh"
+      - "**.yml"
+      - "**.yaml"
+      - "Dockerfile*"
+      - ".github/workflows/ci.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    name: shellcheck (*.sh)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: shellcheck (preinstalled on ubuntu-latest)
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=( *.sh .ssh/*.sh )
+          if [ ${#files[@]} -eq 0 ]; then echo "no *.sh found"; exit 0; fi
+          printf 'Linting %d script(s):\n' "${#files[@]}"
+          printf '  %s\n' "${files[@]}"
+          shellcheck --severity=warning --color=always "${files[@]}"
+
+  trivy_config:
+    name: trivy config (compose misconfig, bed-in)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: config
+          scan-ref: docker-compose.prod.yml
+          severity: CRITICAL,HIGH,MEDIUM
+          exit-code: "0" # bed-in: report only; flip to "1" (CRITICAL,HIGH) once baselined
+          hide-progress: "true"
