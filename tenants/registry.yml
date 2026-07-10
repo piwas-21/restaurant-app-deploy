@@ -22,6 +22,11 @@
 #             (deploy#16 / backend #120, via RestaurantInfoSeed__City). `name` and
 #             `admin_email` seed RestaurantInfo Name/Email the same way; the seeder is a
 #             no-op after first boot, so later edits here only apply to re-created DBs.
+#   template: optional UI template (frontend ADR-006 / S15 T2): classic | craft.
+#             Absent = classic (the current RUMI look). Rendered into the tenant
+#             .env as NEXT_PUBLIC_TEMPLATE; consumed at frontend image build —
+#             INERT until the frontend T2 template-alias PR lands. Any other
+#             value makes provision-tenant.sh fail loudly (no silent default).
 #   status:   provisioning -> active -> retired (descriptive; keep honest)
 
 version: 1
@@ -61,5 +66,6 @@ tenants:
     currency: EUR
     languages: [en, nl]
     modules: [core]
+    template: classic
     admin_email: mahmutkaya.nl@gmail.com
     city: Amsterdam
