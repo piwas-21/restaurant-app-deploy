@@ -150,6 +150,14 @@ plane later calls the same scripts (ADR-003 — no parallel mechanism).
 1. **Registry**: add the tenant to `tenants/registry.yml` (slug, domain, db,
    tags, currency/languages/modules, `city` for the seeded RestaurantInfo
    identity), PR → merge → sync to the box.
+
+   **`template`** (optional, frontend ADR-006 / S15 T2): the tenant's UI
+   template — `classic` (the current RUMI look) or `craft`; absent = `classic`.
+   `provision-tenant.sh` validates it (any other value fails loudly) and renders
+   it into the tenant `.env` as `NEXT_PUBLIC_TEMPLATE`. It is consumed at
+   frontend **image build** via `NEXT_PUBLIC_TEMPLATE` — actual template
+   selection lands with the frontend T2 PR (`build-tenant-image.yml` input +
+   Dockerfile ARG); until then the field records intent only.
 2. **DNS**: subdomain tenants ride the `*.sofrapiwas.com` wildcard A record
    (already points at the staging box, added 2026-07-06 via
    `./domainio-dns.sh add-a sofrapiwas.com '*' 159.195.34.105`). BYO domains

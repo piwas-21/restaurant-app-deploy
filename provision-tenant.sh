@@ -51,7 +51,7 @@ if not t:
     sys.exit(0)
 for k in ("name", "status", "managed", "box", "domain", "domain_mode", "db",
           "db_role", "compose_project", "backend_tag", "frontend_tag",
-          "currency", "languages", "modules", "admin_email", "city"):
+          "currency", "languages", "modules", "admin_email", "city", "template"):
     v = t.get(k, "")
     if isinstance(v, list):
         v = ",".join(map(str, v))
@@ -65,6 +65,14 @@ for f in name domain db db_role compose_project frontend_tag admin_email; do
   var="REG_$(echo "$f" | tr '[:lower:]' '[:upper:]')"
   [[ -n "${!var}" ]] || { echo "ERROR: registry entry '$SLUG' missing required field '$f'"; exit 1; }
 done
+
+# UI template (frontend ADR-006 / S15 T2): optional, absent -> classic. Anything
+# outside the allowed set is a typo that must NOT silently provision as default.
+TENANT_TEMPLATE="${REG_TEMPLATE:-classic}"
+case "$TENANT_TEMPLATE" in
+  classic|craft) ;;
+  *) echo "ERROR: registry entry '$SLUG' has template '$TENANT_TEMPLATE' — allowed: classic | craft (absent = classic)"; exit 1 ;;
+esac
 
 BOX_IP="$(curl -4 -sS --max-time 10 https://ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')"
 DOMAIN_IP="$(getent hosts "$REG_DOMAIN" | awk '{print $1}' | head -1 || true)"
@@ -113,6 +121,7 @@ if [[ -f "$TENANT_DIR/.env" ]]; then
   }
   set_env_line TENANT_NAME "$ENV_NAME"
   set_env_line TENANT_CITY "$ENV_CITY"
+  set_env_line NEXT_PUBLIC_TEMPLATE "$TENANT_TEMPLATE"
 else
   FRESH_ENV=1
   TENANT_DB_PASSWORD="$(rand 48 32)"
@@ -134,6 +143,7 @@ else
       -e "s|__CURRENCY__|${REG_CURRENCY}|g" \
       -e "s|__LANGUAGES__|${REG_LANGUAGES}|g" \
       -e "s|__MODULES__|${REG_MODULES}|g" \
+      -e "s|__TEMPLATE__|${TENANT_TEMPLATE}|g" \
       tenants/templates/tenant.env.tpl > "$TENANT_DIR/.env"
   chmod 600 "$TENANT_DIR/.env"
   echo "   wrote .env (fresh DB password + admin bootstrap credentials)"

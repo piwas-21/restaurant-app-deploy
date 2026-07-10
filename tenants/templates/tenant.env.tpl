@@ -22,3 +22,8 @@ TENANT_ADMIN_PASSWORD=__ADMIN_PASSWORD__
 TENANT_CURRENCY=__CURRENCY__
 TENANT_LANGUAGES=__LANGUAGES__
 TENANT_MODULES=__MODULES__
+# UI template (frontend ADR-006 / S15 T2): classic | craft, from the registry's
+# optional `template` field (absent -> classic; anything else fails provisioning).
+# NEXT_PUBLIC_* are baked at frontend image build, so this line records intent —
+# it becomes effective with the frontend T2 template-alias PR (build input).
+NEXT_PUBLIC_TEMPLATE=__TEMPLATE__
