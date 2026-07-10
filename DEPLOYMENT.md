@@ -155,19 +155,23 @@ plane later calls the same scripts (ADR-003 — no parallel mechanism).
    template — `classic` (the current RUMI look) or `craft`; absent = `classic`.
    `provision-tenant.sh` validates it (any other value fails loudly) and renders
    it into the tenant `.env` as `NEXT_PUBLIC_TEMPLATE`. It is consumed at
-   frontend **image build** via `NEXT_PUBLIC_TEMPLATE` — actual template
-   selection lands with the frontend T2 PR (`build-tenant-image.yml` input +
-   Dockerfile ARG); until then the field records intent only.
+   frontend **image build** via the `build-tenant-image.yml` `template` input +
+   Dockerfile ARG (shipped 2026-07-10, frontend #165; `craft` is buildable
+   since frontend #166 — its full T3 DoD is still in progress).
 2. **DNS**: subdomain tenants ride the `*.sofrapiwas.com` wildcard A record
    (already points at the staging box, added 2026-07-06 via
    `./domainio-dns.sh add-a sofrapiwas.com '*' 159.195.34.105`). BYO domains
    need their own A record + nothing else — the same script provisions them.
 3. **Frontend image**: `NEXT_PUBLIC_*` are baked per domain, so build the
    tenant's image first (frontend repo):
-   `gh workflow run build-tenant-image.yml -f tenant_domain=<domain> -f image_tag=tenant-<slug> -f restaurant_name="<registry name>"`
-   — `restaurant_name` bakes the page-metadata `<title>` (frontend #125 part 1).
-   It's optional (empty ⇒ neutral "Restaurant" title) so old dispatches still
-   work, but every real tenant should pass the registry `name`.
+   `gh workflow run build-tenant-image.yml -f tenant_domain=<domain> -f image_tag=tenant-<slug> -f restaurant_name="<registry name>" -f template=<registry template> -f currency=<registry currency>`
+   — `restaurant_name` bakes the page-metadata `<title>` (frontend #125 part 1);
+   `template` bakes the UI template (ADR-006, default `classic`); `currency`
+   bakes `NEXT_PUBLIC_TENANT_CURRENCY` for all displayed prices (frontend #169,
+   default `CHF` — pair it with the registry `currency:` field, whose backend
+   half `TENANT_CURRENCY` → `Localization__Currency` ships via the tenant
+   compose template since #33). All three are optional (defaults preserve old
+   dispatches) but every real tenant should pass the registry values.
 4. **Provision** (on the box):
    ```bash
    bash .ssh/staging.sh 'cd /opt/rumi/deploy && ./provision-tenant.sh <slug>'
