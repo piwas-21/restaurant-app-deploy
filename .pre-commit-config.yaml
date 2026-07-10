@@ -19,9 +19,10 @@ repos:
     rev: v5.0.0
     hooks:
       - id: no-commit-to-branch
-        # `master` included defensively against an accidental rename/fork.
-        # `develop` is intentionally omitted — the deploy repo has no develop.
-        args: ["--branch", "main", "--branch", "master"]
+        # `develop` and `main` are both protected server-side by the no-bypass
+        # `main-develop` ruleset (GitFlow reinstated 2026-07-10); mirror that
+        # locally. `master` included defensively against an accidental rename/fork.
+        args: ["--branch", "main", "--branch", "develop", "--branch", "master"]
       - id: check-merge-conflict
       - id: check-added-large-files
         args: ["--maxkb=1000"]
