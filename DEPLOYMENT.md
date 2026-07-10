@@ -488,7 +488,11 @@ no-op with no DSN, so merging the code changed nothing live):
 - **frontend** (RUMI) — **server-side only** (SSR / route handlers / RSC).
   Browser capture is deferred: it needs a CSP `connect-src` change in the
   frontend `next.config.ts`, a §9 explicit-instruction-only edit.
-- **backend** (.NET) — not wired yet (follow-up).
+- **backend** (.NET) — **errors only** (`Sentry.AspNetCore`, env-gated on
+  `SENTRY_DSN` in `Program.cs`): no PII, no request bodies, tracing/performance
+  off. `SENTRY_ENVIRONMENT` labels the box (both boxes run
+  `ASPNETCORE_ENVIRONMENT=Production`); it falls back to the ASP.NET
+  environment name when unset.
 
 **Enable server-side capture** (no image rebuild — just env + recreate):
 
@@ -499,8 +503,8 @@ no-op with no DSN, so merging the code changed nothing live):
    SENTRY_ENVIRONMENT=prod   # or "staging" on the staging box
    ```
 2. Recreate the services that read it:
-   `docker compose -f docker-compose.prod.yml up -d frontend` (+ `sofra` on
-   staging). Same image, one added env var — Sentry just starts reporting.
+   `docker compose -f docker-compose.prod.yml up -d frontend backend` (+ `sofra`
+   on staging). Same image, one added env var — Sentry just starts reporting.
 3. Verify: trigger a server error and confirm it lands in the Sentry EU
    dashboard; check `docker logs` shows no Sentry init error.
 

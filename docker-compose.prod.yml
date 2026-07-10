@@ -103,6 +103,12 @@ services:
       # backends can't exhaust the shared postgres (cost plan §5.2).
       ConnectionStrings__restaurantdb: "Host=postgres;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD};Maximum Pool Size=20"
       ConnectionStrings__redis: "redis:6379"
+      # Error tracking (DEV-PHASES W3 follow-up) — same switch as the frontend
+      # block below: read at runtime; empty -> the SDK never initializes.
+      # Errors only (no PII, no request bodies, tracing off). SENTRY_ENVIRONMENT
+      # labels events per box (both boxes run ASPNETCORE_ENVIRONMENT=Production).
+      SENTRY_DSN: "${SENTRY_DSN:-}"
+      SENTRY_ENVIRONMENT: "${SENTRY_ENVIRONMENT:-}"
     volumes:
       - ./app-secrets.json:/app/app-secrets.json:ro   # all app secrets/config (git-ignored)
       - backend_keys:/app/keys                          # DataProtection keys — persist or every redeploy invalidates tokens/sessions
