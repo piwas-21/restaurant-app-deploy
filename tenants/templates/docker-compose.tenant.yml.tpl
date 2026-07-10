@@ -56,6 +56,12 @@ services:
       # mechanism that changes them.
       TENANT_SLUG: "__SLUG__"
       TENANT_CURRENCY: "${TENANT_CURRENCY}"
+      # Feeds the backend's LocalizationSettings.Currency (Localization/Currency
+      # config section/key) so this tenant's order emails show its own currency
+      # instead of the CHF default. Empty-defaulted (:-) so the backend's own CHF
+      # fallback stays the single source of truth. TENANT_CURRENCY above stays too
+      # (inert record, same pattern as TENANT_LANGUAGES/TENANT_MODULES below).
+      Localization__Currency: "${TENANT_CURRENCY:-}"
       TENANT_LANGUAGES: "${TENANT_LANGUAGES}"
       TENANT_MODULES: "${TENANT_MODULES}"
     volumes:
