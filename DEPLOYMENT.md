@@ -82,9 +82,10 @@ docker run --rm amir20/dozzle:v10.6.6 generate admin --name 'RUMI Staging Ops' -
 Verify: `https://v2202607374190477434.megasrv.de/` (200) and
 `.../api/health` (200), same as the prod checks below.
 
-**Auto-sync:** `sync-to-staging.yml` is currently `workflow_dispatch`-only. Once the
-`STAGING_*` repo secrets are set, uncomment its `push: [main]` trigger so staging
-tracks infra changes automatically (like `sync-to-box.yml` does for prod).
+**Auto-sync:** `sync-to-staging.yml` triggers on push to `main` (enabled 2026-07-03
+once the `STAGING_*` repo secrets were set), so staging tracks infra changes
+automatically (like `sync-to-box.yml` does for prod). `workflow_dispatch` remains
+available for manual re-syncs.
 
 ### Sofra marketing site (staging box only)
 
