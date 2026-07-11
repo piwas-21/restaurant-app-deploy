@@ -1,7 +1,8 @@
 <!--
   PR template — restaurant-app-deploy (LIVE box infra source of truth).
-  A merge rsyncs this repo to BOTH boxes (sync-to-box.yml → prod, sync-to-staging.yml → staging).
-  Treat every merge as applied-to-production config. Delete sections that don't apply.
+  PRs target `develop`; releases ship via a `develop` → `main` release PR (CLAUDE.md §8).
+  A merge to `main` rsyncs this repo to BOTH boxes (sync-to-box.yml → prod, sync-to-staging.yml → staging).
+  Treat every release merge as applied-to-production config. Delete sections that don't apply.
 -->
 
 ## Summary
@@ -20,7 +21,7 @@
 - Rest: n/a because …
 
 ## Blast radius
-- [ ] Prod box affected · [ ] Staging box affected · [ ] Both (both sync workflows fire on merge)
+- [ ] Prod box affected · [ ] Staging box affected · [ ] Both (both sync workflows fire on the release merge to `main`)
 - Services touched: <!-- caddy / postgres / backend / frontend / sofra / tenant-* / dozzle -->
 - Applies on: <!-- next rsync (config on disk) vs next `up -d` / recreate — say which, per the Caddyfile inode + tenants-dir mount traps -->
 
