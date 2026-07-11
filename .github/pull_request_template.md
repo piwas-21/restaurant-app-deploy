@@ -1,6 +1,6 @@
 <!--
   PR template — restaurant-app-deploy (LIVE box infra source of truth).
-  PRs target `develop`; releases ship via a `develop` → `main` release PR (CLAUDE.md §8).
+  PRs target `develop`; releases ship via a `develop` → `main` release PR (CLAUDE.md "Discipline (hard)").
   A merge to `main` rsyncs this repo to BOTH boxes (sync-to-box.yml → prod, sync-to-staging.yml → staging).
   Treat every release merge as applied-to-production config. Delete sections that don't apply.
 -->
