@@ -15,7 +15,7 @@ Docker Compose; images are built in CI and pulled from GHCR. The app repos link 
 merge to main ─► build-image.yml ─► GHCR (:latest, :sha-<commit>) ─► deploy.yml ─► SSH ─► box: deploy.sh
  (app repo)       (build + push)        (image registry)            (auto/manual)        (pull + up -d)
 
-push to main ─► sync-to-box.yml ─► rsync ─► box: /opt/rumi/deploy   (this repo: infra files only)
+push to main ─► sync-to-box.yml (prod) + sync-to-staging.yml (staging) ─► rsync ─► box: /opt/rumi/deploy   (this repo: infra files only)
  (this repo)
 ```
 
@@ -366,7 +366,7 @@ FRONTEND_TAG=latest    ./deploy.sh       # redeploy frontend
 
 ## Updating infra files (compose / Caddyfile / deploy.sh)
 
-Edit here, open a PR, merge to `main` → `sync-to-box.yml` rsyncs to the box.
+Edit here, open a PR, merge to `main` → `sync-to-box.yml` (prod) + `sync-to-staging.yml` (staging) rsync to the boxes.
 The sync **copies files only** — it does not restart anything:
 
 - A `docker-compose.prod.yml` change takes effect on the next `./deploy.sh`.
