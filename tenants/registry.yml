@@ -27,6 +27,10 @@
 #             .env as NEXT_PUBLIC_TEMPLATE; consumed at frontend image build —
 #             INERT until the frontend T2 template-alias PR lands. Any other
 #             value makes provision-tenant.sh fail loudly (no silent default).
+#   live_since: optional go-live date, quoted "YYYY-MM-DD". Read ONLY by the sofra
+#             control plane (tenant-registry.ts) to pre-fill the /admin/onboard
+#             "Live since" field; provision-tenant.sh never reads it. Absent = the
+#             admin enters the date manually. Quote it so YAML keeps it a string.
 #   status:   provisioning -> active -> retired (descriptive; keep honest)
 
 version: 1
@@ -48,6 +52,8 @@ tenants:
     languages: [en, de, tr, it, ar, fr, nl, es, ru, zh]
     # Grandfathered: tenant 1 keeps every module (ADR-010 v1 scope).
     modules: [core, kitchen-board, cashier, server, reservations, loyalty, printing, extra-languages]
+    # RUMI prod went live on the Netcup box on 2026-06-29 (ROADMAP).
+    live_since: "2026-06-29"
 
   # Throwaway tenant used for the S14 provisioning-v1 DoD (stand up on staging,
   # order from it, tear down). Safe to re-provision any time for rehearsals.
