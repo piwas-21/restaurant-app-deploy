@@ -15,7 +15,7 @@ Docker Compose; images are built in CI and pulled from GHCR. The app repos link 
 merge to main ─► build-image.yml ─► GHCR (:latest, :sha-<commit>) ─► deploy.yml ─► SSH ─► box: deploy.sh
  (app repo)       (build + push)        (image registry)            (auto/manual)        (pull + up -d)
 
-push to main ─► sync-to-box.yml ─► rsync ─► box: /opt/rumi/deploy   (this repo: infra files only)
+push to main ─► sync-to-box.yml (prod) + sync-to-staging.yml (staging) ─► rsync ─► box: /opt/rumi/deploy   (this repo: infra files only)
  (this repo)
 ```
 
@@ -82,9 +82,10 @@ docker run --rm amir20/dozzle:v10.6.6 generate admin --name 'RUMI Staging Ops' -
 Verify: `https://v2202607374190477434.megasrv.de/` (200) and
 `.../api/health` (200), same as the prod checks below.
 
-**Auto-sync:** `sync-to-staging.yml` is currently `workflow_dispatch`-only. Once the
-`STAGING_*` repo secrets are set, uncomment its `push: [main]` trigger so staging
-tracks infra changes automatically (like `sync-to-box.yml` does for prod).
+**Auto-sync:** `sync-to-staging.yml` triggers on push to `main` (enabled 2026-07-03
+once the `STAGING_*` repo secrets were set), so staging tracks infra changes
+automatically (like `sync-to-box.yml` does for prod). `workflow_dispatch` remains
+available for manual re-syncs.
 
 ### Sofra marketing site (staging box only)
 
@@ -155,19 +156,23 @@ plane later calls the same scripts (ADR-003 — no parallel mechanism).
    template — `classic` (the current RUMI look) or `craft`; absent = `classic`.
    `provision-tenant.sh` validates it (any other value fails loudly) and renders
    it into the tenant `.env` as `NEXT_PUBLIC_TEMPLATE`. It is consumed at
-   frontend **image build** via `NEXT_PUBLIC_TEMPLATE` — actual template
-   selection lands with the frontend T2 PR (`build-tenant-image.yml` input +
-   Dockerfile ARG); until then the field records intent only.
+   frontend **image build** via the `build-tenant-image.yml` `template` input +
+   Dockerfile ARG (shipped 2026-07-10, frontend #165; `craft` is buildable
+   since frontend #166 — its full T3 DoD is still in progress).
 2. **DNS**: subdomain tenants ride the `*.sofrapiwas.com` wildcard A record
    (already points at the staging box, added 2026-07-06 via
    `./domainio-dns.sh add-a sofrapiwas.com '*' 159.195.34.105`). BYO domains
    need their own A record + nothing else — the same script provisions them.
 3. **Frontend image**: `NEXT_PUBLIC_*` are baked per domain, so build the
    tenant's image first (frontend repo):
-   `gh workflow run build-tenant-image.yml -f tenant_domain=<domain> -f image_tag=tenant-<slug> -f restaurant_name="<registry name>"`
-   — `restaurant_name` bakes the page-metadata `<title>` (frontend #125 part 1).
-   It's optional (empty ⇒ neutral "Restaurant" title) so old dispatches still
-   work, but every real tenant should pass the registry `name`.
+   `gh workflow run build-tenant-image.yml -f tenant_domain=<domain> -f image_tag=tenant-<slug> -f restaurant_name="<registry name>" -f template=<registry template> -f currency=<registry currency>`
+   — `restaurant_name` bakes the page-metadata `<title>` (frontend #125 part 1);
+   `template` bakes the UI template (ADR-006, default `classic`); `currency`
+   bakes `NEXT_PUBLIC_TENANT_CURRENCY` for all displayed prices (frontend #169,
+   default `CHF` — pair it with the registry `currency:` field, whose backend
+   half `TENANT_CURRENCY` → `Localization__Currency` ships via the tenant
+   compose template since #33). All three are optional (defaults preserve old
+   dispatches) but every real tenant should pass the registry values.
 4. **Provision** (on the box):
    ```bash
    bash .ssh/staging.sh 'cd /opt/rumi/deploy && ./provision-tenant.sh <slug>'
@@ -361,7 +366,7 @@ FRONTEND_TAG=latest    ./deploy.sh       # redeploy frontend
 
 ## Updating infra files (compose / Caddyfile / deploy.sh)
 
-Edit here, open a PR, merge to `main` → `sync-to-box.yml` rsyncs to the box.
+Edit here, open a PR, merge to `main` → `sync-to-box.yml` (prod) + `sync-to-staging.yml` (staging) rsync to the boxes.
 The sync **copies files only** — it does not restart anything:
 
 - A `docker-compose.prod.yml` change takes effect on the next `./deploy.sh`.
