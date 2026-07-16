@@ -46,17 +46,20 @@ transition live before promoting to the one production tenant (rumirestaurant.ch
   `CADDYFILE=./Caddyfile.staging` in the staging box's `.env` — the compose file
   (`docker-compose.prod.yml`) and `deploy.sh` are **shared, unchanged**.
 - `.env.staging.example` → the box's `.env`: `FRONTEND_TAG=staging`,
-  `BACKEND_TAG=latest`, fresh Postgres creds.
+  `BACKEND_TAG=staging`, fresh Postgres creds.
 - `app-secrets.staging.example.json` → the box's `app-secrets.json`: staging URLs,
   CORS = the staging origin, and email via `onboarding@resend.dev` so staging
   **cannot dent rumirestaurant.ch's sending reputation**.
 
-**Image model:** the **backend image is domain-agnostic** (URLs/CORS come from
-`app-secrets.json`), so staging runs the **same `:latest` backend** as prod. Only
-the **frontend** bakes `NEXT_PUBLIC_*` at build time, so it needs a
-staging-specific **`:staging`** image (built by the frontend repo's
-`build-image.yml` from `develop`). So the staging **frontend** tracks `develop`,
-while the **backend** image is shared with prod (`:latest`, built from `main`).
+**Image model:** staging tracks `develop`; **both** services pin their repo's
+moving **`:staging`** tag, published on every `develop` push. The **frontend**
+`:staging` image differs from prod's (it bakes staging `NEXT_PUBLIC_*` at build
+time); the **backend** image is domain-agnostic (URLs/CORS come from
+`app-secrets.json`), so its `:staging` tag is just an alias for the same `develop`
+build's `:sha-<commit>`. **Do not pin `BACKEND_TAG=latest`** — since 2026-07-16
+`:latest` means `main` (prod), so it would roll staging back to prod code on
+deploy (the `:latest` fix gated it to `main`; backend + frontend both publish
+`:staging` from `develop`).
 
 **First-time bring-up (once the box is provisioned):**
 ```bash
