@@ -67,7 +67,13 @@ tenants:
     db: tenant_demo
     db_role: tenant_demo
     compose_project: tenant-demo
-    backend_tag: latest
+    # demo is a develop-TRACKING staging surface (like RUMI staging), NOT a prod
+    # mirror — so its backend rides `:staging` (published on every backend
+    # develop push), never `:latest` (= main/prod since the 2026-07-16 GitFlow
+    # fix). DEPLOYMENT.md §"do not pin BACKEND_TAG=latest". This keeps the demo
+    # backend on develop-tip (e.g. the ThemePaletteKey column, backend #197) so
+    # the frontend's runtime palette + newest APIs actually round-trip.
+    backend_tag: staging
     frontend_tag: tenant-demo
     currency: EUR
     languages: [en, nl]
