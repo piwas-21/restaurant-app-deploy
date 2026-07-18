@@ -78,3 +78,24 @@ tenants:
     template: craft
     admin_email: mahmutkaya.nl@gmail.com
     city: Amsterdam
+  probe-adr012:
+    name: ADR-012 Probe
+    status: provisioning
+    managed: scripts
+    box: staging
+    domain: probe-adr012.sofrapiwas.com
+    domain_mode: subdomain
+    db: tenant_probe-adr012
+    db_role: tenant_probe-adr012
+    compose_project: tenant-probe-adr012
+    backend_tag: latest
+    frontend_tag: tenant-probe-adr012
+    currency: EUR
+    languages:
+      - en
+      - nl
+    modules:
+      - core
+    template: craft
+    admin_email: probe@example.com
+    city: Testville
