@@ -48,7 +48,10 @@ jobs:
           # BEFORE the value reaches any shell interpolation.
           RAW_SLUG: ${{ inputs.slug || github.event.client_payload.slug }}
         run: |
-          if ! printf '%s' "$RAW_SLUG" | grep -Eq '^[a-z0-9][a-z0-9-]{1,30}$'; then
+          # [[ =~ ]] anchors the WHOLE string — unlike `grep -q`, which matches
+          # line-by-line and would pass a multi-line payload — so this first layer
+          # is self-sufficient, not reliant on GITHUB_OUTPUT single-line truncation.
+          if [[ ! "$RAW_SLUG" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; then
             echo "::error::invalid slug (must match ^[a-z0-9][a-z0-9-]{1,30}\$)"
             exit 1
           fi
