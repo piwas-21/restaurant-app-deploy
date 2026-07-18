@@ -59,7 +59,7 @@ tenants:
   # order from it, tear down). Safe to re-provision any time for rehearsals.
   demo:
     name: Sofra Demo
-    status: retired
+    status: active
     managed: scripts
     box: staging
     domain: demo.sofrapiwas.com
@@ -72,6 +72,9 @@ tenants:
     currency: EUR
     languages: [en, nl]
     modules: [core]
-    template: classic
+    # craft = the sofra-mirror template (S15 T3 DoD): the demo tenant is the
+    # showcase for template distinctness. Its tenant-demo image is baked with
+    # NEXT_PUBLIC_TEMPLATE=craft.
+    template: craft
     admin_email: mahmutkaya.nl@gmail.com
     city: Amsterdam
