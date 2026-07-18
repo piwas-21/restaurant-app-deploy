@@ -1,0 +1,82 @@
+name: provision-tenant
+
+# The box-execution half of the ADR-012 git-native provisioning trigger. Runs the
+# idempotent `provision-tenant.sh <slug>` on the STAGING box over SSH, reusing the
+# sync-to-staging SSH secrets. The registry stays the source of truth (ADR-003/007):
+# the tenant's entry must already be committed to tenants/registry.yml AND synced to
+# the box (a push to main runs sync-to-staging) BEFORE this is invoked — the script
+# reads the on-box registry and refuses an unknown / managed:legacy / wrong-box slug.
+#
+# Invoked by: the control plane via repository_dispatch (type: provision-tenant, once
+# the registry PR is merged + synced) OR manually via workflow_dispatch. The box SSH
+# key lives ONLY in Actions secrets — the public-facing control-plane container never
+# holds it (ADR-012 invariant 2).
+#
+# Security: the slug is untrusted (a repository_dispatch client_payload field), so it
+# is grammar-gated before ANY use and passed via env, never inlined. provision-tenant.sh
+# re-validates and enforces the box/managed guards as defence in depth.
+
+on:
+  workflow_dispatch:
+    inputs:
+      slug:
+        description: "Registry slug to provision (must already exist + be synced in tenants/registry.yml)"
+        required: true
+        type: string
+  repository_dispatch:
+    types: [provision-tenant]
+
+concurrency:
+  # Serialise with itself; the script also touches shared Caddy/compose on the box.
+  group: provision-tenant
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  provision:
+    name: provision tenant on the box
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Resolve + validate slug
+        id: slug
+        env:
+          # Untrusted for repository_dispatch — a token holder can set any payload
+          # field. Grammar-gate (same regex as provision-tenant.sh + the registry)
+          # BEFORE the value reaches any shell interpolation.
+          RAW_SLUG: ${{ inputs.slug || github.event.client_payload.slug }}
+        run: |
+          # [[ =~ ]] anchors the WHOLE string — unlike `grep -q`, which matches
+          # line-by-line and would pass a multi-line payload — so this first layer
+          # is self-sufficient, not reliant on GITHUB_OUTPUT single-line truncation.
+          if [[ ! "$RAW_SLUG" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; then
+            echo "::error::invalid slug (must match ^[a-z0-9][a-z0-9-]{1,30}\$)"
+            exit 1
+          fi
+          echo "slug=$RAW_SLUG" >> "$GITHUB_OUTPUT"
+
+      - name: Configure SSH (pinned host key)
+        env:
+          STAGING_SSH_KEY: ${{ secrets.STAGING_SSH_KEY }}
+          STAGING_KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$STAGING_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$STAGING_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Run provision-tenant.sh on the box
+        env:
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          # Regex-validated above → safe to interpolate into the remote command.
+          SLUG: ${{ steps.slug.outputs.slug }}
+        run: |
+          ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes \
+            -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=15 \
+            "${STAGING_USER}@${STAGING_HOST}" \
+            "cd /opt/rumi/deploy && ./provision-tenant.sh '${SLUG}'"
