@@ -528,3 +528,38 @@ no-op with no DSN, so merging the code changed nothing live):
 Going self-hosted is just **swapping the DSN value** — no code change — but it
 needs its own box (Sentry self-hosted ≈ 16 GiB RAM / ~20 containers; don't
 co-locate on a live app box).
+
+## Fleet observability (Track S — printer-app → backend → sofra `/admin/fleet`)
+
+Each tenant backend runs a `FleetSummaryPushService` that POSTs its device roster +
+missed-order/error counts to the sofra control plane's `/api/telemetry/fleet` route;
+`/admin/fleet` renders them. See
+`docs/plans/PRINTER-APP-FLEET-OBSERVABILITY-PLAN.md` in the workspace.
+
+**One shared secret per box, set once — then it's automatic for every tenant:**
+
+1. Generate one secret and put the **same value** on the sofra box **and** every box
+   that runs tenant backends:
+   ```
+   PRINTER_TELEMETRY_SECRET=<openssl rand -hex 32>
+   ```
+   (staging box `.env` — sofra reads it for the ingest route; prod box `.env` — tenant
+   backends read it. Both boxes must carry the identical value.)
+2. **New tenants: nothing else to do.** `provision-tenant.sh` flows `PRINTER_TELEMETRY_SECRET`
+   + `SENTRY_DSN` from the box `.env` into each tenant `.env`, and the tenant compose wires
+   `FleetPush__*` + `SENTRY_DSN` into the backend. The backend auto-migrates the fleet tables
+   on startup. So a freshly provisioned tenant reports to `/admin/fleet` automatically. Until
+   the secret is set the pusher is **inert** (self-guards on an empty secret) — safe to ship.
+3. **Roll sofra** to pick up the ingest secret: `docker compose -f docker-compose.prod.yml up -d sofra`.
+4. **RUMI (legacy tenant — scripts refuse to touch it):** activate by hand on the prod box —
+   add `FleetPush__{Enabled,SofraIngestUrl,Secret,TenantSlug}` + `SENTRY_DSN` to the RUMI
+   backend service env and recreate it. **Requires the backend fleet code (#199–#203) released
+   to `main` + deployed to the prod box first** — validate on staging before promoting.
+
+**Printer-app onboarding for a tenant** who buys the printer service: they enter three values
+in the app's Settings — **API Base URL** (`https://<their-domain>`), **Tenant Slug**, and
+**Printer Key** (`PrinterSettings.ApiKey`, auto-generated per tenant). `provision-tenant.sh`
+prints all three in its summary; the key also lives in `/opt/rumi/tenants/<slug>/app-secrets.json`.
+The control plane deliberately does **not** store the key (ADR-012 — sofra never holds box
+secrets); a self-serve "reveal your printer key" surface would live in the **tenant's own admin**
+(their trust boundary), not the SaaS control plane.

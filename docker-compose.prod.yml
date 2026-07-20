@@ -160,6 +160,10 @@ services:
       # defaults (30d/18mo/12mo, in lib/retention-policy.ts) stay the single source
       # of truth — set a SOFRA_RETENTION_* box var only to override one.
       CRON_SECRET: "${SOFRA_CRON_SECRET:-}"
+      # Fleet observability ingest (POST /api/telemetry/fleet). The bearer each tenant
+      # backend's FleetSummaryPushService presents; must MATCH PRINTER_TELEMETRY_SECRET
+      # on every tenant-backend box. Empty -> the route 503s (inert).
+      PRINTER_TELEMETRY_SECRET: "${PRINTER_TELEMETRY_SECRET:-}"
       RETENTION_ENABLED: "${SOFRA_RETENTION_ENABLED:-false}"
       RETENTION_INVITE_TOKEN_DAYS: "${SOFRA_RETENTION_INVITE_TOKEN_DAYS:-}"
       RETENTION_AUDIT_LOG_MONTHS: "${SOFRA_RETENTION_AUDIT_LOG_MONTHS:-}"
