@@ -109,6 +109,16 @@ services:
       # labels events per box (both boxes run ASPNETCORE_ENVIRONMENT=Production).
       SENTRY_DSN: "${SENTRY_DSN:-}"
       SENTRY_ENVIRONMENT: "${SENTRY_ENVIRONMENT:-}"
+      # Fleet observability roll-up (Track S) — this backend pushes its device roster +
+      # missed-order/error counts to the one sofra control plane (/admin/fleet). Shared bearer
+      # from the box .env; the slug is this deployment's own (RUMI = the main stack). Inert until
+      # PRINTER_TELEMETRY_SECRET is set (FleetSummaryPushService self-guards on an empty secret).
+      # This compose runs on BOTH boxes, so the STAGING box must set FLEET_PUSH_ENABLED=false (else
+      # the staging RUMI backend would push as "rumi" too and clobber prod's fleet rows).
+      FleetPush__Enabled: "${FLEET_PUSH_ENABLED:-true}"
+      FleetPush__SofraIngestUrl: "${FLEET_INGEST_URL:-https://sofrapiwas.com/api/telemetry/fleet}"
+      FleetPush__Secret: "${PRINTER_TELEMETRY_SECRET:-}"
+      FleetPush__TenantSlug: "${FLEET_TENANT_SLUG:-rumi}"
     volumes:
       - ./app-secrets.json:/app/app-secrets.json:ro   # all app secrets/config (git-ignored)
       - backend_keys:/app/keys                          # DataProtection keys — persist or every redeploy invalidates tokens/sessions
