@@ -77,8 +77,10 @@ services:
       FleetPush__Secret: "${PRINTER_TELEMETRY_SECRET:-}"
       FleetPush__TenantSlug: "__SLUG__"
       # Server-side error tracking (shared Sentry EU project; inert without a DSN).
+      # SENTRY_ENVIRONMENT is flowed from the box (=BOX_ROLE) by provision-tenant.sh; empty here
+      # lets the backend fall back to the ASP.NET environment name (no hardcoded default).
       SENTRY_DSN: "${SENTRY_DSN:-}"
-      SENTRY_ENVIRONMENT: "${SENTRY_ENVIRONMENT:-prod}"
+      SENTRY_ENVIRONMENT: "${SENTRY_ENVIRONMENT:-}"
     volumes:
       - ./app-secrets.json:/app/app-secrets.json:ro
       - backend_keys:/app/keys

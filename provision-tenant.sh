@@ -104,6 +104,16 @@ rand() { openssl rand -base64 "$1" | tr -d '/+=' | cut -c1-"$2"; }
 # backslash, ampersand, and the | delimiter would otherwise corrupt the render.
 sed_escape() { printf '%s' "$1" | sed -e 's/[\\&|]/\\&/g'; }
 
+# Replace-or-append KEY=value in the tenant .env (idempotent). $TENANT_DIR resolves at call
+# time. Used for registry-owned identity lines and the shared fleet/Sentry values.
+set_env_line() { # $1=key $2=value (free text)
+  if grep -q "^$1=" "$TENANT_DIR/.env"; then
+    sed -i "s|^$1=.*|$1=$(sed_escape "$2")|" "$TENANT_DIR/.env"
+  else
+    printf '%s=%s\n' "$1" "$2" >> "$TENANT_DIR/.env"
+  fi
+}
+
 # Free-text values landing in the tenant .env are interpolated by docker
 # compose — a literal $ must be doubled or compose silently mangles it (same
 # trap as DEV_PORTAL_AUTH_HASH; see DEPLOYMENT.md §Developer Portal).
@@ -118,14 +128,7 @@ if [[ -f "$TENANT_DIR/.env" ]]; then
   # things that legitimately drift); generated secrets stay stable per tenant.
   sed -i -e "s|^BACKEND_TAG=.*|BACKEND_TAG=${REG_BACKEND_TAG:-latest}|" \
          -e "s|^FRONTEND_TAG=.*|FRONTEND_TAG=${REG_FRONTEND_TAG}|" "$TENANT_DIR/.env"
-  # Identity lines may be absent on a pre-#16 .env — replace or append.
-  set_env_line() { # $1=key $2=value (free text)
-    if grep -q "^$1=" "$TENANT_DIR/.env"; then
-      sed -i "s|^$1=.*|$1=$(sed_escape "$2")|" "$TENANT_DIR/.env"
-    else
-      printf '%s=%s\n' "$1" "$2" >> "$TENANT_DIR/.env"
-    fi
-  }
+  # Identity lines may be absent on a pre-#16 .env — replace or append (set_env_line, top-level).
   set_env_line TENANT_NAME "$ENV_NAME"
   set_env_line TENANT_CITY "$ENV_CITY"
   set_env_line NEXT_PUBLIC_TEMPLATE "$TENANT_TEMPLATE"
@@ -158,18 +161,11 @@ fi
 TENANT_DB_PASSWORD="$(grep '^TENANT_DB_PASSWORD=' "$TENANT_DIR/.env" | cut -d= -f2-)"
 
 # Flow the shared fleet/Sentry values into the tenant .env on every run (fresh AND existing),
-# so the tenant compose can interpolate ${SENTRY_DSN} / ${PRINTER_TELEMETRY_SECRET}. Idempotent
-# (replace-or-append) and rotatable — a changed box value is re-applied on the next provision.
-ensure_tenant_env() { # $1=key $2=value
-  if grep -q "^$1=" "$TENANT_DIR/.env"; then
-    sed -i "s|^$1=.*|$1=$(sed_escape "$2")|" "$TENANT_DIR/.env"
-  else
-    printf '%s=%s\n' "$1" "$2" >> "$TENANT_DIR/.env"
-  fi
-}
-ensure_tenant_env SENTRY_DSN "$BOX_SENTRY_DSN"
-ensure_tenant_env SENTRY_ENVIRONMENT "$BOX_ROLE"
-ensure_tenant_env PRINTER_TELEMETRY_SECRET "$BOX_TELEMETRY_SECRET"
+# so the tenant compose can interpolate ${SENTRY_DSN} / ${PRINTER_TELEMETRY_SECRET}. Rotatable —
+# a changed box value is re-applied on the next provision. Reuses set_env_line (top-level).
+set_env_line SENTRY_DSN "$BOX_SENTRY_DSN"
+set_env_line SENTRY_ENVIRONMENT "$BOX_ROLE"
+set_env_line PRINTER_TELEMETRY_SECRET "$BOX_TELEMETRY_SECRET"
 
 echo "==> Tenant app-secrets.json"
 if [[ -f "$TENANT_DIR/app-secrets.json" ]]; then
@@ -302,7 +298,7 @@ $DEPLOY_COMPOSE exec caddy caddy reload --config /etc/caddy/Caddyfile
 # Printer-app onboarding bundle — the three values the tenant enters in the printer-app's
 # Settings screen. The key is a box-only secret (never committed); surfaced here once so the
 # founder can hand it over if the tenant buys the printer service.
-PRINTER_KEY="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("PrinterSettings",{}).get("ApiKey",""))' "$TENANT_DIR/app-secrets.json" 2>/dev/null || true)"
+PRINTER_KEY="$(python3 -c 'import json,sys; print((json.load(open(sys.argv[1])).get("PrinterSettings") or {}).get("ApiKey") or "")' "$TENANT_DIR/app-secrets.json" 2>/dev/null || true)"
 
 cat <<EOF
 
