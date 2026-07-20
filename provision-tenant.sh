@@ -39,6 +39,13 @@ python3 -c 'import yaml' 2>/dev/null || { echo "ERROR: python3-yaml missing (apt
 BOX_ROLE="$(grep -E '^BOX_ROLE=' .env | cut -d= -f2- || true)"
 [[ -n "$BOX_ROLE" ]] || { echo "ERROR: BOX_ROLE not set in the box .env (prod|staging) — refusing to guess"; exit 1; }
 
+# Shared fleet-observability + error-tracking config, flowed from the box .env into every
+# tenant .env below so a new tenant gets fleet telemetry + Sentry automatically. Both are
+# SHARED (not per-tenant): one SENTRY_DSN / PRINTER_TELEMETRY_SECRET per box. Empty on the
+# box => that tenant's telemetry stays inert (the backend pusher self-guards; Sentry no-ops).
+BOX_SENTRY_DSN="$(grep -E '^SENTRY_DSN=' .env | cut -d= -f2- || true)"
+BOX_TELEMETRY_SECRET="$(grep -E '^PRINTER_TELEMETRY_SECRET=' .env | cut -d= -f2- || true)"
+
 # Read the tenant's registry entry into REG_* shell vars (lists -> csv).
 eval "$(python3 - "$SLUG" <<'PY'
 import sys, yaml, shlex
@@ -149,6 +156,20 @@ else
   echo "   wrote .env (fresh DB password + admin bootstrap credentials)"
 fi
 TENANT_DB_PASSWORD="$(grep '^TENANT_DB_PASSWORD=' "$TENANT_DIR/.env" | cut -d= -f2-)"
+
+# Flow the shared fleet/Sentry values into the tenant .env on every run (fresh AND existing),
+# so the tenant compose can interpolate ${SENTRY_DSN} / ${PRINTER_TELEMETRY_SECRET}. Idempotent
+# (replace-or-append) and rotatable — a changed box value is re-applied on the next provision.
+ensure_tenant_env() { # $1=key $2=value
+  if grep -q "^$1=" "$TENANT_DIR/.env"; then
+    sed -i "s|^$1=.*|$1=$(sed_escape "$2")|" "$TENANT_DIR/.env"
+  else
+    printf '%s=%s\n' "$1" "$2" >> "$TENANT_DIR/.env"
+  fi
+}
+ensure_tenant_env SENTRY_DSN "$BOX_SENTRY_DSN"
+ensure_tenant_env SENTRY_ENVIRONMENT "$BOX_ROLE"
+ensure_tenant_env PRINTER_TELEMETRY_SECRET "$BOX_TELEMETRY_SECRET"
 
 echo "==> Tenant app-secrets.json"
 if [[ -f "$TENANT_DIR/app-secrets.json" ]]; then
@@ -278,6 +299,11 @@ if ! $DEPLOY_COMPOSE exec caddy caddy validate --config /etc/caddy/Caddyfile; th
 fi
 $DEPLOY_COMPOSE exec caddy caddy reload --config /etc/caddy/Caddyfile
 
+# Printer-app onboarding bundle — the three values the tenant enters in the printer-app's
+# Settings screen. The key is a box-only secret (never committed); surfaced here once so the
+# founder can hand it over if the tenant buys the printer service.
+PRINTER_KEY="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("PrinterSettings",{}).get("ApiKey",""))' "$TENANT_DIR/app-secrets.json" 2>/dev/null || true)"
+
 cat <<EOF
 
 ==> Provisioned tenant '${SLUG}' (${REG_NAME})
@@ -288,4 +314,11 @@ cat <<EOF
     Admin     : ${REG_ADMIN_EMAIL} — the generated bootstrap password is the
                 TENANT_ADMIN_PASSWORD line in ${TENANT_DIR}/.env (mode 600).
                 Log in and CHANGE IT before handing the tenant to anyone.
+    Printer app (if the tenant buys the printer service — enter in the app's Settings):
+                API Base URL : https://${REG_DOMAIN}
+                Tenant Slug  : ${SLUG}
+                Printer Key  : ${PRINTER_KEY}
+                (the key is PrinterSettings.ApiKey in ${TENANT_DIR}/app-secrets.json)
+    Fleet obs : automatic — this tenant's backend pushes to sofra /admin/fleet when
+                PRINTER_TELEMETRY_SECRET is set on the box (currently: $([[ -n "$BOX_TELEMETRY_SECRET" ]] && echo set || echo UNSET → inert)).
 EOF
