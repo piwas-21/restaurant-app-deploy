@@ -64,6 +64,23 @@ services:
       Localization__Currency: "${TENANT_CURRENCY:-}"
       TENANT_LANGUAGES: "${TENANT_LANGUAGES}"
       TENANT_MODULES: "${TENANT_MODULES}"
+      # Fleet observability (Track S) — this tenant's backend pushes its device roster +
+      # missed-order/error counts to sofra's /admin/fleet. The shared secret + Sentry DSN
+      # are flowed from the box .env into the tenant .env by provision-tenant.sh; the slug
+      # is the tenant's own. ALL inert when the box secrets are unset: FleetSummaryPushService
+      # self-guards on an empty Secret, and Sentry no-ops without a DSN — so this is safe to
+      # ship to every tenant and lights up the moment PRINTER_TELEMETRY_SECRET is set on the box.
+      FleetPush__Enabled: "true"
+      # There is ONE sofra control plane (sofrapiwas.com) — every tenant on every box rolls up
+      # to it. Overridable via FLEET_INGEST_URL in the tenant .env for a future self-hosted sofra.
+      FleetPush__SofraIngestUrl: "${FLEET_INGEST_URL:-https://sofrapiwas.com/api/telemetry/fleet}"
+      FleetPush__Secret: "${PRINTER_TELEMETRY_SECRET:-}"
+      FleetPush__TenantSlug: "__SLUG__"
+      # Server-side error tracking (shared Sentry EU project; inert without a DSN).
+      # SENTRY_ENVIRONMENT is flowed from the box (=BOX_ROLE) by provision-tenant.sh; empty here
+      # lets the backend fall back to the ASP.NET environment name (no hardcoded default).
+      SENTRY_DSN: "${SENTRY_DSN:-}"
+      SENTRY_ENVIRONMENT: "${SENTRY_ENVIRONMENT:-}"
     volumes:
       - ./app-secrets.json:/app/app-secrets.json:ro
       - backend_keys:/app/keys

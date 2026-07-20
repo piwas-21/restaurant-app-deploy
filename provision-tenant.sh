@@ -39,6 +39,13 @@ python3 -c 'import yaml' 2>/dev/null || { echo "ERROR: python3-yaml missing (apt
 BOX_ROLE="$(grep -E '^BOX_ROLE=' .env | cut -d= -f2- || true)"
 [[ -n "$BOX_ROLE" ]] || { echo "ERROR: BOX_ROLE not set in the box .env (prod|staging) — refusing to guess"; exit 1; }
 
+# Shared fleet-observability + error-tracking config, flowed from the box .env into every
+# tenant .env below so a new tenant gets fleet telemetry + Sentry automatically. Both are
+# SHARED (not per-tenant): one SENTRY_DSN / PRINTER_TELEMETRY_SECRET per box. Empty on the
+# box => that tenant's telemetry stays inert (the backend pusher self-guards; Sentry no-ops).
+BOX_SENTRY_DSN="$(grep -E '^SENTRY_DSN=' .env | cut -d= -f2- || true)"
+BOX_TELEMETRY_SECRET="$(grep -E '^PRINTER_TELEMETRY_SECRET=' .env | cut -d= -f2- || true)"
+
 # Read the tenant's registry entry into REG_* shell vars (lists -> csv).
 eval "$(python3 - "$SLUG" <<'PY'
 import sys, yaml, shlex
@@ -97,6 +104,16 @@ rand() { openssl rand -base64 "$1" | tr -d '/+=' | cut -c1-"$2"; }
 # backslash, ampersand, and the | delimiter would otherwise corrupt the render.
 sed_escape() { printf '%s' "$1" | sed -e 's/[\\&|]/\\&/g'; }
 
+# Replace-or-append KEY=value in the tenant .env (idempotent). $TENANT_DIR resolves at call
+# time. Used for registry-owned identity lines and the shared fleet/Sentry values.
+set_env_line() { # $1=key $2=value (free text)
+  if grep -q "^$1=" "$TENANT_DIR/.env"; then
+    sed -i "s|^$1=.*|$1=$(sed_escape "$2")|" "$TENANT_DIR/.env"
+  else
+    printf '%s=%s\n' "$1" "$2" >> "$TENANT_DIR/.env"
+  fi
+}
+
 # Free-text values landing in the tenant .env are interpolated by docker
 # compose — a literal $ must be doubled or compose silently mangles it (same
 # trap as DEV_PORTAL_AUTH_HASH; see DEPLOYMENT.md §Developer Portal).
@@ -111,14 +128,7 @@ if [[ -f "$TENANT_DIR/.env" ]]; then
   # things that legitimately drift); generated secrets stay stable per tenant.
   sed -i -e "s|^BACKEND_TAG=.*|BACKEND_TAG=${REG_BACKEND_TAG:-latest}|" \
          -e "s|^FRONTEND_TAG=.*|FRONTEND_TAG=${REG_FRONTEND_TAG}|" "$TENANT_DIR/.env"
-  # Identity lines may be absent on a pre-#16 .env — replace or append.
-  set_env_line() { # $1=key $2=value (free text)
-    if grep -q "^$1=" "$TENANT_DIR/.env"; then
-      sed -i "s|^$1=.*|$1=$(sed_escape "$2")|" "$TENANT_DIR/.env"
-    else
-      printf '%s=%s\n' "$1" "$2" >> "$TENANT_DIR/.env"
-    fi
-  }
+  # Identity lines may be absent on a pre-#16 .env — replace or append (set_env_line, top-level).
   set_env_line TENANT_NAME "$ENV_NAME"
   set_env_line TENANT_CITY "$ENV_CITY"
   set_env_line NEXT_PUBLIC_TEMPLATE "$TENANT_TEMPLATE"
@@ -149,6 +159,13 @@ else
   echo "   wrote .env (fresh DB password + admin bootstrap credentials)"
 fi
 TENANT_DB_PASSWORD="$(grep '^TENANT_DB_PASSWORD=' "$TENANT_DIR/.env" | cut -d= -f2-)"
+
+# Flow the shared fleet/Sentry values into the tenant .env on every run (fresh AND existing),
+# so the tenant compose can interpolate ${SENTRY_DSN} / ${PRINTER_TELEMETRY_SECRET}. Rotatable —
+# a changed box value is re-applied on the next provision. Reuses set_env_line (top-level).
+set_env_line SENTRY_DSN "$BOX_SENTRY_DSN"
+set_env_line SENTRY_ENVIRONMENT "$BOX_ROLE"
+set_env_line PRINTER_TELEMETRY_SECRET "$BOX_TELEMETRY_SECRET"
 
 echo "==> Tenant app-secrets.json"
 if [[ -f "$TENANT_DIR/app-secrets.json" ]]; then
@@ -278,6 +295,11 @@ if ! $DEPLOY_COMPOSE exec caddy caddy validate --config /etc/caddy/Caddyfile; th
 fi
 $DEPLOY_COMPOSE exec caddy caddy reload --config /etc/caddy/Caddyfile
 
+# Printer-app onboarding bundle — the three values the tenant enters in the printer-app's
+# Settings screen. The key is a box-only secret (never committed); surfaced here once so the
+# founder can hand it over if the tenant buys the printer service.
+PRINTER_KEY="$(python3 -c 'import json,sys; print((json.load(open(sys.argv[1])).get("PrinterSettings") or {}).get("ApiKey") or "")' "$TENANT_DIR/app-secrets.json" 2>/dev/null || true)"
+
 cat <<EOF
 
 ==> Provisioned tenant '${SLUG}' (${REG_NAME})
@@ -288,4 +310,11 @@ cat <<EOF
     Admin     : ${REG_ADMIN_EMAIL} — the generated bootstrap password is the
                 TENANT_ADMIN_PASSWORD line in ${TENANT_DIR}/.env (mode 600).
                 Log in and CHANGE IT before handing the tenant to anyone.
+    Printer app (if the tenant buys the printer service — enter in the app's Settings):
+                API Base URL : https://${REG_DOMAIN}
+                Tenant Slug  : ${SLUG}
+                Printer Key  : ${PRINTER_KEY}
+                (the key is PrinterSettings.ApiKey in ${TENANT_DIR}/app-secrets.json)
+    Fleet obs : automatic — this tenant's backend pushes to sofra /admin/fleet when
+                PRINTER_TELEMETRY_SECRET is set on the box (currently: $([[ -n "$BOX_TELEMETRY_SECRET" ]] && echo set || echo UNSET → inert)).
 EOF
