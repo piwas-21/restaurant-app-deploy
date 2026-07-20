@@ -551,10 +551,12 @@ missed-order/error counts to the sofra control plane's `/api/telemetry/fleet` ro
    on startup. So a freshly provisioned tenant reports to `/admin/fleet` automatically. Until
    the secret is set the pusher is **inert** (self-guards on an empty secret) — safe to ship.
 3. **Roll sofra** to pick up the ingest secret: `docker compose -f docker-compose.prod.yml up -d sofra`.
-4. **RUMI (legacy tenant — scripts refuse to touch it):** activate by hand on the prod box —
-   add `FleetPush__{Enabled,SofraIngestUrl,Secret,TenantSlug}` + `SENTRY_DSN` to the RUMI
-   backend service env and recreate it. **Requires the backend fleet code (#199–#203) released
-   to `main` + deployed to the prod box first** — validate on staging before promoting.
+4. **RUMI (the main stack):** its `FleetPush__*` is now wired straight into `docker-compose.prod.yml`
+   (`FleetPush__Enabled` defaults on; slug `rumi`). So once the backend fleet code is on the prod box
+   (backend #199–#203, released to `main` + auto-deployed) and `PRINTER_TELEMETRY_SECRET` is set
+   (step 1), just **roll the backend** to pick up the env: `docker compose -f docker-compose.prod.yml up -d backend`.
+   The **staging** box must set `FLEET_PUSH_ENABLED=false` in its `.env` — otherwise the staging RUMI
+   backend would push as `rumi` too and clobber prod's fleet rows in the single sofra control plane.
 
 **Printer-app onboarding for a tenant** who buys the printer service: they enter three values
 in the app's Settings — **API Base URL** (`https://<their-domain>`), **Tenant Slug**, and
