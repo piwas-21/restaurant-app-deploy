@@ -192,6 +192,41 @@ plane later calls the same scripts (ADR-003 — no parallel mechanism).
    page `<title>` and footer © should show the tenant name, and a decoded
    access token should carry `tenant: <slug>` (backend #117).
 
+### Provisioning from the control plane (ADR-012 chain)
+
+The steps above are the founder-operated path and stay the fallback. The control
+plane drives the same scripts through a git-native chain — no box credential ever
+reaches the public container (ADR-012 invariant 2):
+
+```
+/admin/provision  ──PR──▶  deploy repo (develop)  ──merge──▶  sync-registry-to-staging
+                                                                      │
+   founder dispatches ◀── build-tenant-image.yml (frontend repo) ◀─────┘
+            │
+            └─▶ provision-tenant.yml (this repo) ──SSH──▶ ./provision-tenant.sh <slug>
+```
+
+1. **Propose** — `/admin/provision` (admin-only) computes the registry entry and
+   opens a PR on this repo via `PROVISION_GITHUB_TOKEN`. Unset → the page shows a
+   "not configured" banner and nothing else happens. The token is **fine-grained,
+   scoped to this repo, Contents + Pull requests: write** — it can propose a
+   tenant, never provision one.
+2. **Review + merge** the PR. This is the human checkpoint; the entry is plain YAML.
+3. **Sync** — merging to `develop` fires `sync-registry-to-staging.yml`, which
+   copies **only** `tenants/registry.yml` to the box. (`sync-to-staging.yml` still
+   ships everything else from `main` — the templates in `tenants/` included.)
+4. **Build the tenant frontend image** — `NEXT_PUBLIC_*` are baked per domain, so
+   this must happen **before** provisioning or step 5 dies at `docker compose pull`
+   with an unknown-image error. Command in step 3 of the manual runbook above; the
+   PR body carries it pre-filled with the registry's values.
+5. **Provision** — dispatch this repo's `provision-tenant` Action with the slug
+   (`gh workflow run provision-tenant.yml -f slug=<slug>`), or let the control
+   plane `repository_dispatch` it. It SSHes to the box and runs the same idempotent
+   script. Deliberately **not** automatic on merge: a merge should never stand up
+   infrastructure by itself.
+6. **Verify** — step 5 of the manual runbook (`./verify-env.sh https://<domain>`),
+   then flip the registry `status` to `active` in git.
+
 **Tear down:**
 
 ```bash
