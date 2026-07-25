@@ -269,6 +269,26 @@ enforced** (S11); tenant email sends via `onboarding@resend.dev`.
 4. On success, `deploy.yml` fires automatically (`workflow_run`) and deploys
    `latest` for that repo's service. **No manual step.**
 
+### Tenants on moving tags (`refresh-tenant-images.sh`)
+
+A tenant pinned to a moving tag (the demo tenant rides `backend_tag: staging`)
+only tracks it if something rolls it. The RUMI stack has `deploy-staging.yml`
+and the demo frontend has `deploy-demo-staging.yml`, but a **backend-only**
+develop build used to leave tenant backends behind — demo sat 44h stale with
+the fleet endpoints missing while its registry config was already correct
+(deploy #52). `refresh-tenant-images.sh` closes that:
+
+```bash
+./refresh-tenant-images.sh backend staging      # every managed:scripts tenant on
+./refresh-tenant-images.sh frontend tenant-demo # this box pinned to that tag
+```
+
+It reads `tenants/registry.yml`, so a second develop-tracking tenant is covered
+the day it is registered — no workflow edit, no hardcoded slug. Nothing matched
+is a clean exit 0; a tenant that fails to roll is reported and exits non-zero
+(the point is to stop being silent). The backend repo's `deploy-staging.yml`
+calls it after rolling the RUMI staging backend, under the same deploy flock.
+
 ## Manual deploy / redeploy (no rollback)
 
 In the app repo: **Actions → deploy → Run workflow** → leave `image_tag = latest`.
