@@ -207,6 +207,18 @@ never edit the registry.
 dir-mounted into Caddy so a plain `caddy reload` applies changes — the
 single-file inode gotcha does not apply here).
 
+**Login throttle per tenant.** The backend allows 5 login attempts per 15-minute
+window **per client IP** (`RateLimiterSettings.AuthPermitLimit`) and that is the
+only active brute-force throttle on the login path, so production tenants keep
+it. A develop-tracking **staging surface** may raise it by setting
+`TENANT_AUTH_PERMIT_LIMIT` in its own `/opt/rumi/tenants/<slug>/.env` (demo runs
+20): a showcase people are invited to poke at otherwise locks its single admin
+out for a quarter of an hour after five fumbled logins. The knob is plumbed in
+`templates/docker-compose.tenant.yml.tpl` and defaults to the production 5, so
+existing tenants are unaffected. Note the 429 is **per IP**, not per account —
+two people behind one NAT share the bucket, which is what makes a mysterious
+"Too many requests" during a demo usually be someone else's attempts.
+
 **v1 limitations (tracked):** the generated admin bootstrap password should still be changed at first login (it sits in the tenant `.env`);
 Google login is off per tenant (OAuth origins); `currency/languages/modules`
 are recorded in the registry and written into the instance env but **not yet
