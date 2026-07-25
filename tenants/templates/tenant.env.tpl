@@ -19,6 +19,10 @@ TENANT_DB_PASSWORD=__DB_PASSWORD__
 # the operator logs in with these and changes the password immediately.
 TENANT_ADMIN_EMAIL=__ADMIN_EMAIL__
 TENANT_ADMIN_PASSWORD=__ADMIN_PASSWORD__
+# Login attempts allowed per 15-minute window, per client IP. Unset = the
+# backend's production default (5). Raise it ONLY on a staging surface (demo);
+# a real tenant is production and keeps the tight throttle.
+#   TENANT_AUTH_PERMIT_LIMIT=20
 TENANT_CURRENCY=__CURRENCY__
 TENANT_LANGUAGES=__LANGUAGES__
 TENANT_MODULES=__MODULES__

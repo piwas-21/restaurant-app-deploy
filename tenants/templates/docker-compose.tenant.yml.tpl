@@ -62,6 +62,16 @@ services:
       # fallback stays the single source of truth. TENANT_CURRENCY above stays too
       # (inert record, same pattern as TENANT_LANGUAGES/TENANT_MODULES below).
       Localization__Currency: "${TENANT_CURRENCY:-}"
+      # Login throttle (backend RateLimiterSettings.AuthPermitLimit). Production
+      # tenants keep the backend's own tight default — it is the ONLY active
+      # brute-force throttle on the login path, so it is not loosened casually.
+      # Only a develop-TRACKING staging surface (demo) raises it, by setting
+      # TENANT_AUTH_PERMIT_LIMIT in its own .env: a showcase people are invited to
+      # poke at locks its single admin out after 5 fumbled logins per 15 minutes,
+      # and the operator then cannot demo anything for a quarter of an hour.
+      # The default here mirrors RateLimiterSettings.cs — an empty value would
+      # fail int binding and take the backend down, so it must stay concrete.
+      RateLimiter__AuthPermitLimit: "${TENANT_AUTH_PERMIT_LIMIT:-5}"
       TENANT_LANGUAGES: "${TENANT_LANGUAGES}"
       TENANT_MODULES: "${TENANT_MODULES}"
       # Fleet observability (Track S) — this tenant's backend pushes its device roster +
