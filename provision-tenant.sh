@@ -81,6 +81,22 @@ case "$TENANT_TEMPLATE" in
   *) echo "ERROR: registry entry '$SLUG' has template '$TENANT_TEMPLATE' — allowed: classic | craft (absent = classic)"; exit 1 ;;
 esac
 
+# Module flags (ADR-010 catalog). Same reasoning as `template`: an unknown value
+# is a typo, and a typo here is SILENT — it lands in the tenant env and the
+# tenant simply never gets the module they are paying for. The vocabulary is
+# mirrored in the control plane (sofra lib/module-catalog.ts) and here; both
+# refuse, so a bad value cannot arrive from either direction.
+KNOWN_MODULES="core kitchen-board cashier server reservations loyalty printing extra-languages"
+IFS=',' read -ra _MODULES <<< "$REG_MODULES"
+for m in "${_MODULES[@]}"; do
+  m="$(echo "$m" | tr -d '[:space:]')"
+  [[ -z "$m" ]] && continue
+  [[ " $KNOWN_MODULES " == *" $m "* ]] \
+    || { echo "ERROR: registry entry '$SLUG' lists unknown module '$m' — allowed: $KNOWN_MODULES"; exit 1; }
+done
+[[ " ${REG_MODULES//,/ } " == *" core "* ]] \
+  || echo "WARN: tenant '$SLUG' has no 'core' module — every instance runs the core surface regardless"
+
 BOX_IP="$(curl -4 -sS --max-time 10 https://ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')"
 DOMAIN_IP="$(getent hosts "$REG_DOMAIN" | awk '{print $1}' | head -1 || true)"
 if [[ "$DOMAIN_IP" != "$BOX_IP" ]]; then
