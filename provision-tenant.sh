@@ -109,13 +109,13 @@ fi
 case "$DOMAIN_MODE" in
   subdomain)
     [[ "$REG_DOMAIN" == "${SLUG}.sofrapiwas.com" ]] \
-      || { echo "ERROR: domain_mode 'subdomain' expects domain '${SLUG}.sofrapiwas.com', registry says '$REG_DOMAIN' (use domain_mode: byo for a tenant-owned domain)"; exit 1; } ;;
+      || { echo "ERROR: domain_mode 'subdomain' expects domain '${SLUG}.sofrapiwas.com', registry says '$REG_DOMAIN' (use domain_mode: byo for a tenant-owned domain)" >&2; exit 1; } ;;
   byo)
     [[ "$REG_DOMAIN" == *.sofrapiwas.com ]] \
-      && { echo "ERROR: domain_mode 'byo' but '$REG_DOMAIN' is ours — a sofrapiwas.com host rides the wildcard, use domain_mode: subdomain"; exit 1; }
+      && { echo "ERROR: domain_mode 'byo' but '$REG_DOMAIN' is ours — a sofrapiwas.com host rides the wildcard, use domain_mode: subdomain" >&2; exit 1; }
     [[ "$REG_DOMAIN" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]] \
-      || { echo "ERROR: '$REG_DOMAIN' is not a plausible hostname (lowercase labels, no scheme, no trailing dot)"; exit 1; } ;;
-  *) echo "ERROR: registry entry '$SLUG' has domain_mode '$DOMAIN_MODE' — allowed: subdomain | byo (absent = inferred)"; exit 1 ;;
+      || { echo "ERROR: '$REG_DOMAIN' is not a plausible hostname (lowercase labels, no scheme, no trailing dot)" >&2; exit 1; } ;;
+  *) echo "ERROR: registry entry '$SLUG' has domain_mode '$DOMAIN_MODE' — allowed: subdomain | byo (absent = inferred)" >&2; exit 1 ;;
 esac
 
 # Optional extra hostnames that should reach this tenant (typically the `www.`
@@ -127,9 +127,9 @@ for alias in "${DOMAIN_ALIASES[@]}"; do
   alias="$(echo "$alias" | tr -d '[:space:]')"
   [[ -z "$alias" ]] && continue
   [[ "$alias" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]] \
-    || { echo "ERROR: domain_alias '$alias' is not a plausible hostname"; exit 1; }
+    || { echo "ERROR: domain_alias '$alias' is not a plausible hostname" >&2; exit 1; }
   [[ "$alias" == "$REG_DOMAIN" ]] \
-    && { echo "ERROR: domain_alias '$alias' duplicates the canonical domain"; exit 1; }
+    && { echo "ERROR: domain_alias '$alias' duplicates the canonical domain" >&2; exit 1; }
 done
 
 BOX_IP="$(curl -4 -sS --max-time 10 https://ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')"
@@ -137,13 +137,13 @@ dns_check() { # $1=hostname — warn (never fail) so a propagating record doesn'
   local host="$1" ip
   ip="$(getent hosts "$host" | awk '{print $1}' | head -1 || true)"
   [[ "$ip" == "$BOX_IP" ]] && return 0
-  echo "WARN: $host resolves to '${ip:-nothing}' but this box is '$BOX_IP'."
+  echo "WARN: $host resolves to '${ip:-nothing}' but this box is '$BOX_IP'." >&2
   if [[ "$DOMAIN_MODE" == byo ]]; then
-    echo "      BYO domain: the tenant must create  A  $host  ->  $BOX_IP  (TTL >= 7200) at their registrar."
+    echo "      BYO domain: the tenant must create  A  $host  ->  $BOX_IP  (TTL >= 7200) at their registrar." >&2
   else
-    echo "      Subdomain tenants ride the *.sofrapiwas.com wildcard A record — check it still points here."
+    echo "      Subdomain tenants ride the *.sofrapiwas.com wildcard A record — check it still points here." >&2
   fi
-  echo "      Caddy cannot get a certificate until then. Continuing (a fresh record may still be propagating)."
+  echo "      Caddy cannot get a certificate until then. Continuing (a fresh record may still be propagating)." >&2
 }
 dns_check "$REG_DOMAIN"
 for alias in "${DOMAIN_ALIASES[@]}"; do
