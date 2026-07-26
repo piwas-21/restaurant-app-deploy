@@ -92,10 +92,10 @@ for m in "${_MODULES[@]}"; do
   m="$(echo "$m" | tr -d '[:space:]')"
   [[ -z "$m" ]] && continue
   [[ " $KNOWN_MODULES " == *" $m "* ]] \
-    || { echo "ERROR: registry entry '$SLUG' lists unknown module '$m' — allowed: $KNOWN_MODULES"; exit 1; }
+    || { echo "ERROR: registry entry '$SLUG' lists unknown module '$m' — allowed: $KNOWN_MODULES" >&2; exit 1; }
 done
 [[ " ${REG_MODULES//,/ } " == *" core "* ]] \
-  || echo "WARN: tenant '$SLUG' has no 'core' module — every instance runs the core surface regardless"
+  || echo "WARN: tenant '$SLUG' has no 'core' module — every instance runs the core surface regardless" >&2
 
 BOX_IP="$(curl -4 -sS --max-time 10 https://ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')"
 DOMAIN_IP="$(getent hosts "$REG_DOMAIN" | awk '{print $1}' | head -1 || true)"
