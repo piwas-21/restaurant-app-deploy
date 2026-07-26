@@ -104,3 +104,24 @@ tenants:
     # IP). A showcase is meant to be poked at, and 5 fumbled logins locked the
     # single demo admin out for a quarter of an hour. Production tenants keep the
     # tight default — see the note in templates/docker-compose.tenant.yml.tpl.
+  tokentest:
+    name: piwas
+    status: provisioning
+    managed: scripts
+    box: staging
+    domain: tokentest.sofrapiwas.com
+    domain_mode: subdomain
+    db: tenant_tokentest
+    db_role: tenant_tokentest
+    compose_project: tenant-tokentest
+    backend_tag: staging
+    frontend_tag: tenant-tokentest
+    currency: EUR
+    languages:
+      - en
+      - nl
+    modules:
+      - core
+    template: craft
+    admin_email: mahmutkaya.nl@gmail.com
+    city: HOOFDDORP
