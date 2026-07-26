@@ -163,6 +163,13 @@ services:
       # same synced YAML the provision scripts consume. The control plane
       # never writes it — lifecycle stays git + scripts (ADR-003).
       TENANT_REGISTRY_PATH: /data/tenants/registry.yml
+      # ADR-012 git-native provisioning trigger: a fine-grained GitHub token
+      # scoped to piwas-21/restaurant-app-deploy (Contents + Pull-requests:
+      # write) that lets /admin/provision open a REVIEWABLE registry PR. It is
+      # deliberately NOT the box SSH key — that stays in Actions secrets, so a
+      # compromised container can propose a tenant but never provision one
+      # (ADR-012 invariant 2). Empty -> /admin/provision shows "not configured".
+      PROVISION_GITHUB_TOKEN: "${PROVISION_GITHUB_TOKEN:-}"
       # Data-retention cron (POST /api/cron/retention, GDPR storage-limitation).
       # CRON_SECRET must MATCH the CRON_SECRET GitHub Actions secret (the caller
       # workflow's bearer). DATA-LOSS class: the sweep purges nothing unless

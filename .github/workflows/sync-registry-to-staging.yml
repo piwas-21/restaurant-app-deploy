@@ -1,0 +1,67 @@
+name: sync-registry-to-staging
+
+# Sync ONLY tenants/registry.yml to the staging box, on every develop push that
+# touches it.
+#
+# Why this exists (the ADR-012 chain had a hole): the sofra control plane opens its
+# tenant registry PR against `develop` (GitFlow — CLAUDE.md rule 2b), but the box
+# rsync (sync-to-staging.yml) runs on pushes to `main`. So a merged provisioning PR
+# never reached the box, and the provision-tenant Action that follows it failed with
+# "unknown slug" until someone released develop→main or hand-dispatched a re-sync.
+# The registry is DATA, not infra code — the box reads it, the scripts key off it —
+# so tracking develop for that one file closes the gap without shipping unreleased
+# compose/Caddy/script changes to a live box.
+#
+# Deliberately narrow:
+#   * ONE file. tenants/templates/*.tpl live in the same directory but are infra
+#     code (compose/caddy/env rendering) and stay on the main-only path.
+#   * Staging box only. The prod box's registry holds tenant 1 (managed: legacy,
+#     which provision-tenant.sh refuses to touch) and gains nothing from develop
+#     tracking; cross-box prod provisioning is out of ADR-012's scope.
+#   * Copies the file; provisions nothing. Running provision-tenant.sh stays an
+#     explicit dispatch (the founder's post-merge click), so no merge can stand up
+#     infrastructure on its own.
+
+on:
+  push:
+    branches: [develop]
+    paths:
+      - "tenants/registry.yml"
+  workflow_dispatch:
+
+concurrency:
+  # Shares sync-to-staging.yml's group: two rsyncs into /opt/rumi/deploy at once
+  # is exactly the race worth serialising.
+  group: staging-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  sync-registry:
+    name: rsync tenants/registry.yml to staging box
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Configure SSH (pinned host key)
+        env:
+          STAGING_SSH_KEY: ${{ secrets.STAGING_SSH_KEY }}
+          STAGING_KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$STAGING_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$STAGING_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Rsync tenants/registry.yml
+        env:
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          rsync -az --human-readable --itemize-changes \
+            -e "ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes -o ConnectTimeout=15" \
+            ./tenants/registry.yml "${STAGING_USER}@${STAGING_HOST}:/opt/rumi/deploy/tenants/registry.yml"

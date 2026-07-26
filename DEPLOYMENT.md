@@ -192,6 +192,72 @@ plane later calls the same scripts (ADR-003 — no parallel mechanism).
    page `<title>` and footer © should show the tenant name, and a decoded
    access token should carry `tenant: <slug>` (backend #117).
 
+### BYO custom domain (ADR-002 path 2 — S10)
+
+A tenant who owns `bistronova.nl` keeps it. The registry entry changes in three
+places and nothing else does:
+
+```yaml
+  bistronova:
+    domain: bistronova.nl
+    domain_mode: byo
+    domain_aliases: [www.bistronova.nl]   # optional; 301s to the canonical domain
+```
+
+Order matters, because a certificate cannot be issued before DNS resolves here:
+
+1. **The tenant creates the records at their registrar** — `A bistronova.nl → <box IP>`
+   (TTL ≥ 7200), plus one per alias. No CNAME at the apex; that is why these are A
+   records. `provision-tenant.sh` prints the exact record it expected when a lookup
+   disagrees, and warns rather than fails so a propagating record doesn't block a re-run.
+2. **Build the tenant frontend image with the real domain** (`-f tenant_domain=bistronova.nl`).
+   `NEXT_PUBLIC_*` are baked per origin — an image built for the subdomain will make
+   cross-origin API calls from the custom domain. Moving an existing tenant to a custom
+   domain therefore means a **rebuild**, not just a registry edit.
+3. **Provision** as usual. Caddy issues the certificate on the first request (~30 s).
+4. **Verify** `./verify-env.sh https://bistronova.nl` and that the alias 301s.
+
+Aliases **redirect**, they do not serve — same baked-origin reason. Two hostnames both
+serving the app is a CORS bug waiting for its first order.
+
+Buying a domain *through* Sofra (ADR-002 path 3) is not built: it needs the domainio
+org API key + prepaid balance (ROADMAP S10 prereqs).
+
+### Provisioning from the control plane (ADR-012 chain)
+
+The steps above are the founder-operated path and stay the fallback. The control
+plane drives the same scripts through a git-native chain — no box credential ever
+reaches the public container (ADR-012 invariant 2):
+
+```
+/admin/provision  ──PR──▶  deploy repo (develop)  ──merge──▶  sync-registry-to-staging
+                                                                      │
+   founder dispatches ◀── build-tenant-image.yml (frontend repo) ◀─────┘
+            │
+            └─▶ provision-tenant.yml (this repo) ──SSH──▶ ./provision-tenant.sh <slug>
+```
+
+1. **Propose** — `/admin/provision` (admin-only) computes the registry entry and
+   opens a PR on this repo via `PROVISION_GITHUB_TOKEN`. Unset → the page shows a
+   "not configured" banner and nothing else happens. The token is **fine-grained,
+   scoped to this repo, Contents + Pull requests: write** — it can propose a
+   tenant, never provision one.
+2. **Review + merge** the PR. This is the human checkpoint; the entry is plain YAML.
+3. **Sync** — merging to `develop` fires `sync-registry-to-staging.yml`, which
+   copies **only** `tenants/registry.yml` to the box. (`sync-to-staging.yml` still
+   ships everything else from `main` — the templates in `tenants/` included.)
+4. **Build the tenant frontend image** — `NEXT_PUBLIC_*` are baked per domain, so
+   this must happen **before** provisioning or step 5 dies at `docker compose pull`
+   with an unknown-image error. Command in step 3 of the manual runbook above; the
+   PR body carries it pre-filled with the registry's values.
+5. **Provision** — dispatch this repo's `provision-tenant` Action with the slug
+   (`gh workflow run provision-tenant.yml -f slug=<slug>`), or let the control
+   plane `repository_dispatch` it. It SSHes to the box and runs the same idempotent
+   script. Deliberately **not** automatic on merge: a merge should never stand up
+   infrastructure by itself.
+6. **Verify** — step 5 of the manual runbook (`./verify-env.sh https://<domain>`),
+   then flip the registry `status` to `active` in git.
+
 **Tear down:**
 
 ```bash
@@ -207,6 +273,18 @@ never edit the registry.
 dir-mounted into Caddy so a plain `caddy reload` applies changes — the
 single-file inode gotcha does not apply here).
 
+**Login throttle per tenant.** The backend allows 5 login attempts per 15-minute
+window **per client IP** (`RateLimiterSettings.AuthPermitLimit`) and that is the
+only active brute-force throttle on the login path, so production tenants keep
+it. A develop-tracking **staging surface** may raise it by setting
+`TENANT_AUTH_PERMIT_LIMIT` in its own `/opt/rumi/tenants/<slug>/.env` (demo runs
+20): a showcase people are invited to poke at otherwise locks its single admin
+out for a quarter of an hour after five fumbled logins. The knob is plumbed in
+`templates/docker-compose.tenant.yml.tpl` and defaults to the production 5, so
+existing tenants are unaffected. Note the 429 is **per IP**, not per account —
+two people behind one NAT share the bucket, which is what makes a mysterious
+"Too many requests" during a demo usually be someone else's attempts.
+
 **v1 limitations (tracked):** the generated admin bootstrap password should still be changed at first login (it sits in the tenant `.env`);
 Google login is off per tenant (OAuth origins); `currency/languages/modules`
 are recorded in the registry and written into the instance env but **not yet
@@ -221,6 +299,26 @@ enforced** (S11); tenant email sends via `onboarding@resend.dev`.
 3. The push to `main` triggers `build-image` → publishes `:latest` + `:sha-<commit>`.
 4. On success, `deploy.yml` fires automatically (`workflow_run`) and deploys
    `latest` for that repo's service. **No manual step.**
+
+### Tenants on moving tags (`refresh-tenant-images.sh`)
+
+A tenant pinned to a moving tag (the demo tenant rides `backend_tag: staging`)
+only tracks it if something rolls it. The RUMI stack has `deploy-staging.yml`
+and the demo frontend has `deploy-demo-staging.yml`, but a **backend-only**
+develop build used to leave tenant backends behind — demo sat 44h stale with
+the fleet endpoints missing while its registry config was already correct
+(deploy #52). `refresh-tenant-images.sh` closes that:
+
+```bash
+./refresh-tenant-images.sh backend staging      # every managed:scripts tenant on
+./refresh-tenant-images.sh frontend tenant-demo # this box pinned to that tag
+```
+
+It reads `tenants/registry.yml`, so a second develop-tracking tenant is covered
+the day it is registered — no workflow edit, no hardcoded slug. Nothing matched
+is a clean exit 0; a tenant that fails to roll is reported and exits non-zero
+(the point is to stop being silent). The backend repo's `deploy-staging.yml`
+calls it after rolling the RUMI staging backend, under the same deploy flock.
 
 ## Manual deploy / redeploy (no rollback)
 
