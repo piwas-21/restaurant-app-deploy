@@ -104,3 +104,27 @@ tenants:
     # IP). A showcase is meant to be poked at, and 5 fumbled logins locked the
     # single demo admin out for a quarter of an hour. Production tenants keep the
     # tight default — see the note in templates/docker-compose.tenant.yml.tpl.
+  # THROWAWAY — 2026-07-26 ADR-012 chain rehearsal. Torn down in the same session;
+  # if you are reading this in a later session, the teardown PR did not land.
+  e2e:
+    name: E2E Rehearsal
+    status: provisioning
+    managed: scripts
+    box: staging
+    domain: e2e.sofrapiwas.com
+    domain_mode: subdomain
+    db: tenant_e2e
+    db_role: tenant_e2e
+    compose_project: tenant-e2e
+    backend_tag: staging
+    frontend_tag: tenant-e2e
+    currency: EUR
+    languages:
+      - en
+      - nl
+    modules:
+      - core
+      - reservations
+    template: craft
+    admin_email: mahmutkaya.nl@gmail.com
+    city: Amsterdam
