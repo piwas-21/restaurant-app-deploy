@@ -87,10 +87,14 @@ esac
 # tenant simply never gets the module they are paying for. The vocabulary is
 # mirrored in the control plane (sofra lib/module-catalog.ts) and here; both
 # refuse, so a bad value cannot arrive from either direction.
+# Trim whitespace from a comma-split registry value (the lists are hand-written
+# YAML, so "a, b" is normal and " " is not a module).
+strip_ws() { printf '%s' "$1" | tr -d '[:space:]'; }
+
 KNOWN_MODULES="core kitchen-board cashier server reservations loyalty printing extra-languages"
 IFS=',' read -ra _MODULES <<< "$REG_MODULES"
 for m in "${_MODULES[@]}"; do
-  m="$(echo "$m" | tr -d '[:space:]')"
+  m="$(strip_ws "$m")"
   [[ -z "$m" ]] && continue
   [[ " $KNOWN_MODULES " == *" $m "* ]] \
     || { echo "ERROR: registry entry '$SLUG' lists unknown module '$m' — allowed: $KNOWN_MODULES" >&2; exit 1; }
@@ -122,14 +126,17 @@ esac
 # of a BYO apex). They REDIRECT to the canonical domain rather than proxying:
 # the frontend image bakes NEXT_PUBLIC_* for one origin, so serving the app on a
 # second hostname would produce cross-origin API calls and a broken CORS story.
-IFS=',' read -ra DOMAIN_ALIASES <<< "$REG_DOMAIN_ALIASES"
-for alias in "${DOMAIN_ALIASES[@]}"; do
-  alias="$(echo "$alias" | tr -d '[:space:]')"
-  [[ -z "$alias" ]] && continue
-  [[ "$alias" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]] \
-    || { echo "ERROR: domain_alias '$alias' is not a plausible hostname" >&2; exit 1; }
-  [[ "$alias" == "$REG_DOMAIN" ]] \
-    && { echo "ERROR: domain_alias '$alias' duplicates the canonical domain" >&2; exit 1; }
+# Normalised ONCE into DOMAIN_ALIASES so every later loop iterates clean values.
+DOMAIN_ALIASES=()
+IFS=',' read -ra _RAW_ALIASES <<< "$REG_DOMAIN_ALIASES"
+for _a in "${_RAW_ALIASES[@]}"; do
+  _a="$(strip_ws "$_a")"
+  [[ -z "$_a" ]] && continue
+  [[ "$_a" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]] \
+    || { echo "ERROR: domain_alias '$_a' is not a plausible hostname" >&2; exit 1; }
+  [[ "$_a" == "$REG_DOMAIN" ]] \
+    && { echo "ERROR: domain_alias '$_a' duplicates the canonical domain" >&2; exit 1; }
+  DOMAIN_ALIASES+=("$_a")
 done
 
 BOX_IP="$(curl -4 -sS --max-time 10 https://ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')"
@@ -147,8 +154,7 @@ dns_check() { # $1=hostname — warn (never fail) so a propagating record doesn'
 }
 dns_check "$REG_DOMAIN"
 for alias in "${DOMAIN_ALIASES[@]}"; do
-  alias="$(echo "$alias" | tr -d '[:space:]')"
-  [[ -n "$alias" ]] && dns_check "$alias"
+  dns_check "$alias"
 done
 
 echo "==> Tenant dir: $TENANT_DIR"
@@ -349,8 +355,6 @@ sed -e "s|__SLUG__|${SLUG}|g" \
 # Alias hostnames get their own tiny redirect site (301 to the canonical origin),
 # appended to the same file so teardown still removes everything in one unlink.
 for alias in "${DOMAIN_ALIASES[@]}"; do
-  alias="$(echo "$alias" | tr -d '[:space:]')"
-  [[ -z "$alias" ]] && continue
   cat >> "caddy-tenants/${SLUG}.caddy" <<CADDY
 
 # Alias -> canonical. A redirect, not a proxy: the frontend bundle bakes
