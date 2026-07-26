@@ -27,18 +27,18 @@ SERVICE_KIND="${1:?usage: $0 <backend|frontend> <tag>}"
 TAG="${2:?usage: $0 <backend|frontend> <tag>}"
 case "$SERVICE_KIND" in
   backend|frontend) ;;
-  *) echo "ERROR: first arg must be 'backend' or 'frontend' (got '$SERVICE_KIND')"; exit 2 ;;
+  *) echo "ERROR: first arg must be 'backend' or 'frontend' (got '$SERVICE_KIND')" >&2; exit 2 ;;
 esac
 # The tag reaches this script from a workflow input; keep it to the grammar the
 # registry and GHCR both use before it is compared or printed.
-[[ "$TAG" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || { echo "ERROR: implausible tag '$TAG'"; exit 2; }
+[[ "$TAG" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || { echo "ERROR: implausible tag '$TAG'" >&2; exit 2; }
 
-[[ -f .env ]] || { echo "ERROR: box .env missing"; exit 1; }
-[[ -f tenants/registry.yml ]] || { echo "ERROR: tenants/registry.yml missing (sync the deploy repo first)"; exit 1; }
-python3 -c 'import yaml' 2>/dev/null || { echo "ERROR: python3-yaml missing (apt-get install -y python3-yaml)"; exit 1; }
+[[ -f .env ]] || { echo "ERROR: box .env missing" >&2; exit 1; }
+[[ -f tenants/registry.yml ]] || { echo "ERROR: tenants/registry.yml missing (sync the deploy repo first)" >&2; exit 1; }
+python3 -c 'import yaml' 2>/dev/null || { echo "ERROR: python3-yaml missing (apt-get install -y python3-yaml)" >&2; exit 1; }
 
 BOX_ROLE="$(grep -E '^BOX_ROLE=' .env | cut -d= -f2- || true)"
-[[ -n "$BOX_ROLE" ]] || { echo "ERROR: BOX_ROLE not set in the box .env (prod|staging) — refusing to guess"; exit 1; }
+[[ -n "$BOX_ROLE" ]] || { echo "ERROR: BOX_ROLE not set in the box .env (prod|staging) — refusing to guess" >&2; exit 1; }
 
 # Slugs of managed:scripts tenants on THIS box pinned to this moving tag.
 # managed:legacy (tenant 1) is excluded here as everywhere else — ADR-006.
@@ -80,12 +80,12 @@ for SLUG in $SLUGS; do
   if (cd "$DIR" && docker compose pull "$SVC" && docker compose up -d "$SVC"); then
     echo "   ${SVC} up to date"
   else
-    echo "   ERROR: refreshing ${SVC} failed"
+    echo "   ERROR: refreshing ${SVC} failed" >&2
     FAILED="${FAILED} ${SVC}"
   fi
 done
 
 if [[ -n "$FAILED" ]]; then
-  echo "ERROR: failed to refresh:${FAILED}"
+  echo "ERROR: failed to refresh:${FAILED}" >&2
   exit 1
 fi
