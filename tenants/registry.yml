@@ -17,7 +17,13 @@
 #                 repo's build-tenant-image.yml workflow (convention: tenant-<slug>)
 #   backend_tag:  backend image is domain-agnostic — tenants ride :latest unless pinned
 #   currency / languages / modules: recorded per ADR-010; provisioning writes them into the
-#                 tenant instance env. INERT today — enforcement ships with S11 (module gates).
+#                 tenant instance env. Still INERT at runtime — enforcement (route/endpoint
+#                 gates) ships with S11 — but the VOCABULARY is now validated: modules must
+#                 come from core | kitchen-board | cashier | server | reservations | loyalty |
+#                 printing | extra-languages, or provision-tenant.sh fails loudly. Same list
+#                 in the control plane (sofra lib/module-catalog.ts), which also carries the
+#                 list price of each; the pricing sheet is the workspace repo's
+#                 docs/plans/SOFRA-MODULE-CATALOG-AND-PRICING.md.
 #   city:     optional free text — seeds RestaurantInfo.City on the tenant's first boot
 #             (deploy#16 / backend #120, via RestaurantInfoSeed__City). `name` and
 #             `admin_email` seed RestaurantInfo Name/Email the same way; the seeder is a
