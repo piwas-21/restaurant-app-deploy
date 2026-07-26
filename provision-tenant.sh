@@ -56,9 +56,10 @@ t = (reg.get("tenants") or {}).get(slug)
 if not t:
     print(f"echo 'ERROR: tenant {slug} not found in tenants/registry.yml'; exit 1")
     sys.exit(0)
-for k in ("name", "status", "managed", "box", "domain", "domain_mode", "db",
-          "db_role", "compose_project", "backend_tag", "frontend_tag",
-          "currency", "languages", "modules", "admin_email", "city", "template"):
+for k in ("name", "status", "managed", "box", "domain", "domain_mode",
+          "domain_aliases", "db", "db_role", "compose_project", "backend_tag",
+          "frontend_tag", "currency", "languages", "modules", "admin_email",
+          "city", "template"):
     v = t.get(k, "")
     if isinstance(v, list):
         v = ",".join(map(str, v))
@@ -86,10 +87,14 @@ esac
 # tenant simply never gets the module they are paying for. The vocabulary is
 # mirrored in the control plane (sofra lib/module-catalog.ts) and here; both
 # refuse, so a bad value cannot arrive from either direction.
+# Trim whitespace from a comma-split registry value (the lists are hand-written
+# YAML, so "a, b" is normal and " " is not a module).
+strip_ws() { local raw="$1"; printf '%s' "$raw" | tr -d '[:space:]'; }
+
 KNOWN_MODULES="core kitchen-board cashier server reservations loyalty printing extra-languages"
 IFS=',' read -ra _MODULES <<< "$REG_MODULES"
 for m in "${_MODULES[@]}"; do
-  m="$(echo "$m" | tr -d '[:space:]')"
+  m="$(strip_ws "$m")"
   [[ -z "$m" ]] && continue
   [[ " $KNOWN_MODULES " == *" $m "* ]] \
     || { echo "ERROR: registry entry '$SLUG' lists unknown module '$m' — allowed: $KNOWN_MODULES" >&2; exit 1; }
@@ -97,12 +102,63 @@ done
 [[ " ${REG_MODULES//,/ } " == *" core "* ]] \
   || echo "WARN: tenant '$SLUG' has no 'core' module — every instance runs the core surface regardless" >&2
 
-BOX_IP="$(curl -4 -sS --max-time 10 https://ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')"
-DOMAIN_IP="$(getent hosts "$REG_DOMAIN" | awk '{print $1}' | head -1 || true)"
-if [[ "$DOMAIN_IP" != "$BOX_IP" ]]; then
-  echo "WARN: $REG_DOMAIN resolves to '${DOMAIN_IP:-nothing}' but this box is '$BOX_IP'."
-  echo "      Caddy cannot get a certificate until DNS points here. Continuing (record may still be propagating)."
+# Domain mode (ADR-002). Absent -> inferred from the domain, so pre-S10 entries
+# keep working. The consistency check is the point: a `byo` entry that actually
+# sits under sofrapiwas.com (or the reverse) sends the founder chasing the wrong
+# DNS record, and the tenant sits certless while everyone looks at Caddy.
+DOMAIN_MODE="$REG_DOMAIN_MODE"
+if [[ -z "$DOMAIN_MODE" ]]; then
+  [[ "$REG_DOMAIN" == *.sofrapiwas.com ]] && DOMAIN_MODE=subdomain || DOMAIN_MODE=byo
 fi
+case "$DOMAIN_MODE" in
+  subdomain)
+    [[ "$REG_DOMAIN" == "${SLUG}.sofrapiwas.com" ]] \
+      || { echo "ERROR: domain_mode 'subdomain' expects domain '${SLUG}.sofrapiwas.com', registry says '$REG_DOMAIN' (use domain_mode: byo for a tenant-owned domain)" >&2; exit 1; } ;;
+  byo)
+    [[ "$REG_DOMAIN" == *.sofrapiwas.com ]] \
+      && { echo "ERROR: domain_mode 'byo' but '$REG_DOMAIN' is ours — a sofrapiwas.com host rides the wildcard, use domain_mode: subdomain" >&2; exit 1; }
+    [[ "$REG_DOMAIN" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]] \
+      || { echo "ERROR: '$REG_DOMAIN' is not a plausible hostname (lowercase labels, no scheme, no trailing dot)" >&2; exit 1; } ;;
+  *) echo "ERROR: registry entry '$SLUG' has domain_mode '$DOMAIN_MODE' — allowed: subdomain | byo (absent = inferred)" >&2; exit 1 ;;
+esac
+
+# Optional extra hostnames that should reach this tenant (typically the `www.`
+# of a BYO apex). They REDIRECT to the canonical domain rather than proxying:
+# the frontend image bakes NEXT_PUBLIC_* for one origin, so serving the app on a
+# second hostname would produce cross-origin API calls and a broken CORS story.
+# Normalised ONCE into DOMAIN_ALIASES so every later loop iterates clean values.
+DOMAIN_ALIASES=()
+# Guarded so the split is skipped entirely when the field is absent — bash 5 on
+# the boxes copes with the empty case, older bashes (a laptop running the script
+# to eyeball it) treat the unset array as an unbound variable under `set -u`.
+IFS=',' read -ra _RAW_ALIASES <<< "${REG_DOMAIN_ALIASES:-}"
+for _a in ${_RAW_ALIASES[@]+"${_RAW_ALIASES[@]}"}; do
+  _a="$(strip_ws "$_a")"
+  [[ -z "$_a" ]] && continue
+  [[ "$_a" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]] \
+    || { echo "ERROR: domain_alias '$_a' is not a plausible hostname" >&2; exit 1; }
+  [[ "$_a" == "$REG_DOMAIN" ]] \
+    && { echo "ERROR: domain_alias '$_a' duplicates the canonical domain" >&2; exit 1; }
+  DOMAIN_ALIASES+=("$_a")
+done
+
+BOX_IP="$(curl -4 -sS --max-time 10 https://ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')"
+dns_check() { # $1=hostname — warn (never fail) so a propagating record doesn't block a re-run
+  local host="$1" ip
+  ip="$(getent hosts "$host" | awk '{print $1}' | head -1 || true)"
+  [[ "$ip" == "$BOX_IP" ]] && return 0
+  echo "WARN: $host resolves to '${ip:-nothing}' but this box is '$BOX_IP'." >&2
+  if [[ "$DOMAIN_MODE" == byo ]]; then
+    echo "      BYO domain: the tenant must create  A  $host  ->  $BOX_IP  (TTL >= 7200) at their registrar." >&2
+  else
+    echo "      Subdomain tenants ride the *.sofrapiwas.com wildcard A record — check it still points here." >&2
+  fi
+  echo "      Caddy cannot get a certificate until then. Continuing (a fresh record may still be propagating)." >&2
+}
+dns_check "$REG_DOMAIN"
+for alias in ${DOMAIN_ALIASES[@]+"${DOMAIN_ALIASES[@]}"}; do
+  dns_check "$alias"
+done
 
 echo "==> Tenant dir: $TENANT_DIR"
 # /opt/rumi/tenants is also bind-mounted (ro) into Caddy; if compose created it
@@ -299,6 +355,19 @@ echo "==> Caddy site block + validate + reload"
 sed -e "s|__SLUG__|${SLUG}|g" \
     -e "s|__DOMAIN__|${REG_DOMAIN}|g" \
     tenants/templates/site.caddy.tpl > "caddy-tenants/${SLUG}.caddy"
+# Alias hostnames get their own tiny redirect site (301 to the canonical origin),
+# appended to the same file so teardown still removes everything in one unlink.
+for alias in ${DOMAIN_ALIASES[@]+"${DOMAIN_ALIASES[@]}"}; do
+  cat >> "caddy-tenants/${SLUG}.caddy" <<CADDY
+
+# Alias -> canonical. A redirect, not a proxy: the frontend bundle bakes
+# NEXT_PUBLIC_* for one origin (see the alias note in provision-tenant.sh).
+${alias} {
+	redir https://${REG_DOMAIN}{uri} permanent
+}
+CADDY
+  echo "   alias: ${alias} -> https://${REG_DOMAIN}"
+done
 # The tenants dir is bind-mounted as a DIRECTORY, so the new file is already
 # visible in the container and a plain reload re-globs the imports (the
 # single-file Caddyfile inode gotcha only applies to the main Caddyfile).

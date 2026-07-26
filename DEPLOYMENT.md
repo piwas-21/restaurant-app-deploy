@@ -192,6 +192,37 @@ plane later calls the same scripts (ADR-003 — no parallel mechanism).
    page `<title>` and footer © should show the tenant name, and a decoded
    access token should carry `tenant: <slug>` (backend #117).
 
+### BYO custom domain (ADR-002 path 2 — S10)
+
+A tenant who owns `bistronova.nl` keeps it. The registry entry changes in three
+places and nothing else does:
+
+```yaml
+  bistronova:
+    domain: bistronova.nl
+    domain_mode: byo
+    domain_aliases: [www.bistronova.nl]   # optional; 301s to the canonical domain
+```
+
+Order matters, because a certificate cannot be issued before DNS resolves here:
+
+1. **The tenant creates the records at their registrar** — `A bistronova.nl → <box IP>`
+   (TTL ≥ 7200), plus one per alias. No CNAME at the apex; that is why these are A
+   records. `provision-tenant.sh` prints the exact record it expected when a lookup
+   disagrees, and warns rather than fails so a propagating record doesn't block a re-run.
+2. **Build the tenant frontend image with the real domain** (`-f tenant_domain=bistronova.nl`).
+   `NEXT_PUBLIC_*` are baked per origin — an image built for the subdomain will make
+   cross-origin API calls from the custom domain. Moving an existing tenant to a custom
+   domain therefore means a **rebuild**, not just a registry edit.
+3. **Provision** as usual. Caddy issues the certificate on the first request (~30 s).
+4. **Verify** `./verify-env.sh https://bistronova.nl` and that the alias 301s.
+
+Aliases **redirect**, they do not serve — same baked-origin reason. Two hostnames both
+serving the app is a CORS bug waiting for its first order.
+
+Buying a domain *through* Sofra (ADR-002 path 3) is not built: it needs the domainio
+org API key + prepaid balance (ROADMAP S10 prereqs).
+
 ### Provisioning from the control plane (ADR-012 chain)
 
 The steps above are the founder-operated path and stay the fallback. The control
