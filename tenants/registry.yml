@@ -13,6 +13,16 @@
 #   box:      prod (159.195.137.101) | staging (159.195.34.105) — must match BOX_ROLE in the box .env
 #   domain_mode: subdomain ({slug}.sofrapiwas.com via the wildcard A record, added 2026-07-06)
 #                | byo (tenant-owned domain, explicit DNS + Caddy block)  [ADR-002]
+#                Absent = inferred from the domain. provision-tenant.sh cross-checks the two:
+#                `subdomain` must be exactly {slug}.sofrapiwas.com, `byo` must NOT be under
+#                sofrapiwas.com — a mislabelled entry sends you chasing the wrong DNS record
+#                while the tenant sits without a certificate. BYO needs an A record for the
+#                domain pointing at the tenant's box before the cert can issue (S10).
+#   domain_aliases: optional list of extra hostnames — typically the `www.` of a BYO apex.
+#                They get their own Caddy block that 301s to `domain`, never a second proxy:
+#                the frontend bundle bakes NEXT_PUBLIC_* for ONE origin, so serving the app
+#                on a second hostname means cross-origin API calls. Each alias needs its own
+#                A record too.
 #   frontend_tag: per-tenant image tag — NEXT_PUBLIC_* are baked per domain; built by the frontend
 #                 repo's build-tenant-image.yml workflow (convention: tenant-<slug>)
 #   backend_tag:  backend image is domain-agnostic — tenants ride :latest unless pinned
