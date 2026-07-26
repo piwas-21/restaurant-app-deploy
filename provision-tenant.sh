@@ -128,8 +128,11 @@ esac
 # second hostname would produce cross-origin API calls and a broken CORS story.
 # Normalised ONCE into DOMAIN_ALIASES so every later loop iterates clean values.
 DOMAIN_ALIASES=()
-IFS=',' read -ra _RAW_ALIASES <<< "$REG_DOMAIN_ALIASES"
-for _a in "${_RAW_ALIASES[@]}"; do
+# Guarded so the split is skipped entirely when the field is absent — bash 5 on
+# the boxes copes with the empty case, older bashes (a laptop running the script
+# to eyeball it) treat the unset array as an unbound variable under `set -u`.
+IFS=',' read -ra _RAW_ALIASES <<< "${REG_DOMAIN_ALIASES:-}"
+for _a in ${_RAW_ALIASES[@]+"${_RAW_ALIASES[@]}"}; do
   _a="$(strip_ws "$_a")"
   [[ -z "$_a" ]] && continue
   [[ "$_a" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]] \
@@ -153,7 +156,7 @@ dns_check() { # $1=hostname — warn (never fail) so a propagating record doesn'
   echo "      Caddy cannot get a certificate until then. Continuing (a fresh record may still be propagating)." >&2
 }
 dns_check "$REG_DOMAIN"
-for alias in "${DOMAIN_ALIASES[@]}"; do
+for alias in ${DOMAIN_ALIASES[@]+"${DOMAIN_ALIASES[@]}"}; do
   dns_check "$alias"
 done
 
@@ -354,7 +357,7 @@ sed -e "s|__SLUG__|${SLUG}|g" \
     tenants/templates/site.caddy.tpl > "caddy-tenants/${SLUG}.caddy"
 # Alias hostnames get their own tiny redirect site (301 to the canonical origin),
 # appended to the same file so teardown still removes everything in one unlink.
-for alias in "${DOMAIN_ALIASES[@]}"; do
+for alias in ${DOMAIN_ALIASES[@]+"${DOMAIN_ALIASES[@]}"}; do
   cat >> "caddy-tenants/${SLUG}.caddy" <<CADDY
 
 # Alias -> canonical. A redirect, not a proxy: the frontend bundle bakes
