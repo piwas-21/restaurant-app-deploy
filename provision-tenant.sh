@@ -89,7 +89,7 @@ esac
 # refuse, so a bad value cannot arrive from either direction.
 # Trim whitespace from a comma-split registry value (the lists are hand-written
 # YAML, so "a, b" is normal and " " is not a module).
-strip_ws() { printf '%s' "$1" | tr -d '[:space:]'; }
+strip_ws() { local raw="$1"; printf '%s' "$raw" | tr -d '[:space:]'; }
 
 KNOWN_MODULES="core kitchen-board cashier server reservations loyalty printing extra-languages"
 IFS=',' read -ra _MODULES <<< "$REG_MODULES"
