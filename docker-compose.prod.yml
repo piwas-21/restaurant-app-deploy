@@ -119,6 +119,13 @@ services:
       FleetPush__SofraIngestUrl: "${FLEET_INGEST_URL:-https://sofrapiwas.com/api/telemetry/fleet}"
       FleetPush__Secret: "${PRINTER_TELEMETRY_SECRET:-}"
       FleetPush__TenantSlug: "${FLEET_TENANT_SLUG:-rumi}"
+      # E2E menu fixture (backend #238) — seeds a mixed-kitchen bundle the printer-app E2E suite
+      # needs to assert kitchen routing, which staging could not provide because it ships no
+      # products. Unlike every other seeder it inserts a VISIBLE, ORDERABLE product, so this is the
+      # INVERSE of the FleetPush switch above: it defaults to FALSE and only the STAGING box opts
+      # in with SEED_E2E_MENU_FIXTURES=true. Forgetting FLEET_PUSH_ENABLED is loud; forgetting this
+      # one has to be SAFE, because the failure mode is "E2E Menu Deal" on a paying tenant's menu.
+      SeedSettings__SeedE2EMenuFixtures: "${SEED_E2E_MENU_FIXTURES:-false}"
     volumes:
       - ./app-secrets.json:/app/app-secrets.json:ro   # all app secrets/config (git-ignored)
       - backend_keys:/app/keys                          # DataProtection keys — persist or every redeploy invalidates tokens/sessions
