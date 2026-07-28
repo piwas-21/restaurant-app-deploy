@@ -663,3 +663,64 @@ prints all three in its summary; the key also lives in `/opt/rumi/tenants/<slug>
 The control plane deliberately does **not** store the key (ADR-012 — sofra never holds box
 secrets); a self-serve "reveal your printer key" surface would live in the **tenant's own admin**
 (their trust boundary), not the SaaS control plane.
+
+## E2E menu fixture (staging only) — `SEED_E2E_MENU_FIXTURES`
+
+The printer-app E2E suite cannot assert kitchen routing without a bundle whose components resolve to
+**different** kitchens, and staging ships no products at all (backend #238). `E2EMenuFixtureSeeder`
+provides one — but it is the only seeder that inserts a **visible, orderable** product, so it is
+opt-in and **defaults to false**.
+
+`docker-compose.prod.yml` runs on **both** boxes, so the switch is deliberately the inverse of
+`FLEET_PUSH_ENABLED` above: forgetting that one is loud, forgetting this one must be **safe**,
+because the failure mode is "E2E Menu Deal" appearing on a paying tenant's menu. Env vars bind
+**last** in `Program.cs`, so the compose default also outranks any `SeedSettings` block someone adds
+to a box `app-secrets.json` — prod is pinned off, not merely un-enabled.
+
+Per-tenant stacks deliberately have **no such lever**: `docker-compose.tenant.yml.tpl` does not
+forward the variable and `provision-tenant.sh` harvests only `SENTRY_DSN` +
+`PRINTER_TELEMETRY_SECRET` from the box `.env`, so the fixture cannot reach `demo.sofrapiwas.com`
+or any provisioned tenant.
+
+To enable it on **staging only**:
+
+0. **Release this repo first.** A `docker-compose.prod.yml` change reaches a box only after a
+   `develop` → `main` PR and the `sync-to-staging.yml` rsync. Skipping this makes steps 1-2 a
+   **silent no-op**: without the passthrough the resolved container config is unchanged, so compose
+   does not even recreate the container and nothing errors. Confirm first:
+   ```
+   grep SeedSettings__SeedE2EMenuFixtures /opt/rumi/deploy/docker-compose.prod.yml
+   ```
+1. Add to the **staging** box `.env` (never the prod box):
+   ```
+   SEED_E2E_MENU_FIXTURES=true
+   ```
+   The value must be literally `true` or `false`. Anything else — `0`, `1`, `yes`, `on` — fails
+   bool binding, which throws out of the startup migration, so the backend never reaches
+   `app.Run()` and restart-loops. (Same hazard the tenant template documents for
+   `RateLimiter__AuthPermitLimit`.)
+2. Roll the backend so it re-reads the environment and the seeder runs:
+   ```
+   docker compose -f docker-compose.prod.yml up -d backend
+   ```
+3. Verify against what the E2E suite actually reads, not the log:
+   ```
+   curl -s https://staging.fooderist.com/api/products | grep "E2E Menu Deal"
+   ```
+   The seeder logs at **warning** level on the boot that inserts, but the idempotent path logs
+   "E2E menu fixture already present — skipping." at information level — so a log grep returns
+   empty on every re-roll after the first and reads as "it never fired". Use
+   `grep -i "E2E menu fixture"` if you do want the log, since that matches both paths.
+
+**There is no un-seed.** Turning the flag back off stops future boots inserting; it does not remove
+what a previous boot inserted. That is deliberate — production's code path stays a pure early return
+with no delete logic in it. To clear a staging tenant, delete these four fixed ids by hand:
+
+```
+e2e00000-0000-0000-0000-000000000001   -- combo product ("E2E Menu Deal")
+e2e00000-0000-0000-0000-000000000002   -- component ("E2E Beef Burger", FrontKitchen)
+e2e00000-0000-0000-0000-000000000003   -- component ("E2E Fries", BackKitchen)
+e2e00000-0000-0000-0000-000000000010   -- the MenuDefinition (also the idempotency sentinel)
+```
+
+
