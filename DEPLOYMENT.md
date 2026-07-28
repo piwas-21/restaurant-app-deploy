@@ -365,6 +365,47 @@ Backend startup / migration logs:
 bash .ssh/box.sh 'cd /opt/rumi/deploy && docker compose -f docker-compose.prod.yml logs --tail=80 backend'
 ```
 
+**Do not verify a data-repair migration from the log. Pre-measure instead.**
+
+Grepping for a migration's `RAISE NOTICE` text is a **false positive**: EF logs each migration's SQL
+*body* as it executes it, and the body contains the notice string as a literal, so the text is in the
+log whether or not the notice ever fired. Measured on the 2026-07-28 release (§9.5,
+`AddUniquePrimaryProductCategoryIndex`): `grep -iE "9\.5|demoted"` returned **8 hits on a prod
+database that had nothing to repair** — the migration body has 4 matching lines (`DECLARE demoted
+integer;`, `GET DIAGNOSTICS demoted = ROW_COUNT;`, `IF demoted > 0 THEN`, and the `RAISE NOTICE` line
+itself) and the body is echoed **twice** on a boot, once under `Command execution completed` and once
+bare. Not a log-level artefact: that box logs `Executed DbCommand` (Information) 262 times and
+`Executing DbCommand` (Debug) zero times.
+
+⚠️ **The obvious fix — grepping the substituted form — is NOT known to work, so do not rely on it.**
+Two reasons it may be structurally blind, neither yet tested against a notice that actually fired:
+
+- Migrations run through the **app**, not `psql`, so the familiar `NOTICE:` prefix never appears —
+  Npgsql renders a notice as `Received notice: <text>`. A grep for `NOTICE:` is dead text here.
+- Whether Npgsql's notice line reaches the container log at the configured level is unverified.
+  `appsettings.json` sets `Logging:LogLevel:Default = Information` with no Npgsql override, and
+  `docker-compose.prod.yml` passes an explicit env **allowlist** with no `Logging__*` entry, so a box
+  `.env` cannot raise it either.
+
+A detector that is blind and a true negative produce identical output, and the 2026-07-28 run only
+ever exercised the negative case. Until someone fires one deliberately on staging and records what
+the log actually shows, treat the log as **evidence of nothing** in either direction.
+
+**What to do instead — run the migration's own predicate against the database BEFORE releasing**, so
+the answer is known going in and the deploy log is never load-bearing:
+```bash
+# example: the §9.5 demotion predicate, run against prod while the release PR is still open
+bash .ssh/box.sh 'cd /opt/rumi/deploy && docker compose -f docker-compose.prod.yml exec -T postgres \
+  psql -U "$(grep -E "^POSTGRES_USER=" .env | cut -d= -f2)" -d "$(grep -E "^POSTGRES_DB=" .env | cut -d= -f2)" \
+  -c "SELECT count(*) FROM product_categories pc WHERE pc.is_primary AND pc.id <> (SELECT k.id FROM product_categories k WHERE k.product_id=pc.product_id AND k.is_primary ORDER BY k.display_order, k.id LIMIT 1);"'
+```
+Then confirm the *effect* afterwards (here: the index exists and duplicates are zero), which is
+observable in the schema rather than in log text.
+
+This is the **mirror** of the E2E-fixture trap under *E2E menu fixture (staging only)* further down
+this file, which fails the other way — a false **negative** on every re-roll. On this box, "the log
+said so" has now been wrong in both directions.
+
 **What's actually deployed** — one URL shows both services' build identity (commit
 + build time), reflecting the *running* containers rather than `.env`:
 ```bash
