@@ -26,6 +26,14 @@ TENANT_ADMIN_PASSWORD=__ADMIN_PASSWORD__
 TENANT_CURRENCY=__CURRENCY__
 TENANT_LANGUAGES=__LANGUAGES__
 TENANT_MODULES=__MODULES__
+# Module RUNTIME ENFORCEMENT opt-in (backend #268 / sofra ADR-010). Unset = the
+# backend serves every module whatever TENANT_MODULES says — which is what every
+# tenant did before enforcement existed, and what RUMI must keep doing forever.
+# Set to true here (NOT in the registry) and restart this tenant's backend to make
+# its module list binding. Roll out newest tenant first; verify with
+#   curl -s https://<domain>/api/tenant/modules
+# which reports the effective set and whether it is being enforced.
+#   TENANT_MODULES_ENFORCE=true
 # UI template (frontend ADR-006 / S15 T2): classic | craft, from the registry's
 # optional `template` field (absent -> classic; anything else fails provisioning).
 # NEXT_PUBLIC_* are baked at frontend image build, so this line records intent —

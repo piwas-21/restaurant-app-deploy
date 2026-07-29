@@ -192,6 +192,43 @@ plane later calls the same scripts (ADR-003 — no parallel mechanism).
    page `<title>` and footer © should show the tenant name, and a decoded
    access token should carry `tenant: <slug>` (backend #117).
 
+### Module runtime enforcement (S11 — backend #268, sofra ADR-010)
+
+The registry's `modules:` list is **enforced at runtime**, but only for a tenant that has
+opted in. Without the opt-in the backend serves every module regardless — which is what
+every tenant did before enforcement existed, and what RUMI must keep doing.
+
+**RUMI is never flipped, and cannot be.** It runs the main `deploy` compose project, not the
+tenant template, so it never receives `Modules__*` at all — and an absent list means
+*unrestricted*, deliberately. Its registry `modules:` line documents what tenant 1 has; it is
+not a control.
+
+**Turn it on for one tenant** (roll out newest first, never RUMI):
+
+```bash
+cd /opt/rumi/tenants/<slug>
+grep -q '^TENANT_MODULES_ENFORCE=' .env || echo 'TENANT_MODULES_ENFORCE=true' >> .env
+docker compose up -d --force-recreate backend-<slug>
+```
+
+**Verify against the running instance, not the .env:**
+
+```bash
+curl -s https://<domain>/api/tenant/modules
+```
+
+`{"data":{"modules":[…],"enforced":true}}` — `enforced:false` means the flip did not take,
+and an unexpectedly *long* module list is the same signal (unrestricted reports the whole
+vocabulary). The backend also logs `Module enforcement ON — enabled: …` once at startup.
+
+**Changing what a tenant has** is: edit `modules:` in the registry → PR → merge → sync →
+re-provision (rewrites the `.env`) → restart that tenant's backend. **No image rebuild** —
+the frontend reads the set from the backend at runtime rather than from a baked
+`NEXT_PUBLIC_*`, precisely so an upsell is not a rebuild.
+
+**To turn it off**, drop the `TENANT_MODULES_ENFORCE` line (or set it `false`) and recreate
+the backend. Nothing else is stateful.
+
 ### BYO custom domain (ADR-002 path 2 — S10)
 
 A tenant who owns `bistronova.nl` keeps it. The registry entry changes in three

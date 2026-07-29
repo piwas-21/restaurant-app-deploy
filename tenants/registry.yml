@@ -27,13 +27,23 @@
 #                 repo's build-tenant-image.yml workflow (convention: tenant-<slug>)
 #   backend_tag:  backend image is domain-agnostic — tenants ride :latest unless pinned
 #   currency / languages / modules: recorded per ADR-010; provisioning writes them into the
-#                 tenant instance env. Still INERT at runtime — enforcement (route/endpoint
-#                 gates) ships with S11 — but the VOCABULARY is now validated: modules must
-#                 come from core | kitchen-board | cashier | server | reservations | loyalty |
+#                 tenant instance env. The VOCABULARY is validated: modules must come from
+#                 core | kitchen-board | cashier | server | reservations | loyalty |
 #                 printing | extra-languages, or provision-tenant.sh fails loudly. Same list
 #                 in the control plane (sofra lib/module-catalog.ts), which also carries the
 #                 list price of each; the pricing sheet is the workspace repo's
 #                 docs/plans/SOFRA-MODULE-CATALOG-AND-PRICING.md.
+#
+#                 `modules` is ENFORCED AT RUNTIME since backend #268 (S11) — but only for a
+#                 tenant that has opted in with TENANT_MODULES_ENFORCE=true in its own .env
+#                 on the box. Without that opt-in the backend serves every module regardless,
+#                 exactly as before. Two consequences worth knowing before editing a list:
+#                   - Editing `modules` here changes nothing until you re-provision AND
+#                     restart that tenant's backend. There is no image rebuild — the frontend
+#                     reads the set from the backend at runtime (GET /api/tenant/modules).
+#                   - RUMI (managed: legacy) runs the MAIN compose project, so its list below
+#                     never reaches its container and never will. It is documentation of what
+#                     tenant 1 has, not a control. Do not try to make it one.
 #   city:     optional free text — seeds RestaurantInfo.City on the tenant's first boot
 #             (deploy#16 / backend #120, via RestaurantInfoSeed__City). `name` and
 #             `admin_email` seed RestaurantInfo Name/Email the same way; the seeder is a
@@ -92,7 +102,13 @@ tenants:
     frontend_tag: tenant-demo
     currency: EUR
     languages: [en, nl]
-    modules: [core]
+    # The full-service bundle, because that is what the demo actually SHOWS: kitchen
+    # board, cashier, server, reservations and loyalty are all reachable on it today.
+    # This was `[core]` while modules were inert, which was harmless then and becomes a
+    # trap the moment enforcement is flipped here — demo is the first tenant in the
+    # rollout order, and turning it on against a `[core]` list would strip the showcase
+    # of everything it exists to show. Recording the truth first, flipping second.
+    modules: [core, kitchen-board, cashier, server, reservations, loyalty]
     # craft = the sofra-mirror template (S15 T3 DoD): the demo tenant is the
     # showcase for template distinctness. Its tenant-demo image is baked with
     # NEXT_PUBLIC_TEMPLATE=craft.
