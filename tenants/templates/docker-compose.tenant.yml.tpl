@@ -51,8 +51,7 @@ services:
       # Emits the `tenant` claim in access tokens (backend #117) — makes a
       # token from this instance attributable to this tenant.
       JwtSettings__TenantSlug: "__SLUG__"
-      # Registry-recorded tenant facts (ADR-007/ADR-010). Inert until module
-      # enforcement ships (S11) — recorded now so re-provisioning is the only
+      # Registry-recorded tenant facts (ADR-007/ADR-010). Re-provisioning is the only
       # mechanism that changes them.
       TENANT_SLUG: "__SLUG__"
       TENANT_CURRENCY: "${TENANT_CURRENCY}"
@@ -60,7 +59,7 @@ services:
       # config section/key) so this tenant's order emails show its own currency
       # instead of the CHF default. Empty-defaulted (:-) so the backend's own CHF
       # fallback stays the single source of truth. TENANT_CURRENCY above stays too
-      # (inert record, same pattern as TENANT_LANGUAGES/TENANT_MODULES below).
+      # (plain record, same pattern as TENANT_LANGUAGES/TENANT_MODULES below).
       Localization__Currency: "${TENANT_CURRENCY:-}"
       # Login throttle (backend RateLimiterSettings.AuthPermitLimit). Production
       # tenants keep the backend's own tight default — it is the ONLY active
@@ -74,6 +73,24 @@ services:
       RateLimiter__AuthPermitLimit: "${TENANT_AUTH_PERMIT_LIMIT:-5}"
       TENANT_LANGUAGES: "${TENANT_LANGUAGES}"
       TENANT_MODULES: "${TENANT_MODULES}"
+      # Module RUNTIME ENFORCEMENT (backend #268, sofra ADR-010 / S11). TENANT_MODULES
+      # above stays as the plain record; these two are the keys the backend actually
+      # binds (ModuleSettings, config section "Modules").
+      #
+      # THE EMPTY DEFAULTS ARE LOAD-BEARING, in both directions:
+      #   Modules__Enabled  — an ABSENT list means UNRESTRICTED, never "nothing enabled".
+      #                       The legacy RUMI install runs the MAIN compose project, not
+      #                       this template, so it never gets these keys at all; if absent
+      #                       ever came to mean "off", tenant 1 would lose its whole app.
+      #   Modules__Enforce  — off unless a tenant opts in. Set TENANT_MODULES_ENFORCE=true
+      #                       in the tenant's own .env on the box and restart its backend.
+      #                       Rolled out NEWEST TENANT FIRST; RUMI is never flipped.
+      #
+      # An upgrade is therefore: edit the registry -> re-provision (rewrites the .env)
+      # -> restart the tenant backend. No image rebuild — that is exactly why the flags
+      # are served to the frontend from the backend rather than baked as NEXT_PUBLIC_*.
+      Modules__Enabled: "${TENANT_MODULES:-}"
+      Modules__Enforce: "${TENANT_MODULES_ENFORCE:-false}"
       # Fleet observability (Track S) — this tenant's backend pushes its device roster +
       # missed-order/error counts to sofra's /admin/fleet. The shared secret + Sentry DSN
       # are flowed from the box .env into the tenant .env by provision-tenant.sh; the slug

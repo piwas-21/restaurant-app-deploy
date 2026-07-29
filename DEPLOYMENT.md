@@ -192,6 +192,65 @@ plane later calls the same scripts (ADR-003 — no parallel mechanism).
    page `<title>` and footer © should show the tenant name, and a decoded
    access token should carry `tenant: <slug>` (backend #117).
 
+### Module runtime enforcement (S11 — backend #268, sofra ADR-010)
+
+The registry's `modules:` list is **enforced at runtime**, but only for a tenant that has
+opted in. Without the opt-in the backend serves every module regardless — which is what
+every tenant did before enforcement existed, and what RUMI must keep doing.
+
+**RUMI is never flipped, and cannot be.** It runs the main `deploy` compose project, not the
+tenant template, so it never receives `Modules__*` at all — and an absent list means
+*unrestricted*, deliberately. Its registry `modules:` line documents what tenant 1 has; it is
+not a control.
+
+**First, make sure the tenant's `.env` carries the list you think it does.** Until this shipped,
+`TENANT_MODULES` was written *only* when a tenant's `.env` was first created — a later registry
+edit never reached it. Re-provision now re-applies it, but a tenant that has not been
+re-provisioned since still holds its original list:
+
+```bash
+grep TENANT_MODULES= /opt/rumi/tenants/<slug>/.env     # must match the registry
+cd /opt/rumi/deploy && ./provision-tenant.sh <slug>    # if it does not
+```
+
+**Then turn it on** (roll out newest first, never RUMI). Set-or-replace, because a tenant
+turned off earlier already has the line and a presence check would silently skip it:
+
+```bash
+cd /opt/rumi/tenants/<slug>
+sed -i '/^TENANT_MODULES_ENFORCE=/d' .env && echo 'TENANT_MODULES_ENFORCE=true' >> .env
+docker compose up -d --force-recreate backend-<slug>
+```
+
+The value must be exactly `true` or `false` — it binds to a bool the backend resolves at
+startup, so `1`/`yes`/`on` crash-loop the container rather than meaning true.
+`provision-tenant.sh` rejects them, but it only runs when you run it.
+
+**Verify against the running instance, not the `.env`:**
+
+```bash
+curl -s https://<domain>/api/tenant/modules
+```
+
+`{"data":{"modules":[…],"enforced":true}}`. `enforced:false` has **two** causes — the flag did
+not take, *or* it took and `TENANT_MODULES` is empty in that `.env` (an empty list means
+unrestricted, deliberately). An unexpectedly *long* module list is the same signal, since
+unrestricted reports the whole vocabulary. The backend also logs
+`Module enforcement ON — enabled: …` once at startup.
+
+**Changing what a tenant has** is: edit `modules:` in the registry → PR → merge → sync →
+re-provision (re-applies it to the `.env`) → restart that tenant's backend. **No image
+rebuild** — the flags are served from the backend rather than baked as `NEXT_PUBLIC_*`,
+precisely so an upsell is not a rebuild.
+
+> **The frontend does not consume `/api/tenant/modules` yet** (that is the next slice). So
+> flipping a tenant today gates the API only: the nav and routes still render and the calls
+> behind them 404. Expect that on the first rollout target rather than reading it as a
+> broken flip.
+
+**To turn it off**, set `TENANT_MODULES_ENFORCE=false` (or delete the line) and recreate the
+backend. Nothing else is stateful.
+
 ### BYO custom domain (ADR-002 path 2 — S10)
 
 A tenant who owns `bistronova.nl` keeps it. The registry entry changes in three
@@ -364,6 +423,47 @@ Backend startup / migration logs:
 ```bash
 bash .ssh/box.sh 'cd /opt/rumi/deploy && docker compose -f docker-compose.prod.yml logs --tail=80 backend'
 ```
+
+**Do not verify a data-repair migration from the log. Pre-measure instead.**
+
+Grepping for a migration's `RAISE NOTICE` text is a **false positive**: EF logs each migration's SQL
+*body* as it executes it, and the body contains the notice string as a literal, so the text is in the
+log whether or not the notice ever fired. Measured on the 2026-07-28 release (§9.5,
+`AddUniquePrimaryProductCategoryIndex`): `grep -iE "9\.5|demoted"` returned **8 hits on a prod
+database that had nothing to repair** — the migration body has 4 matching lines (`DECLARE demoted
+integer;`, `GET DIAGNOSTICS demoted = ROW_COUNT;`, `IF demoted > 0 THEN`, and the `RAISE NOTICE` line
+itself) and the body is echoed **twice** on a boot, once under `Command execution completed` and once
+bare. Not a log-level artefact: that box logs `Executed DbCommand` (Information) 262 times and
+`Executing DbCommand` (Debug) zero times.
+
+⚠️ **The obvious fix — grepping the substituted form — is NOT known to work, so do not rely on it.**
+Two reasons it may be structurally blind, neither yet tested against a notice that actually fired:
+
+- Migrations run through the **app**, not `psql`, so the familiar `NOTICE:` prefix never appears —
+  Npgsql renders a notice as `Received notice: <text>`. A grep for `NOTICE:` is dead text here.
+- Whether Npgsql's notice line reaches the container log at the configured level is unverified.
+  `appsettings.json` sets `Logging:LogLevel:Default = Information` with no Npgsql override, and
+  `docker-compose.prod.yml` passes an explicit env **allowlist** with no `Logging__*` entry, so a box
+  `.env` cannot raise it either.
+
+A detector that is blind and a true negative produce identical output, and the 2026-07-28 run only
+ever exercised the negative case. Until someone fires one deliberately on staging and records what
+the log actually shows, treat the log as **evidence of nothing** in either direction.
+
+**What to do instead — run the migration's own predicate against the database BEFORE releasing**, so
+the answer is known going in and the deploy log is never load-bearing:
+```bash
+# example: the §9.5 demotion predicate, run against prod while the release PR is still open
+bash .ssh/box.sh 'cd /opt/rumi/deploy && docker compose -f docker-compose.prod.yml exec -T postgres \
+  psql -U "$(grep -E "^POSTGRES_USER=" .env | cut -d= -f2)" -d "$(grep -E "^POSTGRES_DB=" .env | cut -d= -f2)" \
+  -c "SELECT count(*) FROM product_categories pc WHERE pc.is_primary AND pc.id <> (SELECT k.id FROM product_categories k WHERE k.product_id=pc.product_id AND k.is_primary ORDER BY k.display_order, k.id LIMIT 1);"'
+```
+Then confirm the *effect* afterwards (here: the index exists and duplicates are zero), which is
+observable in the schema rather than in log text.
+
+This is the **mirror** of the E2E-fixture trap under *E2E menu fixture (staging only)* further down
+this file, which fails the other way — a false **negative** on every re-roll. On this box, "the log
+said so" has now been wrong in both directions.
 
 **What's actually deployed** — one URL shows both services' build identity (commit
 + build time), reflecting the *running* containers rather than `.env`:

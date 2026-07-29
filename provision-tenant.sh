@@ -204,6 +204,28 @@ if [[ -f "$TENANT_DIR/.env" ]]; then
   set_env_line TENANT_NAME "$ENV_NAME"
   set_env_line TENANT_CITY "$ENV_CITY"
   set_env_line NEXT_PUBLIC_TEMPLATE "$TENANT_TEMPLATE"
+  # Product facts, re-applied for the same reason the tags are: they legitimately drift.
+  # Until module enforcement (S11) these were written ONLY on the fresh-render path, so a
+  # registry edit reached a re-provisioned tenant's .env never — harmless while nothing read
+  # them, and a live trap the moment `modules` became binding: an upgrade would silently keep
+  # serving the list the tenant was FIRST provisioned with. strip_ws because the YAML string
+  # form (`modules: "core, kitchen-board"`) arrives unnormalised and the ids have no spaces.
+  set_env_line TENANT_CURRENCY "$(strip_ws "$REG_CURRENCY")"
+  set_env_line TENANT_LANGUAGES "$(strip_ws "$REG_LANGUAGES")"
+  set_env_line TENANT_MODULES "$(strip_ws "$REG_MODULES")"
+  # The operator's enforcement opt-in is hand-written into this .env (it is a rollout
+  # control, not a product fact, so it is deliberately NOT in the registry) — which makes it
+  # the only unvalidated value in the file. It binds to a C# bool, and the backend resolves
+  # that eagerly at startup, so `TENANT_MODULES_ENFORCE=1` does not mean "on": it throws
+  # before the app listens and `restart: unless-stopped` turns it into a crash loop. Catch a
+  # typo here, where it costs a message, instead of there, where it costs the tenant.
+  _ENFORCE="$(strip_ws "$(grep -m1 '^TENANT_MODULES_ENFORCE=' "$TENANT_DIR/.env" | cut -d= -f2- || true)")"
+  if [[ -n "$_ENFORCE" ]]; then
+    shopt -s nocasematch
+    [[ "$_ENFORCE" == "true" || "$_ENFORCE" == "false" ]] \
+      || { echo "ERROR: tenant '$SLUG' .env has TENANT_MODULES_ENFORCE='$_ENFORCE' — must be exactly true or false (it binds to a bool; anything else crash-loops the backend)" >&2; shopt -u nocasematch; exit 1; }
+    shopt -u nocasematch
+  fi
 else
   FRESH_ENV=1
   TENANT_DB_PASSWORD="$(rand 48 32)"
