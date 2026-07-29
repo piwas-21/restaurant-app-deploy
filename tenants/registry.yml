@@ -39,8 +39,10 @@
 #                 on the box. Without that opt-in the backend serves every module regardless,
 #                 exactly as before. Two consequences worth knowing before editing a list:
 #                   - Editing `modules` here changes nothing until you re-provision AND
-#                     restart that tenant's backend. There is no image rebuild — the frontend
-#                     reads the set from the backend at runtime (GET /api/tenant/modules).
+#                     restart that tenant's backend. There is no image rebuild — the set is
+#                     served from the backend (GET /api/tenant/modules) rather than baked
+#                     into the frontend image, so an upsell is not a rebuild. (The frontend
+#                     does not consume that endpoint yet; today a flip gates the API only.)
 #                   - RUMI (managed: legacy) runs the MAIN compose project, so its list below
 #                     never reaches its container and never will. It is documentation of what
 #                     tenant 1 has, not a control. Do not try to make it one.

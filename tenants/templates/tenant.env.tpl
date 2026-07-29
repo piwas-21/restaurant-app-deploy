@@ -29,8 +29,11 @@ TENANT_MODULES=__MODULES__
 # Module RUNTIME ENFORCEMENT opt-in (backend #268 / sofra ADR-010). Unset = the
 # backend serves every module whatever TENANT_MODULES says — which is what every
 # tenant did before enforcement existed, and what RUMI must keep doing forever.
-# Set to true here (NOT in the registry) and restart this tenant's backend to make
-# its module list binding. Roll out newest tenant first; verify with
+# Set to exactly `true` or `false` here (NOT in the registry) and restart this
+# tenant's backend to make its module list binding. It binds to a C# bool that the
+# backend resolves at startup, so `1`/`yes`/`on` do not mean true — they throw before
+# the app listens and crash-loop the container. provision-tenant.sh rejects them.
+# Roll out newest tenant first; verify with
 #   curl -s https://<domain>/api/tenant/modules
 # which reports the effective set and whether it is being enforced.
 #   TENANT_MODULES_ENFORCE=true

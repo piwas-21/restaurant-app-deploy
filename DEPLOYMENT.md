@@ -203,31 +203,53 @@ tenant template, so it never receives `Modules__*` at all — and an absent list
 *unrestricted*, deliberately. Its registry `modules:` line documents what tenant 1 has; it is
 not a control.
 
-**Turn it on for one tenant** (roll out newest first, never RUMI):
+**First, make sure the tenant's `.env` carries the list you think it does.** Until this shipped,
+`TENANT_MODULES` was written *only* when a tenant's `.env` was first created — a later registry
+edit never reached it. Re-provision now re-applies it, but a tenant that has not been
+re-provisioned since still holds its original list:
+
+```bash
+grep TENANT_MODULES= /opt/rumi/tenants/<slug>/.env     # must match the registry
+cd /opt/rumi/deploy && ./provision-tenant.sh <slug>    # if it does not
+```
+
+**Then turn it on** (roll out newest first, never RUMI). Set-or-replace, because a tenant
+turned off earlier already has the line and a presence check would silently skip it:
 
 ```bash
 cd /opt/rumi/tenants/<slug>
-grep -q '^TENANT_MODULES_ENFORCE=' .env || echo 'TENANT_MODULES_ENFORCE=true' >> .env
+sed -i '/^TENANT_MODULES_ENFORCE=/d' .env && echo 'TENANT_MODULES_ENFORCE=true' >> .env
 docker compose up -d --force-recreate backend-<slug>
 ```
 
-**Verify against the running instance, not the .env:**
+The value must be exactly `true` or `false` — it binds to a bool the backend resolves at
+startup, so `1`/`yes`/`on` crash-loop the container rather than meaning true.
+`provision-tenant.sh` rejects them, but it only runs when you run it.
+
+**Verify against the running instance, not the `.env`:**
 
 ```bash
 curl -s https://<domain>/api/tenant/modules
 ```
 
-`{"data":{"modules":[…],"enforced":true}}` — `enforced:false` means the flip did not take,
-and an unexpectedly *long* module list is the same signal (unrestricted reports the whole
-vocabulary). The backend also logs `Module enforcement ON — enabled: …` once at startup.
+`{"data":{"modules":[…],"enforced":true}}`. `enforced:false` has **two** causes — the flag did
+not take, *or* it took and `TENANT_MODULES` is empty in that `.env` (an empty list means
+unrestricted, deliberately). An unexpectedly *long* module list is the same signal, since
+unrestricted reports the whole vocabulary. The backend also logs
+`Module enforcement ON — enabled: …` once at startup.
 
 **Changing what a tenant has** is: edit `modules:` in the registry → PR → merge → sync →
-re-provision (rewrites the `.env`) → restart that tenant's backend. **No image rebuild** —
-the frontend reads the set from the backend at runtime rather than from a baked
-`NEXT_PUBLIC_*`, precisely so an upsell is not a rebuild.
+re-provision (re-applies it to the `.env`) → restart that tenant's backend. **No image
+rebuild** — the flags are served from the backend rather than baked as `NEXT_PUBLIC_*`,
+precisely so an upsell is not a rebuild.
 
-**To turn it off**, drop the `TENANT_MODULES_ENFORCE` line (or set it `false`) and recreate
-the backend. Nothing else is stateful.
+> **The frontend does not consume `/api/tenant/modules` yet** (that is the next slice). So
+> flipping a tenant today gates the API only: the nav and routes still render and the calls
+> behind them 404. Expect that on the first rollout target rather than reading it as a
+> broken flip.
+
+**To turn it off**, set `TENANT_MODULES_ENFORCE=false` (or delete the line) and recreate the
+backend. Nothing else is stateful.
 
 ### BYO custom domain (ADR-002 path 2 — S10)
 
