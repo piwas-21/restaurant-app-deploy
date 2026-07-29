@@ -243,13 +243,41 @@ re-provision (re-applies it to the `.env`) → restart that tenant's backend. **
 rebuild** — the flags are served from the backend rather than baked as `NEXT_PUBLIC_*`,
 precisely so an upsell is not a rebuild.
 
-> **The frontend does not consume `/api/tenant/modules` yet** (that is the next slice). So
-> flipping a tenant today gates the API only: the nav and routes still render and the calls
-> behind them 404. Expect that on the first rollout target rather than reading it as a
-> broken flip.
+**The flip survives a re-provision.** `TENANT_MODULES_ENFORCE` is an operator rollout control,
+deliberately absent from the registry, so `provision-tenant.sh` only *validates* it — it never
+rewrites or clears it. Re-provisioning a flipped tenant to pick up a registry edit leaves
+enforcement on.
+
+**Give the UI a second request before believing it.** The frontend reads the module set
+server-side with a 30 s ISR cache, per path. After a flip the first request to each route
+serves the *previously rendered* HTML and only then regenerates — so a nav that still offers a
+module you just removed is the cache, not a broken gate. Reload once more before diagnosing.
+Verified on `demo` 2026-07-29: pass 1 still showed the reservations nav and the home hero CTA,
+pass 2 had dropped both.
 
 **To turn it off**, set `TENANT_MODULES_ENFORCE=false` (or delete the line) and recreate the
 backend. Nothing else is stateful.
+
+**Proven on `demo` 2026-07-29** — the first tenant ever flipped, so this is the only evidence
+that the gates gate rather than that the unrestricted path works:
+
+| Check | Result |
+|---|---|
+| `/api/tenant/modules` | `enforced: true`, exactly the six bought ids (not the whole vocabulary) |
+| startup log | `Module enforcement ON — enabled: core, kitchen-board, cashier, server, reservations, loyalty` |
+| `printing` **not bought** — `GET /api/orders/printer-feed` with a **valid** `X-Api-Key` | **404 `ModuleNotEnabled`** |
+| `printing` **not bought** — `GET /api/devices` with an **admin JWT** | **404 `ModuleNotEnabled`** |
+| the six bought surfaces (`/api/Events/kitchen`, `/api/Events/service`, `/api/Orders/z-report`, `/api/Reservations`, `/api/admin/PointRules`, `/api/UserGroup`) | all serve |
+| UI, module temporarily narrowed | `/reservations` renders a themed *"Not available here"*; the nav entry, the home hero CTA and all four loyalty admin links disappear |
+
+Two traps that cost time proving it, worth knowing before the next flip:
+
+- **A bare 404 is not evidence of a gate.** A wrong path 404s with an *empty body*; the gate
+  404s with `errorCode: ModuleNotEnabled`. Assert on the body, never the status alone.
+- **A 401 is not evidence either.** `[Authorize]` is consumed by middleware that runs *ahead*
+  of the module filter, so on an authenticated endpoint an unauthenticated caller gets 401
+  whether or not the module is enabled. `/api/devices` answers 401 anonymously and only reveals
+  the 404 once a real token is attached.
 
 ### BYO custom domain (ADR-002 path 2 — S10)
 

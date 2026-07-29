@@ -41,8 +41,11 @@
 #                   - Editing `modules` here changes nothing until you re-provision AND
 #                     restart that tenant's backend. There is no image rebuild — the set is
 #                     served from the backend (GET /api/tenant/modules) rather than baked
-#                     into the frontend image, so an upsell is not a rebuild. (The frontend
-#                     does not consume that endpoint yet; today a flip gates the API only.)
+#                     into the frontend image, so an upsell is not a rebuild. The frontend
+#                     consumes that endpoint too (route + nav gating, frontend #348), so a
+#                     flip gates the UI as well as the API — but the UI reads it through a
+#                     30s per-path ISR cache, so give it a second request before believing
+#                     a stale nav. Both halves proven on `demo` 2026-07-29.
 #                   - RUMI (managed: legacy) runs the MAIN compose project, so its list below
 #                     never reaches its container and never will. It is documentation of what
 #                     tenant 1 has, not a control. Do not try to make it one.
@@ -106,10 +109,11 @@ tenants:
     languages: [en, nl]
     # The full-service bundle, because that is what the demo actually SHOWS: kitchen
     # board, cashier, server, reservations and loyalty are all reachable on it today.
-    # This was `[core]` while modules were inert, which was harmless then and becomes a
-    # trap the moment enforcement is flipped here — demo is the first tenant in the
-    # rollout order, and turning it on against a `[core]` list would strip the showcase
-    # of everything it exists to show. Recording the truth first, flipping second.
+    # ENFORCED: demo is the one tenant running TENANT_MODULES_ENFORCE=true (its .env on
+    # the staging box — the flag is an operator control, not a registry field). So this
+    # list is binding here, unlike everywhere else: dropping an id takes that surface off
+    # the demo, and `printing` is absent deliberately, as the standing proof that a
+    # module nobody bought 404s. Edit this list only via re-provision + backend restart.
     modules: [core, kitchen-board, cashier, server, reservations, loyalty]
     # craft = the sofra-mirror template (S15 T3 DoD): the demo tenant is the
     # showcase for template distinctness. Its tenant-demo image is baked with
