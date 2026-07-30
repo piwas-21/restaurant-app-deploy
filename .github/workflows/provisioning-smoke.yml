@@ -1,0 +1,298 @@
+name: provisioning-smoke
+
+run-name: provisioning-smoke ${{ github.event_name }}
+
+# Stands a real tenant up from nothing, checks it over the public internet, and
+# destroys it again. Unmocked end to end: a real tenant image build, the real
+# provision-tenant.sh on the real box, a real database, a real Let's Encrypt cert.
+#
+# WHY this exists. Everything downstream of a registry merge is box wiring, and box
+# wiring is the part CI structurally cannot reach: the Caddy site block, the compose
+# template render, secret generation, registry->env injection, TLS issuance for a host
+# that has never existed, the tenant frontend image being usable at all, and the
+# backend booting + migrating + seeding against a GENUINELY EMPTY database. Until the
+# 2026-07-30 chain run none of that had ever executed outside a local rehearsal, and it
+# only executes when a real customer is onboarded — which is the worst possible moment
+# to discover it broke.
+#
+# WHAT IT DOES NOT COVER, deliberately: the merge trigger. The chain fires on a registry
+# commit, commits to `develop` need a PR, and the `main-develop` ruleset has no bypass —
+# correctly, because ADR-012 invariant 3 makes that merge the human review checkpoint.
+# Automating it would mean handing this workflow a token that can bypass branch
+# protection, which is a far worse trade than leaving one link to real onboardings. So
+# this covers everything AFTER the merge, and says so rather than implying full coverage.
+#
+# COST: nothing. The tenant lives ~5 minutes on a box that is already paid for; the cost
+# plan puts a marginal tenant at EUR 0/mo and flat until ~tenant 10. No Mollie, no billing
+# row — the payment gate governs self-serve PROPOSALS, and this slug has no plan at all.
+#
+# SAFETY, in order of how badly each would go wrong:
+#   1. The slug is HARD-CODED. There is no input, so there is no untrusted-slug class and
+#      no way to point this at a real tenant.
+#   2. It refuses to run unless the on-box registry entry still says `status: retired`.
+#      If someone flips it to `provisioning` the chain owns the slug, and two things
+#      provisioning the same tenant is how you get a half-built one.
+#   3. Teardown is `if: always()`. A failed check must not leave a tenant running, and
+#      `--purge` is what makes the slug re-runnable next week.
+#   4. Concurrency group is SHARED with provision-tenant.yml and the chain, so this can
+#      never touch the box's Caddy/compose while a real provision is in flight.
+
+on:
+  schedule:
+    # Mondays 04:17 UTC. Off the hour on purpose — GitHub's scheduler queues heavily
+    # at :00 and a delayed run makes the "how long did provisioning take" number lie.
+    - cron: "17 4 * * 1"
+  workflow_dispatch: {}
+
+concurrency:
+  # SHARED with provision-tenant.yml and provision-on-registry-merge.yml: all three run
+  # provision-tenant.sh against the same box, and it touches shared Caddy + compose.
+  group: provision-tenant
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  # Reporting only — a failed smoke must reach the founder's inbox, not just this log.
+  issues: write
+
+env:
+  SLUG: smoke
+  DOMAIN: smoke.sofrapiwas.com
+  IMAGE_TAG: tenant-smoke
+  TENANT_NAME: Provisioning Smoke
+  TEMPLATE: classic
+  CURRENCY: EUR
+  EXPECTED_STATUS: retired
+  FRONTEND_REPO: piwas-21/restaurant-app-frontend
+  FRONTEND_REF: main
+  BUILD_WAIT_SECS: "1200"
+
+jobs:
+  smoke:
+    name: provision, verify, destroy
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Configure SSH (pinned host key)
+        env:
+          STAGING_SSH_KEY: ${{ secrets.STAGING_SSH_KEY }}
+          STAGING_KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$STAGING_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$STAGING_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Refuse if the fixture is not inert
+        env:
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          set -euo pipefail
+          ssh_box() {
+            ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes \
+              -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes \
+              -o ConnectTimeout=15 "${STAGING_USER}@${STAGING_HOST}" "$@"
+          }
+          # Read the status off the BOX's registry, not this checkout: the box's copy is
+          # the one provision-tenant.sh reads, and it is the one the chain would have
+          # acted on. Asking the repo would answer a different question.
+          #
+          # Fetched, then parsed HERE rather than parsed over SSH. A python snippet
+          # nested inside a remote command string is three layers of quoting deep, and
+          # its failure mode is a mangled script that prints nothing — which this guard
+          # would read as a status mismatch and report as entirely the wrong problem.
+          ssh_box "cat /opt/rumi/deploy/tenants/registry.yml" > /tmp/box-registry.yml
+          status="$(python3 -c 'import os,yaml; r=yaml.safe_load(open("/tmp/box-registry.yml")) or {}; t=(r.get("tenants") or {}).get(os.environ["SLUG"]); print(t.get("status","NO-STATUS") if t else "MISSING")')"
+          echo "on-box status for '${SLUG}': ${status}"
+          if [ "$status" != "$EXPECTED_STATUS" ]; then
+            echo "::error::registry entry '${SLUG}' has status '${status}', expected '${EXPECTED_STATUS}'."
+            echo "::error::Refusing to run. 'provisioning' means the merge chain owns this slug and may be mid-flight;"
+            echo "::error::anything else means the fixture was repurposed. Neither is safe to stand up from here."
+            exit 1
+          fi
+          # Nothing may be left over from a previous run — a surviving marker or tenant
+          # dir means the last teardown did not finish, and provisioning on top of it
+          # would test a re-provision rather than a first provision.
+          leftovers="$(ssh_box "ls -d /opt/rumi/tenants/${SLUG} 2>/dev/null || true")"
+          if [ -n "$leftovers" ]; then
+            echo "::error::/opt/rumi/tenants/${SLUG} still exists — a previous run did not tear down."
+            echo "::error::Clear it with: ./deprovision-tenant.sh ${SLUG} --drop-db --purge"
+            exit 1
+          fi
+
+      - name: Build the tenant image
+        env:
+          FRONTEND_DISPATCH_TOKEN: ${{ secrets.FRONTEND_DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          # A minute of slack: the runs list is eventually consistent, and clock skew that
+          # put `since` in the future would never match the run we just made.
+          since="$(python3 -c 'import datetime as d; print((d.datetime.now(d.timezone.utc) - d.timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
+
+          GH_TOKEN="$FRONTEND_DISPATCH_TOKEN" gh workflow run build-tenant-image.yml \
+            --repo "$FRONTEND_REPO" --ref "$FRONTEND_REF" \
+            -f tenant_domain="$DOMAIN" \
+            -f image_tag="$IMAGE_TAG" \
+            -f restaurant_name="$TENANT_NAME" \
+            -f template="$TEMPLATE" \
+            -f currency="$CURRENCY"
+
+          # Match on `run-name`, which build-tenant-image sets to
+          # "build-tenant-image <image_tag>". That seam reached main with frontend #350,
+          # so unlike the merge chain — which still carries a time-matching fallback for
+          # refs that predate it — this can REQUIRE the name and fail loudly without it.
+          # A fallback that silently picks "some recent run" is how you verify the wrong
+          # build.
+          deadline=$(( $(date +%s) + BUILD_WAIT_SECS ))
+          run_id=""
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            run_id="$(GH_TOKEN="$FRONTEND_DISPATCH_TOKEN" gh run list \
+              --repo "$FRONTEND_REPO" --workflow build-tenant-image.yml \
+              --created ">=${since}" --limit 20 \
+              --json databaseId,displayTitle,status,conclusion \
+              --jq "[.[] | select(.displayTitle == \"build-tenant-image ${IMAGE_TAG}\")] | .[0].databaseId // empty")"
+            [ -n "$run_id" ] && break
+            sleep 10
+          done
+          if [ -z "$run_id" ]; then
+            echo "::error::no build-tenant-image run named 'build-tenant-image ${IMAGE_TAG}' appeared within ${BUILD_WAIT_SECS}s."
+            echo "::error::If the frontend's run-name has changed, fix the match rather than adding a fallback."
+            exit 1
+          fi
+          echo "watching frontend run $run_id"
+          GH_TOKEN="$FRONTEND_DISPATCH_TOKEN" gh run watch "$run_id" --repo "$FRONTEND_REPO" --exit-status
+
+      - name: Provision on the box
+        env:
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes \
+            -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=15 "${STAGING_USER}@${STAGING_HOST}" \
+            "cd /opt/rumi/deploy && ./provision-tenant.sh '${SLUG}'"
+
+      - name: Verify the tenant over the public internet
+        run: |
+          set -euo pipefail
+          fail=0
+          note() { echo "::error::$1"; fail=1; }
+
+          # Give Caddy a moment to finish its first-hit certificate order. A tight loop
+          # here rather than a flat sleep, so a fast issue does not cost 30s every week.
+          for _ in $(seq 1 30); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "https://${DOMAIN}/api/health" || true)"
+            [ "$code" = "200" ] && break
+            sleep 5
+          done
+
+          # 1. It serves, on its own certificate.
+          for path in / /menu /auth/login /forgot-password /api/health; do
+            code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "https://${DOMAIN}${path}" || true)"
+            echo "  ${path} -> ${code}"
+            [ "$code" = "200" ] || note "${path} returned ${code}, expected 200"
+          done
+
+          # Responses are fetched to a FILE and parsed from it, never piped into an
+          # interpreter. Two reasons, and only the second one is about Sonar S8482:
+          # a saved body can be echoed when an assertion fails, which turns "expected
+          # X, got ''" into something diagnosable; and `curl | python3` is the shape of
+          # `curl | bash` even when the interpreter only ever treats stdin as data.
+
+          # 2. The backend is OURS, not a wildcard-caught stranger. A bare 200 proves
+          #    nothing here — a parked host, a Caddy default and the marketing site all
+          #    answer 200 — so assert the body identifies the service.
+          curl -s --max-time 20 -o /tmp/health.json "https://${DOMAIN}/api/health" || true
+          svc="$(python3 -c 'import json; print(json.load(open("/tmp/health.json")).get("service",""))' 2>/dev/null || true)"
+          echo "  /api/health service = ${svc}"
+          if [ "$svc" != "restaurant-system-api" ]; then
+            note "/api/health did not identify as restaurant-system-api (got '${svc}')"
+            echo "  body was: $(head -c 300 /tmp/health.json 2>/dev/null)"
+          fi
+
+          # 3. It has its OWN database, seeded from the registry — not a copy of another
+          #    tenant's. This is the check that a wrong db/db_role would fail.
+          curl -s --max-time 20 -o /tmp/info.json "https://${DOMAIN}/api/restaurant-info" || true
+          name="$(python3 -c 'import json; print((json.load(open("/tmp/info.json")).get("data") or {}).get("name",""))' 2>/dev/null || true)"
+          echo "  seeded restaurant name = ${name}"
+          if [ "$name" != "$TENANT_NAME" ]; then
+            note "seeded name was '${name}', expected '${TENANT_NAME}' — the registry identity did not reach the database"
+            echo "  body was: $(head -c 300 /tmp/info.json 2>/dev/null)"
+          fi
+
+          # 4. The cert is for THIS host. A wildcard or a stale cert would mean the Caddy
+          #    site block never took effect.
+          subj="$(echo | openssl s_client -servername "${DOMAIN}" -connect "${DOMAIN}:443" 2>/dev/null | openssl x509 -noout -subject 2>/dev/null || true)"
+          echo "  cert ${subj}"
+          case "$subj" in *"${DOMAIN}"*) ;; *) note "certificate subject does not mention ${DOMAIN}: ${subj}" ;; esac
+
+          [ "$fail" = "0" ] || exit 1
+          echo "all checks passed"
+
+      - name: Destroy the tenant
+        if: always()
+        env:
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          set -euo pipefail
+          # ALWAYS, including on a failed verify: a smoke tenant left running is a
+          # half-built instance on a live box and a slug that cannot be re-run. `--purge`
+          # removes /opt/rumi/tenants/<slug>, which is what next week's guard checks for.
+          ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes \
+            -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=15 "${STAGING_USER}@${STAGING_HOST}" \
+            "cd /opt/rumi/deploy && ./deprovision-tenant.sh '${SLUG}' --drop-db --purge"
+
+      - name: Confirm nothing was left behind
+        if: always()
+        env:
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          set -euo pipefail
+          left="$(ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes \
+            -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=15 "${STAGING_USER}@${STAGING_HOST}" \
+            "ls -d /opt/rumi/tenants/${SLUG} 2>/dev/null; docker ps -a --format '{{.Names}}' | grep '${SLUG}' || true")"
+          if [ -n "$left" ]; then
+            echo "::error::teardown incomplete, still present:"
+            echo "$left"
+            exit 1
+          fi
+          echo "box is clean"
+
+      - name: Report a failure where it will be seen
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # An issue, deduped by title, so a repeated failure appends rather than filling
+          # the tracker. A scheduled run has no PR to comment on and nobody watching the
+          # Actions tab on a Monday morning.
+          title="Provisioning smoke failed"
+          body="$(printf '%s\n' \
+            "The weekly provisioning smoke failed. Provisioning is the path every new" \
+            "customer takes, so treat this as broken onboarding until proven otherwise." \
+            "" \
+            "- run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            "- slug: \`${SLUG}\` (${DOMAIN})" \
+            "" \
+            "The teardown step runs on failure too, so the box should be clean — the run" \
+            "log's 'Confirm nothing was left behind' step says whether it is. If that step" \
+            "also failed, clear it by hand:" \
+            "" \
+            '```' \
+            "bash .ssh/staging.sh 'cd /opt/rumi/deploy && ./deprovision-tenant.sh ${SLUG} --drop-db --purge'" \
+            '```')"
+          existing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+                        --search "\"$title\" in:title" --json number --jq '.[0].number // empty' || true)"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+          fi
