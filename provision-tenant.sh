@@ -430,16 +430,24 @@ cat <<EOF
     Verify    : ./verify-env.sh https://${REG_DOMAIN}
     Containers: (cd ${TENANT_DIR} && docker compose ps)
     Logs      : (cd ${TENANT_DIR} && docker compose logs -f backend-${SLUG})
-    Admin     : ${REG_ADMIN_EMAIL} — the generated bootstrap password is the
-                TENANT_ADMIN_PASSWORD line in ${TENANT_DIR}/.env (mode 600).
-                Log in and CHANGE IT before handing the tenant to anyone.
-                NOTE (O3): self-service reset does NOT work on a tenant yet. The
-                backend mints a real Identity token and emails a link to
-                {FrontendBaseUrl}/reset-password, but the tenant frontend has no
-                such page (nor /forgot-password) — only the authService functions.
-                So the bootstrap password is still the only way in, and handing it
-                over is still a manual step. Do not "fix" this by telling an owner
-                to use forgot-password until those two pages exist.
+    Admin     : ${REG_ADMIN_EMAIL} — point the owner at
+                https://${REG_DOMAIN}/forgot-password and let them set their own
+                password. DO NOT read out the bootstrap password: since the
+                frontend release of 2026-07-30 the reset pages exist and work on a
+                freshly provisioned tenant (verified on the chain's first real run),
+                so no credential has to leave this box at all.
+                The generated bootstrap password is still the TENANT_ADMIN_PASSWORD
+                line in ${TENANT_DIR}/.env (mode 600) as break-glass — if you ever
+                do use it, change it immediately.
+    Modules   : ${REG_MODULES}
+                ⚠ This list is INERT until you opt the tenant in. Enforcement is an
+                operator control, not a registry field, so a freshly provisioned
+                tenant serves EVERY module regardless of what it bought. To hold
+                them to the list:
+                  echo 'TENANT_MODULES_ENFORCE=true' >> ${TENANT_DIR}/.env
+                  (cd ${TENANT_DIR} && docker compose up -d backend-${SLUG})
+                Then confirm: https://${REG_DOMAIN}/api/tenant/modules reports
+                enforced:true and exactly the ids above.
     Printer app (if the tenant buys the printer service — enter in the app's Settings):
                 API Base URL : https://${REG_DOMAIN}
                 Tenant Slug  : ${SLUG}
