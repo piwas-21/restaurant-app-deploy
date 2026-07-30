@@ -181,9 +181,19 @@ jobs:
           fi
 
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          # A SHA on this repo's own `develop`, asserted by the step above.
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+        # No `ref:` — the default branch (`develop`) tip. An earlier draft checked out
+        # `github.event.workflow_run.head_sha`, which is the textbook `workflow_run`
+        # confused-deputy shape (this job holds a box SSH key and a cross-repo dispatch
+        # token), and it bought less than it looked like it did: `provision-tenant.sh`
+        # reads the registry ON THE BOX, so the box's copy is the one that decides what is
+        # provisioned. This checkout only supplies build inputs and the intent list.
+        #
+        # The difference is a second push landing between the sync and this run. Then we
+        # read a slightly newer `develop` than the box has, and the two ways that can go
+        # are both safe and loud: an entry present here but not on the box fails with
+        # "tenant not found in registry", and an entry reverted between the two is skipped
+        # rather than provisioned. `HEAD_SHA` is still reported so the revision the box
+        # received is traceable.
 
       - name: Read provisioning intent from the registry
         # A pure read of the entry that was just reviewed and merged: everything the
@@ -199,11 +209,12 @@ jobs:
         # with a newline in its name is a bad entry, not something to guess at.
         run: |
           set -euo pipefail
-          # Pinned: an unlocked install is a supply-chain hotspot, and this parses the
-          # file that decides what gets provisioned. ubuntu-latest ships PyYAML, so the
-          # fallback is for a runner image that stops doing so.
+          # No install fallback, deliberately. ubuntu-latest ships PyYAML, and a chain
+          # that provisions infrastructure unattended should not be fetching a package
+          # off the network mid-run to parse the file that decides what it provisions.
+          # If the runner image ever drops it, failing here is the right outcome.
           python3 -c 'import yaml' 2>/dev/null \
-            || python3 -m pip install --quiet --disable-pip-version-check 'pyyaml==6.0.2'
+            || { echo "::error::python3 PyYAML missing on the runner image"; exit 1; }
           python3 - "$STATE/candidates.json" <<'PY'
           import json, re, sys, yaml
 
