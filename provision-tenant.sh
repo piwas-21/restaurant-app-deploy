@@ -433,6 +433,13 @@ cat <<EOF
     Admin     : ${REG_ADMIN_EMAIL} — the generated bootstrap password is the
                 TENANT_ADMIN_PASSWORD line in ${TENANT_DIR}/.env (mode 600).
                 Log in and CHANGE IT before handing the tenant to anyone.
+                NOTE (O3): self-service reset does NOT work on a tenant yet. The
+                backend mints a real Identity token and emails a link to
+                {FrontendBaseUrl}/reset-password, but the tenant frontend has no
+                such page (nor /forgot-password) — only the authService functions.
+                So the bootstrap password is still the only way in, and handing it
+                over is still a manual step. Do not "fix" this by telling an owner
+                to use forgot-password until those two pages exist.
     Printer app (if the tenant buys the printer service — enter in the app's Settings):
                 API Base URL : https://${REG_DOMAIN}
                 Tenant Slug  : ${SLUG}
