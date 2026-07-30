@@ -18,9 +18,14 @@ name: sync-registry-to-staging
 #   * Staging box only. The prod box's registry holds tenant 1 (managed: legacy,
 #     which provision-tenant.sh refuses to touch) and gains nothing from develop
 #     tracking; cross-box prod provisioning is out of ADR-012's scope.
-#   * Copies the file; provisions nothing. Running provision-tenant.sh stays an
-#     explicit dispatch (the founder's post-merge click), so no merge can stand up
-#     infrastructure on its own.
+#   * Copies the file and nothing else. This workflow still provisions nothing —
+#     but as of SOFRA-ONBOARDING-PLAN O3 (option B) its SUCCESS is what chains
+#     provision-on-registry-merge.yml, which builds the tenant image and runs
+#     provision-tenant.sh. So a merge to develop that adds a `status: provisioning`
+#     staging tenant now DOES stand up infrastructure, and this header no longer
+#     claims otherwise. The review checkpoint moved to the merge itself rather than
+#     disappearing (ADR-012 invariant 3); re-provisioning a live tenant is still an
+#     explicit provision-tenant.yml dispatch.
 
 on:
   push:

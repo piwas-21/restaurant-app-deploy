@@ -102,6 +102,22 @@ done
 [[ " ${REG_MODULES//,/ } " == *" core "* ]] \
   || echo "WARN: tenant '$SLUG' has no 'core' module — every instance runs the core surface regardless" >&2
 
+# Backend tag vs box (deploy #61, optional half). `:latest` is published ONLY from
+# refs/heads/main since the 2026-07-16 tag fix, so a staging-box tenant pinned to it
+# runs PRODUCTION backend code. The control plane no longer generates that pairing
+# (sofra lib/provisioning-registry.ts picks the tag from `box`), but a hand-edited
+# entry still can — and since the ADR-012 chain provisions unattended, the box has to
+# be the one that says so out loud rather than trusting the generator.
+#
+# WARN, not ERROR, and deliberately so: the pairing is *ambiguous*, not invalid. A
+# develop-tracking showcase like `demo` wants `:staging`; a real paying tenant that
+# happens to sit on the staging box arguably wants released code. Only the operator
+# knows which this is, so name the ambiguity and provision.
+if [[ "$REG_BOX" == "staging" && "${REG_BACKEND_TAG:-latest}" == "latest" ]]; then
+  echo "WARN: tenant '$SLUG' is on the staging box but rides backend_tag ':latest' (published only from main = PRODUCTION code)." >&2
+  echo "      A develop-tracking staging tenant should carry 'backend_tag: staging'. Leaving it as-is." >&2
+fi
+
 # Domain mode (ADR-002). Absent -> inferred from the domain, so pre-S10 entries
 # keep working. The consistency check is the point: a `byo` entry that actually
 # sits under sofrapiwas.com (or the reverse) sends the founder chasing the wrong

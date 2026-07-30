@@ -319,10 +319,19 @@ reaches the public container (ADR-012 invariant 2):
 ```
 /admin/provision  ──PR──▶  deploy repo (develop)  ──merge──▶  sync-registry-to-staging
                                                                       │
-   founder dispatches ◀── build-tenant-image.yml (frontend repo) ◀─────┘
-            │
-            └─▶ provision-tenant.yml (this repo) ──SSH──▶ ./provision-tenant.sh <slug>
+                                                     workflow_run     ▼
+                                        provision-on-registry-merge.yml (this repo)
+                                                    │              │
+       build-tenant-image.yml (frontend repo) ◀──────┘              │
+                                                                    ▼
+                                                    ./provision-tenant.sh <slug>  (SSH)
 ```
+
+**A merge now stands up infrastructure** (SOFRA-ONBOARDING-PLAN §2, option B, since
+O3). It did not before, and several places used to say so — this section included.
+The human checkpoint did not disappear, it *is* the merge: the founder still reads
+the proposed YAML, and that was always where the checkpoint's value lay. What went
+away is the founder copying two `gh workflow run` commands out of the PR body.
 
 1. **Propose** — `/admin/provision` (admin-only) computes the registry entry and
    opens a PR on this repo via `PROVISION_GITHUB_TOKEN`. Unset → the page shows a
@@ -333,17 +342,41 @@ reaches the public container (ADR-012 invariant 2):
 3. **Sync** — merging to `develop` fires `sync-registry-to-staging.yml`, which
    copies **only** `tenants/registry.yml` to the box. (`sync-to-staging.yml` still
    ships everything else from `main` — the templates in `tenants/` included.)
-4. **Build the tenant frontend image** — `NEXT_PUBLIC_*` are baked per domain, so
-   this must happen **before** provisioning or step 5 dies at `docker compose pull`
-   with an unknown-image error. Command in step 3 of the manual runbook above; the
-   PR body carries it pre-filled with the registry's values.
-5. **Provision** — dispatch this repo's `provision-tenant` Action with the slug
-   (`gh workflow run provision-tenant.yml -f slug=<slug>`), or let the control
-   plane `repository_dispatch` it. It SSHes to the box and runs the same idempotent
-   script. Deliberately **not** automatic on merge: a merge should never stand up
-   infrastructure by itself.
+4. **Build + provision — automatic.** The sync's success chains
+   `provision-on-registry-merge.yml`, which builds the per-tenant frontend image
+   (`build-tenant-image.yml` on the frontend repo, ~3 min — `NEXT_PUBLIC_*` are baked
+   per domain, so it must finish before provisioning or the pull fails on an image
+   nobody published), waits for it, then SSHes to the box and runs the same
+   idempotent `provision-tenant.sh`.
+
+   **What it acts on, and why it is safe to leave unattended:**
+
+   | | |
+   |---|---|
+   | eligible slug | the entry says `managed: scripts` + `box: staging` + `status: provisioning`, and the chain has not already finished it |
+   | idempotency key | `/opt/rumi/tenants/<slug>/.chain-provisioned`, written by the chain **only after `provision-tenant.sh` exits 0**. Box state, not the push diff — so a re-merge, a re-run of the sync, and a **revert-and-remerge** all skip. `deprovision-tenant.sh --purge` is what makes a slug eligible again |
+   | **not** the tenant's `.env` | `provision-tenant.sh` renders `.env` early and then keeps going through `docker compose pull`, `up -d` and a 5-minute health wait, so `.env` means "the script started". Keying on it would make a provision that died at `pull` invisible: the retry would skip and report green |
+   | `.env` but no marker | **completed**, not skipped — the script is idempotent, so the chain finishes an interrupted run and says so in its report |
+   | first provisioning only | a tenant the chain has finished is never re-applied automatically. Module upsells and corrections stay a manual `provision-tenant.yml` dispatch (below) |
+   | `box: prod` entries | reported — on the PR, not just in the run log — and never provisioned. This chain reaches the staging box only, like the sync it follows |
+   | batch cap | refuses more than 2 tenants in one run and provisions none of them |
+   | reporting | a comment on the merged registry PR, plus an issue on this repo if anything failed — **including a failed registry sync**, which is checked in a step rather than the job's `if:` precisely so the reporter still runs |
+   | trigger provenance | asserted before the checkout: the upstream run must be **this repo's `develop`**. `workflow_run` is the classic confused-deputy trigger — it carries this repo's secrets against a ref someone else chose — and this job holds the box SSH key plus a cross-repo dispatch token. A fork cannot cause it today (the sync only triggers on a `develop` push), but that is an assumption about another file, so it fails closed rather than trusting it |
+
+   Needs the repo secret **`FRONTEND_DISPATCH_TOKEN`** (fine-grained PAT, repo access
+   `piwas-21/restaurant-app-frontend` only, **Actions: read and write**, nothing else)
+   to dispatch the image build. Absent ⇒ the chain fails loudly and opens the issue
+   rather than going quietly green — the failure mode `PROVISION_GITHUB_TOKEN` taught
+   us. Calendar its expiry alongside that one.
+5. **Provision by hand** — still supported and still the fallback:
+   `gh workflow run provision-tenant.yml -f slug=<slug>` (or the control plane's
+   `repository_dispatch`). This is the route for **re-provisioning** a live tenant
+   after a registry edit, which the chain deliberately will not do. Both paths share
+   the `provision-tenant` concurrency group, so they cannot collide on the box.
 6. **Verify** — step 5 of the manual runbook (`./verify-env.sh https://<domain>`),
-   then flip the registry `status` to `active` in git.
+   then flip the registry `status` to `active` in git. The chain does not flip it
+   (ADR-007: no script edits the registry), and it does not need to — a provisioned
+   tenant is skipped on `.env` presence whatever its `status` says.
 
 **Tear down:**
 
@@ -372,10 +405,13 @@ existing tenants are unaffected. Note the 429 is **per IP**, not per account —
 two people behind one NAT share the bucket, which is what makes a mysterious
 "Too many requests" during a demo usually be someone else's attempts.
 
-**v1 limitations (tracked):** the generated admin bootstrap password should still be changed at first login (it sits in the tenant `.env`);
-Google login is off per tenant (OAuth origins); `currency/languages/modules`
-are recorded in the registry and written into the instance env but **not yet
-enforced** (S11); tenant email sends via `onboarding@resend.dev`.
+**v1 limitations (tracked):** the generated admin bootstrap password still has to be
+read off the box and changed at first login (it sits in the tenant `.env`) — the
+one-time-reveal replacement is the remaining half of O3; Google login is off per
+tenant (OAuth origins); tenant email sends via `onboarding@resend.dev`.
+`currency/languages/modules` **are** enforced at runtime as of S11/O5 — see
+§"Module runtime enforcement" above; only tenants opting in with
+`TENANT_MODULES_ENFORCE=true` are gated, and `demo` is the only one today.
 
 ---
 
