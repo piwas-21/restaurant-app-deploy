@@ -1,0 +1,562 @@
+name: provision-on-registry-merge
+
+run-name: >-
+  auto-provision after registry sync
+  ${{ github.event_name == 'workflow_dispatch' && '(manual rehearsal)' || '' }}
+
+# The ADR-012 chain, closed. SOFRA-ONBOARDING-PLAN §2 option B: merging a tenant's
+# registry PR now stands up that tenant — build the per-tenant frontend image, then
+# run provision-tenant.sh on the box — instead of leaving the founder two
+# `gh workflow run` commands to copy out of the PR body.
+#
+# This REPLACES the older operating claim that "a merge never stands up
+# infrastructure" (which sync-registry-to-staging.yml's header used to make). It does
+# NOT weaken ADR-012's invariants:
+#   1. the registry stays git-first — this workflow only READS the registry; the entry
+#      is still committed and reviewed before anything runs.
+#   2. the public sofra container gains nothing — the box SSH key stays in Actions
+#      secrets, exactly as provision-tenant.yml already has it.
+#   3. the human review checkpoint survives, and is now the merge itself. That was
+#      always where its value was (a human reading the proposed YAML); it was never
+#      improved by also making that human retype two commands. ADR-012 anticipated
+#      this: its recommendation already read "a founder (or a `workflow_run`-chained
+#      Action) then runs the script".
+#
+# WHY chained off sync-registry-to-staging rather than off the push: provision-tenant.sh
+# reads the registry ON THE BOX, so provisioning before the rsync lands fails with
+# "tenant not found in registry". `workflow_run` buys that ordering for free, and
+# inherits the sync's deliberate narrowness (develop, one file, staging box only).
+#
+# ── Idempotency (option B's second consequence) ───────────────────────────────────
+# Selection is on STATE, never on the push diff. A diff-based trigger cannot survive a
+# revert-and-remerge: reverting the entry and merging it again reproduces the same diff
+# and would provision a second time.
+#
+# The state we key on is a marker THIS CHAIN writes, `/opt/rumi/tenants/<slug>/.chain-provisioned`,
+# and the reason it is not simply the tenant's `.env` is worth spelling out, because
+# `.env` was the obvious choice and it is wrong. provision-tenant.sh renders `.env`
+# early (well before `docker compose pull`, `up -d`, and a five-minute health wait that
+# can exit 1), so `.env` means "the script started", not "the tenant is up". Keying on
+# it would make the most likely failure this chain introduces — a provision against an
+# image the frontend build never published — permanently invisible: the retry the
+# failure notice itself recommends would find `.env` present, skip, and report a green
+# "nothing to do".
+#
+# So each candidate resolves to one of three states, and each is handled differently:
+#   done     — marker present. Skip; the chain finished this tenant already.
+#   partial  — `.env` but no marker. Provision: the script is idempotent, so this
+#              completes an interrupted run. Reported as such, never silently.
+#   absent   — nothing on the box. Provision.
+#
+# Re-running the sync, re-merging, and reverting-and-remerging all land on `done` and
+# skip. `deprovision-tenant.sh --purge` removes the directory, which is precisely when
+# re-provisioning SHOULD become possible again.
+#
+# Consequence, deliberate and documented: **this chain does FIRST provisioning only.**
+# Re-provisioning a live tenant (a module upsell, a corrected name) stays an explicit
+# `provision-tenant.yml` dispatch. An unattended trigger that also re-applied to live
+# tenants would let an unrelated registry edit restart every tenant on the box.
+#
+# ── Failure visibility (option B's third consequence) ─────────────────────────────
+# Nobody is watching a terminal any more, so every outcome is reported where the
+# founder already is: a comment on the registry PR they just merged, and — on failure —
+# an issue on this repo, which reaches their inbox through normal GitHub notifications.
+# A silent automatic chain is worse than a noisy manual one.
+#
+# Which is also why the upstream sync's conclusion is checked in a STEP rather than in
+# the job's `if:`. Gating the job would mean a FAILED registry sync skips this workflow
+# entirely — no job, so no `if: always()` report step, so no comment and no issue — and
+# a failed sync is exactly the case where the founder is sitting there wondering why
+# their merge did nothing.
+
+on:
+  workflow_run:
+    workflows: [sync-registry-to-staging]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Only report what WOULD be provisioned (default true — a manual run is a rehearsal)"
+        required: false
+        type: boolean
+        default: true
+      frontend_ref:
+        description: "Frontend repo ref to build the tenant image from (default main = released code)"
+        required: false
+        type: string
+        default: main
+
+concurrency:
+  # SHARED with provision-tenant.yml on purpose: the chain and a manual dispatch must
+  # never run provision-tenant.sh against the box at the same time. The chain holds the
+  # group across the image build too (~3 min), which is the correct trade.
+  group: provision-tenant
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  # Reporting only — see the failure-visibility note above.
+  issues: write
+  pull-requests: write
+
+jobs:
+  chain:
+    name: build + provision newly merged tenants
+    runs-on: ubuntu-latest
+    # Budget: MAX_PER_RUN tenants × (BUILD_WAIT_SECS image build + ~6 min of
+    # provision-tenant.sh, whose health wait alone can take 5). Keep these three in
+    # step — a job killed mid-`provision-tenant.sh` is how a tenant ends up `partial`.
+    timeout-minutes: 60
+    env:
+      # The commit whose registry the box now has. A manual rehearsal has no upstream
+      # run, so fall back to this workflow's own ref.
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+      DRY_RUN: ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && 'true' || 'false' }}
+      FRONTEND_REF: ${{ inputs.frontend_ref || 'main' }}
+      FRONTEND_REPO: piwas-21/restaurant-app-frontend
+      # Refuse to stand up more than this many tenants in one unattended run. A mass
+      # registry edit, a bad merge or a restored backup should page the founder, not
+      # provision a fleet.
+      MAX_PER_RUN: "2"
+      BUILD_WAIT_SECS: "1200"
+      # `runner.*` is NOT an available context in job-level env (only github, needs,
+      # strategy, matrix, vars, secrets, inputs) — `${{ runner.temp }}` here would be a
+      # workflow-validation error. github.workspace is available, and checkout runs
+      # before anything writes here.
+      STATE: ${{ github.workspace }}/.chain-state
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # A git SHA from this repo's own develop push — not free text.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Prepare state dir
+        run: |
+          set -euo pipefail
+          mkdir -p "$STATE"
+          : > "$STATE/notes.md"
+          printf 'none\n' > "$STATE/stage"
+
+      - name: Verify the upstream registry sync succeeded
+        # A step, not the job's `if:` — see the header. The box may not have the entry,
+        # so provisioning would fail later with a confusing "tenant not found".
+        if: github.event_name == 'workflow_run'
+        env:
+          UPSTREAM_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          UPSTREAM_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          set -euo pipefail
+          if [ "$UPSTREAM_CONCLUSION" != "success" ]; then
+            {
+              echo "**\`sync-registry-to-staging\` ended \`$UPSTREAM_CONCLUSION\`**, so the box may not"
+              echo "have this registry revision. Nothing was provisioned."
+              echo
+              echo "Fix that run first ($UPSTREAM_URL) — re-running it is safe, it only rsyncs one file —"
+              echo "then this chain follows it automatically."
+            } >> "$STATE/notes.md"
+            echo "::error::upstream sync ended '$UPSTREAM_CONCLUSION' — not provisioning"
+            exit 1
+          fi
+
+      - name: Read provisioning intent from the registry
+        # A pure read of the entry that was just reviewed and merged: everything the
+        # build needs (domain, name, template, currency, image tag) comes from there, so
+        # the chain cannot disagree with what the founder approved.
+        #
+        # Every value is grammar-gated here, at the one seam where registry text becomes
+        # arguments to something else. `name` matters most: it is free text from a public
+        # signup form, and it is forwarded to build-tenant-image.yml, which splices it
+        # into a NEWLINE-DELIMITED `build-args:` list — so a name containing a newline
+        # could inject a second build arg (NEXT_PUBLIC_API_URL, say) into the tenant's
+        # bundle. Control characters are refused rather than stripped: a registry entry
+        # with a newline in its name is a bad entry, not something to guess at.
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml' 2>/dev/null \
+            || python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          python3 - "$STATE/candidates.json" <<'PY'
+          import json, re, sys, yaml
+
+          # fullmatch, and no trailing `$`: Python's `$` also matches just before a
+          # trailing newline, so `re.match(r"...$", "demo\n")` PASSES. provision-tenant.yml
+          # documents choosing bash `[[ =~ ]]` over `grep -q` for the same class of hole;
+          # this is its Python twin.
+          def ok(pattern, value):
+              return bool(re.fullmatch(pattern, value or ""))
+
+          SLUG = r"[a-z0-9][a-z0-9-]{1,30}"
+          HOST = r"[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+"
+          TAG = r"[A-Za-z0-9][A-Za-z0-9._-]{0,62}"
+          CTRL = re.compile(r"[\x00-\x1f\x7f]")
+
+          with open("tenants/registry.yml") as f:
+              reg = yaml.safe_load(f) or {}
+
+          candidates, elsewhere = [], []
+
+          def reject(slug, why):
+              elsewhere.append(f"{slug} ({why})")
+
+          for slug, t in sorted((reg.get("tenants") or {}).items()):
+              t = t or {}
+              if t.get("managed") != "scripts":
+                  continue                       # legacy (tenant 1) — ADR-006 protects it
+              if str(t.get("status")) != "provisioning":
+                  continue                       # active / retired — nothing is owed
+              slug = str(slug)
+              if t.get("box") != "staging":
+                  # The chain reaches the staging box only, like the sync it follows. Say
+                  # so rather than dropping it silently: a prod tenant merged in and never
+                  # provisioned is exactly the silence O3 exists to remove.
+                  reject(slug, f"box: {t.get('box')} — this chain is staging-only")
+                  continue
+              if not ok(SLUG, slug):
+                  reject(slug, "slug fails the registry grammar")
+                  continue
+              name = str(t.get("name") or "")
+              domain = str(t.get("domain") or f"{slug}.sofrapiwas.com")
+              template = str(t.get("template") or "classic")
+              currency = str(t.get("currency") or "CHF")
+              image_tag = str(t.get("frontend_tag") or f"tenant-{slug}")
+              if CTRL.search(name) or len(name) > 200:
+                  reject(slug, "name holds a control character or is over 200 chars")
+                  continue
+              if not ok(HOST, domain):
+                  reject(slug, f"domain '{domain}' is not a plausible hostname")
+                  continue
+              if template not in ("classic", "craft"):
+                  reject(slug, f"template '{template}' is not classic|craft")
+                  continue
+              if not ok(r"[A-Z]{3}", currency):
+                  reject(slug, f"currency '{currency}' is not a 3-letter ISO 4217 code")
+                  continue
+              if not ok(TAG, image_tag):
+                  reject(slug, f"frontend_tag '{image_tag}' is not a usable image tag")
+                  continue
+              candidates.append({
+                  "slug": slug, "domain": domain, "name": name,
+                  "template": template, "currency": currency, "image_tag": image_tag,
+              })
+
+          with open(sys.argv[1], "w") as f:
+              json.dump({"candidates": candidates, "elsewhere": elsewhere}, f, indent=2)
+          print(f"declared intent: {[c['slug'] for c in candidates]}")
+          if elsewhere:
+              print(f"not this box / not eligible: {elsewhere}")
+          PY
+
+      - name: Configure SSH (pinned host key)
+        # Same pattern and same secrets as provision-tenant.yml / sync-to-staging.yml.
+        env:
+          STAGING_SSH_KEY: ${{ secrets.STAGING_SSH_KEY }}
+          STAGING_KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$STAGING_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$STAGING_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Ask the box what it already has
+        # THE idempotency step — see the header for why the marker, not `.env`, is the
+        # key, and why `partial` provisions rather than skipping. Slugs go over stdin
+        # (ssh joins argv into one command string, so they must NOT be passed as remote
+        # positional args), and they are grammar-gated above either way.
+        id: filter
+        env:
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          set -euo pipefail
+          # A file rather than a bash array: no `mapfile`, so this step can also be
+          # rehearsed on a bash-3.2 laptop the way the box scripts can.
+          jq -r '.candidates[].slug' "$STATE/candidates.json" > "$STATE/slugs.txt"
+          : > "$STATE/states.txt"
+          if [ ! -s "$STATE/slugs.txt" ]; then
+            echo "no declared-intent tenants in this registry revision"
+          else
+            ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes \
+                -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes \
+                -o ConnectTimeout=15 \
+                "${STAGING_USER}@${STAGING_HOST}" \
+                'while read -r s; do
+                   d="/opt/rumi/tenants/$s"
+                   if [ -f "$d/.chain-provisioned" ]; then echo "$s done"
+                   elif [ -f "$d/.env" ]; then echo "$s partial"
+                   else echo "$s absent"; fi
+                 done' \
+              < "$STATE/slugs.txt" > "$STATE/states.txt"
+          fi
+          # slug -> state map. `[.slug] - $have` rather than `$have | index(.slug)`:
+          # inside index() the input is the array, so `.slug` there resolves against the
+          # wrong context and jq errors out.
+          jq -Rn '[inputs | split(" ") | {(.[0]): .[1]}] | add // {}' \
+            < "$STATE/states.txt" > "$STATE/states.json"
+          jq --slurpfile st "$STATE/states.json" \
+            '($st[0]) as $s
+             | .todo     = [.candidates[] | select(($s[.slug] // "absent") != "done")
+                            | . + {boxState: ($s[.slug] // "absent")}]
+             | .skipped  = [.candidates[] | select($s[.slug] == "done") | .slug]
+             | .partial  = [.candidates[] | select($s[.slug] == "partial") | .slug]' \
+            "$STATE/candidates.json" > "$STATE/plan.json"
+          count="$(jq '.todo | length' "$STATE/plan.json")"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "to provision: $(jq -c '[.todo[] | "\(.slug):\(.boxState)"]' "$STATE/plan.json")"
+          echo "already done, skipped: $(jq -c '.skipped' "$STATE/plan.json")"
+
+      - name: Refuse an implausible batch
+        # A cap, not a queue: if this trips, something edited the registry wholesale.
+        if: steps.filter.outputs.count != '0'
+        run: |
+          set -euo pipefail
+          count="$(jq '.todo | length' "$STATE/plan.json")"
+          if [ "$count" -gt "$MAX_PER_RUN" ]; then
+            {
+              echo "**Refused to auto-provision $count tenants in one run** (cap: $MAX_PER_RUN)."
+              echo
+              echo "Slugs: \`$(jq -c '[.todo[].slug]' "$STATE/plan.json")\`"
+              echo
+              echo "Nothing was provisioned. Read the registry diff, then dispatch"
+              echo '`provision-tenant.yml` per slug if the batch really is intended.'
+            } >> "$STATE/notes.md"
+            echo "::error::refused to auto-provision $count tenants in one run (cap $MAX_PER_RUN)"
+            exit 1
+          fi
+
+      - name: Check the frontend dispatch token is present
+        # PROVISION_GITHUB_TOKEN taught us that a provisioning credential which expires
+        # QUIETLY just stops the funnel (runbook §0). This one is checked before any work
+        # starts, and reported like any other failure — the founder gets an issue, not a
+        # green run that provisioned nothing.
+        if: steps.filter.outputs.count != '0' && env.DRY_RUN != 'true'
+        env:
+          FRONTEND_DISPATCH_TOKEN: ${{ secrets.FRONTEND_DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${FRONTEND_DISPATCH_TOKEN:-}" ]; then
+            {
+              echo "**\`FRONTEND_DISPATCH_TOKEN\` is not set on this repo**, so the tenant"
+              echo "frontend image cannot be built and nothing was provisioned."
+              echo
+              echo "Fix: create a fine-grained PAT scoped to \`piwas-21/restaurant-app-frontend\`"
+              echo "with **Actions: read and write** and nothing else, add it as the repo secret"
+              echo "\`FRONTEND_DISPATCH_TOKEN\`, then re-run this workflow."
+              echo "Runbook: workspace \`docs/runbooks/signup-to-live-tenant.md\` §0b."
+            } >> "$STATE/notes.md"
+            echo "::error::FRONTEND_DISPATCH_TOKEN missing — see the issue this run opens"
+            exit 1
+          fi
+
+      - name: Build tenant images and provision
+        if: steps.filter.outputs.count != '0'
+        env:
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          FRONTEND_DISPATCH_TOKEN: ${{ secrets.FRONTEND_DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          ssh_box() {
+            ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes \
+              -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes \
+              -o ConnectTimeout=15 "${STAGING_USER}@${STAGING_HOST}" "$@"
+          }
+
+          # One `gh api` call, tolerant of a transient failure. A bare
+          # `read -r a b < <(gh api ... | jq ...)` looks equivalent and is not: pipefail
+          # does not reach into a process substitution, so a rate-limited or 5xx call
+          # yields empty output, `read` hits EOF and returns 1, and `set -e` exits the
+          # step immediately with nothing in the log explaining why — right after a build
+          # was dispatched. Verified.
+          gh_json() {
+            GH_TOKEN="$FRONTEND_DISPATCH_TOKEN" gh api "$1" 2>/dev/null || true
+          }
+
+          # Wait for the dispatched frontend build by matching its run-name, which carries
+          # the image tag (frontend build-tenant-image.yml `run-name:`). Exact match, not
+          # `contains`: waiting on `tenant-demo` must not lock onto a `tenant-demo-2` run.
+          #
+          # The title match needs that `run-name:` to be on the ref we dispatch (main), so
+          # until the frontend change is released this falls back after 90s to "newest
+          # dispatch since I asked" and says so loudly. The fallback is only ambiguous if
+          # two tenant builds overlap, and even then the blast radius is bounded: waiting
+          # on the wrong run means provisioning against an image that was never published,
+          # which dies at `docker compose pull` and is reported like any other failure.
+          wait_for_build() {
+            local tag="$1" since="$2" run_id="" status="" concl="" relaxed=0 line=""
+            local deadline=$((SECONDS + BUILD_WAIT_SECS)) loosen_at=$((SECONDS + 90))
+            local runs="/repos/$FRONTEND_REPO/actions/workflows/build-tenant-image.yml/runs?event=workflow_dispatch&per_page=30"
+            while [ "$SECONDS" -lt "$deadline" ]; do
+              run_id="$(
+                gh_json "$runs" | jq -r --arg want "build-tenant-image $tag" \
+                  --arg since "$since" --argjson relaxed "$relaxed" \
+                  '[.workflow_runs // [] | .[]
+                    | select(.created_at >= $since)
+                    | select($relaxed == 1 or (.display_title // "") == $want)]
+                   | sort_by(.created_at) | last | .id // empty' 2>/dev/null || true
+              )"
+              if [ -n "$run_id" ]; then break; fi
+              if [ "$relaxed" -eq 0 ] && [ "$SECONDS" -ge "$loosen_at" ]; then
+                relaxed=1
+                echo "::warning::no build-tenant-image run titled 'build-tenant-image $tag' after 90s — matching on dispatch time instead. Is the frontend repo's run-name on '$FRONTEND_REF' yet?"
+              fi
+              sleep 10
+            done
+            if [ -z "$run_id" ]; then
+              echo "::error::no build-tenant-image run appeared for $tag"
+              return 1
+            fi
+            echo "  build run: https://github.com/$FRONTEND_REPO/actions/runs/$run_id"
+            while [ "$SECONDS" -lt "$deadline" ]; do
+              line="$(gh_json "/repos/$FRONTEND_REPO/actions/runs/$run_id" \
+                        | jq -r '"\(.status // "unknown") \(.conclusion // "-")"' 2>/dev/null || true)"
+              status="${line%% *}"; concl="${line##* }"
+              if [ "$status" = "completed" ]; then break; fi
+              sleep 15
+            done
+            if [ "$concl" != "success" ]; then
+              echo "::error::tenant image build for $tag ended '${status:-?}/${concl:-?}'"
+              return 1
+            fi
+          }
+
+          total="$(jq '.todo | length' "$STATE/plan.json")"
+          for i in $(seq 0 $((total - 1))); do
+            # Registry-derived values (free text) stay in shell variables.
+            SLUG="$(jq -r ".todo[$i].slug" "$STATE/plan.json")"
+            DOMAIN="$(jq -r ".todo[$i].domain" "$STATE/plan.json")"
+            NAME="$(jq -r ".todo[$i].name" "$STATE/plan.json")"
+            TEMPLATE="$(jq -r ".todo[$i].template" "$STATE/plan.json")"
+            CURRENCY="$(jq -r ".todo[$i].currency" "$STATE/plan.json")"
+            IMAGE_TAG="$(jq -r ".todo[$i].image_tag" "$STATE/plan.json")"
+            BOX_STATE="$(jq -r ".todo[$i].boxState" "$STATE/plan.json")"
+
+            echo "::group::$SLUG ($BOX_STATE)"
+            printf '%s\n' "$SLUG" > "$STATE/stage"
+            if [ "$BOX_STATE" = "partial" ]; then
+              echo "NOTE: $SLUG has a tenant dir but no completion marker — an earlier run"
+              echo "      stopped part-way. provision-tenant.sh is idempotent, so this finishes it."
+            fi
+
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "DRY RUN — would build $IMAGE_TAG for $DOMAIN ($TEMPLATE/$CURRENCY), then provision $SLUG"
+              printf -- '- `%s` (%s) — dry run, nothing done; would build `%s` then provision\n' \
+                "$SLUG" "$BOX_STATE" "$IMAGE_TAG" >> "$STATE/notes.md"
+              echo "::endgroup::"
+              continue
+            fi
+
+            # One minute of slack: the runs list is eventually consistent, and a clock
+            # skew that puts `since` in the future would never match the run we just made.
+            # python3 rather than `date -u -d`, which is a GNU-ism — this step is worth
+            # being able to rehearse on a laptop.
+            since="$(python3 -c 'import datetime as d; print((d.datetime.now(d.timezone.utc) - d.timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
+            echo "==> dispatching build-tenant-image for $IMAGE_TAG"
+            GH_TOKEN="$FRONTEND_DISPATCH_TOKEN" gh workflow run build-tenant-image.yml \
+              --repo "$FRONTEND_REPO" --ref "$FRONTEND_REF" \
+              -f tenant_domain="$DOMAIN" \
+              -f image_tag="$IMAGE_TAG" \
+              -f restaurant_name="$NAME" \
+              -f template="$TEMPLATE" \
+              -f currency="$CURRENCY"
+            wait_for_build "$IMAGE_TAG" "$since"
+
+            echo "==> provisioning $SLUG on the box"
+            # The marker is written ONLY after the script exits 0 — that is the whole
+            # point of it (see the header). `&&`, not `;`.
+            ssh_box "cd /opt/rumi/deploy && ./provision-tenant.sh '${SLUG}' \
+              && date -u +%Y-%m-%dT%H:%M:%SZ > '/opt/rumi/tenants/${SLUG}/.chain-provisioned'"
+
+            printf -- '- `%s` provisioned — https://%s\n' "$SLUG" "$DOMAIN" >> "$STATE/notes.md"
+            echo "::endgroup::"
+          done
+          printf 'none\n' > "$STATE/stage"
+
+      - name: Report the outcome
+        # Always — a chain nobody is watching has to say what it did, including "nothing,
+        # and here is why".
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          JOB_STATUS: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          # Not redundant with "Prepare state dir": if THAT step is what failed, the dir
+          # may not exist, and a reporter that cannot write its own body reports nothing —
+          # silence in exactly the case that most needs a notification.
+          mkdir -p "$STATE"
+          plan="$STATE/plan.json"
+          if [ ! -f "$plan" ]; then plan="$STATE/candidates.json"; fi
+          todo='[]'; skipped='[]'; elsewhere='[]'; partial='[]'
+          if [ -f "$plan" ]; then
+            todo="$(jq -c '[(.todo // .candidates // [])[].slug]' "$plan")"
+            skipped="$(jq -c '.skipped // []' "$plan")"
+            elsewhere="$(jq -c '.elsewhere // []' "$plan")"
+            partial="$(jq -c '.partial // []' "$plan")"
+          fi
+          stage="$(cat "$STATE/stage" 2>/dev/null || echo none)"
+
+          body="$STATE/body.md"
+          {
+            if [ "$JOB_STATUS" != "success" ]; then
+              echo "### Auto-provisioning FAILED"
+              echo
+              if [ "$stage" != "none" ]; then echo "Failed while working on \`$stage\`."; fi
+              echo
+              echo "Nothing after that point ran. Fix the cause and re-run this workflow, or"
+              echo "dispatch \`provision-tenant.yml\` for the slug directly. A tenant this chain"
+              echo "already finished is skipped; one it left part-way through is **completed**,"
+              echo "not skipped, so a retry is safe either way."
+            elif [ "$DRY_RUN" = "true" ]; then
+              echo "### Auto-provisioning — dry run, nothing was done"
+            elif [ "$todo" = "[]" ]; then
+              echo "### Auto-provisioning — nothing to do"
+              echo
+              echo "No entry in this registry revision declares \`status: provisioning\` on the"
+              echo "staging box that this chain has not already finished."
+            else
+              echo "### Auto-provisioning — done"
+            fi
+            echo
+            if [ -s "$STATE/notes.md" ]; then cat "$STATE/notes.md"; echo; fi
+            echo "| | |"
+            echo "|---|---|"
+            echo "| considered | \`$todo\` |"
+            echo "| completed earlier, skipped | \`$skipped\` |"
+            echo "| found part-provisioned | \`$partial\` |"
+            echo "| not this box / not eligible | \`$elsewhere\` |"
+            echo
+            echo "Registry revision \`$HEAD_SHA\` · [run log]($RUN_URL) · \`provision-on-registry-merge.yml\`"
+          } > "$body"
+          cat "$body" >> "$GITHUB_STEP_SUMMARY"
+
+          # Comment on the registry PR the founder just merged — that is the page they are
+          # looking at when they expect a tenant to appear. Quiet only when there is
+          # genuinely nothing to say: a success that provisioned nothing AND rejected
+          # nothing. An `elsewhere` entry (a `box: prod` tenant, a malformed field) MUST
+          # speak up — a merged tenant that will never be provisioned is precisely the
+          # silence this chain exists to remove, and the step summary is not somewhere
+          # anyone looks on a green run.
+          pr="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/${HEAD_SHA}/pulls" \
+                  --jq '.[0].number // empty' 2>/dev/null || true)"
+          if [ -n "$pr" ] && { [ "$JOB_STATUS" != "success" ] \
+                               || [ "$todo" != "[]" ] || [ "$elsewhere" != "[]" ]; }; then
+            gh pr comment "$pr" --repo "$GITHUB_REPOSITORY" --body-file "$body" \
+              || echo "::warning::could not comment on PR #$pr"
+          fi
+
+          # And an issue on failure, deduped by title so a repeated failure appends rather
+          # than filling the tracker.
+          if [ "$JOB_STATUS" != "success" ]; then
+            title="Auto-provisioning failed — ${stage}"
+            existing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+                          --search "\"$title\" in:title" \
+                          --json number --jq '.[0].number // empty' || true)"
+            if [ -n "$existing" ]; then
+              gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body-file "$body"
+            else
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file "$body"
+            fi
+          fi
