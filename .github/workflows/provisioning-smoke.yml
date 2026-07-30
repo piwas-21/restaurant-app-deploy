@@ -196,18 +196,32 @@ jobs:
             [ "$code" = "200" ] || note "${path} returned ${code}, expected 200"
           done
 
+          # Responses are fetched to a FILE and parsed from it, never piped into an
+          # interpreter. Two reasons, and only the second one is about Sonar S8482:
+          # a saved body can be echoed when an assertion fails, which turns "expected
+          # X, got ''" into something diagnosable; and `curl | python3` is the shape of
+          # `curl | bash` even when the interpreter only ever treats stdin as data.
+
           # 2. The backend is OURS, not a wildcard-caught stranger. A bare 200 proves
           #    nothing here — a parked host, a Caddy default and the marketing site all
           #    answer 200 — so assert the body identifies the service.
-          svc="$(curl -s --max-time 20 "https://${DOMAIN}/api/health" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("service",""))' 2>/dev/null || true)"
+          curl -s --max-time 20 -o /tmp/health.json "https://${DOMAIN}/api/health" || true
+          svc="$(python3 -c 'import json; print(json.load(open("/tmp/health.json")).get("service",""))' 2>/dev/null || true)"
           echo "  /api/health service = ${svc}"
-          [ "$svc" = "restaurant-system-api" ] || note "/api/health did not identify as restaurant-system-api (got '${svc}')"
+          if [ "$svc" != "restaurant-system-api" ]; then
+            note "/api/health did not identify as restaurant-system-api (got '${svc}')"
+            echo "  body was: $(head -c 300 /tmp/health.json 2>/dev/null)"
+          fi
 
           # 3. It has its OWN database, seeded from the registry — not a copy of another
           #    tenant's. This is the check that a wrong db/db_role would fail.
-          name="$(curl -s --max-time 20 "https://${DOMAIN}/api/restaurant-info" | python3 -c 'import json,sys; print((json.load(sys.stdin).get("data") or {}).get("name",""))' 2>/dev/null || true)"
+          curl -s --max-time 20 -o /tmp/info.json "https://${DOMAIN}/api/restaurant-info" || true
+          name="$(python3 -c 'import json; print((json.load(open("/tmp/info.json")).get("data") or {}).get("name",""))' 2>/dev/null || true)"
           echo "  seeded restaurant name = ${name}"
-          [ "$name" = "$TENANT_NAME" ] || note "seeded name was '${name}', expected '${TENANT_NAME}' — the registry identity did not reach the database"
+          if [ "$name" != "$TENANT_NAME" ]; then
+            note "seeded name was '${name}', expected '${TENANT_NAME}' — the registry identity did not reach the database"
+            echo "  body was: $(head -c 300 /tmp/info.json 2>/dev/null)"
+          fi
 
           # 4. The cert is for THIS host. A wildcard or a stale cert would mean the Caddy
           #    site block never took effect.
