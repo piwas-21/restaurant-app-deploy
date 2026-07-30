@@ -119,34 +119,55 @@ jobs:
       # provision a fleet.
       MAX_PER_RUN: "2"
       BUILD_WAIT_SECS: "1200"
-      # `runner.*` is NOT an available context in job-level env (only github, needs,
-      # strategy, matrix, vars, secrets, inputs) — `${{ runner.temp }}` here would be a
-      # workflow-validation error. github.workspace is available, and checkout runs
-      # before anything writes here.
-      STATE: ${{ github.workspace }}/.chain-state
+      # Outside `github.workspace` deliberately: `actions/checkout` cleans the
+      # workspace, so state written before the checkout would be deleted — and the
+      # trigger-provenance check below has to run BEFORE we check out its SHA.
+      # (`runner.temp` is not an available context in job-level env; only github,
+      # needs, strategy, matrix, vars, secrets, inputs are.)
+      STATE: /tmp/provision-chain
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          # A git SHA from this repo's own develop push — not free text.
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
-
       - name: Prepare state dir
         run: |
           set -euo pipefail
+          rm -rf "$STATE"
           mkdir -p "$STATE"
           : > "$STATE/notes.md"
           printf 'none\n' > "$STATE/stage"
 
-      - name: Verify the upstream registry sync succeeded
-        # A step, not the job's `if:` — see the header. The box may not have the entry,
-        # so provisioning would fail later with a confusing "tenant not found".
+      - name: Verify the upstream registry sync, and that it was ours
+        # A step, not the job's `if:` — see the header. Two things are checked, and the
+        # order matters: this runs BEFORE the checkout, because the next step checks out
+        # the triggering commit's SHA.
+        #
+        # `workflow_run` is the classic confused-deputy trigger: it runs with this repo's
+        # secrets (a box SSH key, a cross-repo dispatch token) against a ref chosen by
+        # whatever caused the upstream run. Here that cannot be a fork —
+        # sync-registry-to-staging only triggers on `push` to `develop` and manual
+        # dispatch, neither of which a fork can cause — but "cannot" is an assumption
+        # about another file, so it is asserted rather than trusted. If that workflow ever
+        # grows a `pull_request` trigger, this fails closed instead of building an image
+        # from a fork's source with our token.
         if: github.event_name == 'workflow_run'
         env:
           UPSTREAM_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           UPSTREAM_URL: ${{ github.event.workflow_run.html_url }}
+          UPSTREAM_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+          UPSTREAM_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          THIS_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          if [ "$UPSTREAM_REPO" != "$THIS_REPO" ] || [ "$UPSTREAM_BRANCH" != "develop" ]; then
+            {
+              echo "**Refused: the triggering run was not this repo's \`develop\`.**"
+              echo
+              echo "Saw \`$UPSTREAM_REPO@$UPSTREAM_BRANCH\`. This chain holds a box SSH key and a"
+              echo "cross-repo dispatch token, so it will not check out or build a ref it cannot"
+              echo "attribute to \`$THIS_REPO@develop\`."
+            } >> "$STATE/notes.md"
+            echo "::error::refusing a workflow_run from '$UPSTREAM_REPO@$UPSTREAM_BRANCH'"
+            exit 1
+          fi
           if [ "$UPSTREAM_CONCLUSION" != "success" ]; then
             {
               echo "**\`sync-registry-to-staging\` ended \`$UPSTREAM_CONCLUSION\`**, so the box may not"
@@ -158,6 +179,11 @@ jobs:
             echo "::error::upstream sync ended '$UPSTREAM_CONCLUSION' — not provisioning"
             exit 1
           fi
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # A SHA on this repo's own `develop`, asserted by the step above.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Read provisioning intent from the registry
         # A pure read of the entry that was just reviewed and merged: everything the
@@ -173,8 +199,11 @@ jobs:
         # with a newline in its name is a bad entry, not something to guess at.
         run: |
           set -euo pipefail
+          # Pinned: an unlocked install is a supply-chain hotspot, and this parses the
+          # file that decides what gets provisioned. ubuntu-latest ships PyYAML, so the
+          # fallback is for a runner image that stops doing so.
           python3 -c 'import yaml' 2>/dev/null \
-            || python3 -m pip install --quiet --disable-pip-version-check pyyaml
+            || python3 -m pip install --quiet --disable-pip-version-check 'pyyaml==6.0.2'
           python3 - "$STATE/candidates.json" <<'PY'
           import json, re, sys, yaml
 

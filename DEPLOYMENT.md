@@ -361,6 +361,7 @@ away is the founder copying two `gh workflow run` commands out of the PR body.
    | `box: prod` entries | reported — on the PR, not just in the run log — and never provisioned. This chain reaches the staging box only, like the sync it follows |
    | batch cap | refuses more than 2 tenants in one run and provisions none of them |
    | reporting | a comment on the merged registry PR, plus an issue on this repo if anything failed — **including a failed registry sync**, which is checked in a step rather than the job's `if:` precisely so the reporter still runs |
+   | trigger provenance | asserted before the checkout: the upstream run must be **this repo's `develop`**. `workflow_run` is the classic confused-deputy trigger — it carries this repo's secrets against a ref someone else chose — and this job holds the box SSH key plus a cross-repo dispatch token. A fork cannot cause it today (the sync only triggers on a `develop` push), but that is an assumption about another file, so it fails closed rather than trusting it |
 
    Needs the repo secret **`FRONTEND_DISPATCH_TOKEN`** (fine-grained PAT, repo access
    `piwas-21/restaurant-app-frontend` only, **Actions: read and write**, nothing else)
