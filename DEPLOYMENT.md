@@ -127,6 +127,58 @@ docker run --rm --network deploy_rumi \
 docker compose -f docker-compose.prod.yml up -d sofra
 ```
 
+#### Sofra STAGING control plane (develop-tracking)
+
+A second control plane at `staging.sofrapiwas.com`, on the same box and the same shared
+postgres, with its **own database** — so the deployed control plane can be exercised
+without touching production data. Opt in with `sofra-staging` in `COMPOSE_PROFILES`.
+
+Why it exists: the sofra repo's own e2e suite is already unmocked (real build, real
+Postgres, a real Mollie **test-key** payment), but it runs locally. It cannot see the
+things that only exist once deployed — env wiring, the founder-run migrate one-off,
+Caddy, and the actually-published image.
+
+One-time setup:
+
+```bash
+cd /opt/rumi/deploy
+# role + database (password = SOFRA_STAGING_DB_PASSWORD from .env)
+docker compose -f docker-compose.prod.yml exec postgres \
+  psql -U rumi -d postgres -c "CREATE ROLE sofra_staging LOGIN PASSWORD '<SOFRA_STAGING_DB_PASSWORD>'" \
+                            -c "CREATE DATABASE sofra_staging OWNER sofra_staging"
+```
+
+Every develop merge that ships migrations (same founder-run rule as prod, against the
+**`:migrate-staging`** image so the schema matches develop, not main):
+
+```bash
+docker pull ghcr.io/piwas-21/sofra:migrate-staging
+docker run --rm --network deploy_rumi \
+  -e DATABASE_URL="postgresql://sofra_staging:<SOFRA_STAGING_DB_PASSWORD>@postgres:5432/sofra_staging" \
+  ghcr.io/piwas-21/sofra:migrate-staging
+docker compose -f docker-compose.prod.yml pull sofra-staging
+docker compose -f docker-compose.prod.yml up -d sofra-staging
+```
+
+**Box `.env` keys** — `SOFRA_STAGING_DB_PASSWORD`, `SOFRA_STAGING_AUTH_SECRET` (its own,
+never prod's — a shared secret would make a staging session valid on sofrapiwas.com),
+`SOFRA_STAGING_DOMAIN=staging.sofrapiwas.com`, and `MOLLIE_API_KEY_TEST` (the **test**
+key; the service maps it to `MOLLIE_API_KEY`).
+
+**Left unset on purpose** — each is a live capability on prod that a staging copy would
+aim at the real world: `PROVISION_GITHUB_TOKEN` (would open real registry PRs),
+`RESEND_API_KEY` (would email real people), `PRINTER_TELEMETRY_SECRET`, `CRON_SECRET`
+(the retention sweep is data-loss class). Do not copy the prod values across.
+
+Not indexed: `robots.ts` disallows everything when the baked `NEXT_PUBLIC_SITE_URL` is
+not the canonical host, and Caddy adds `X-Robots-Tag: noindex` for crawlers that skip
+robots.txt. The staging image is its own bake for exactly this reason.
+
+Verify: `https://staging.sofrapiwas.com/en` 200, `/login` 200, `robots.txt` disallows,
+and `https://sofrapiwas.com/en` still 200.
+
+---
+
 **One-time admin seed** (then use the site's "Forgot password" to set your own):
 
 ```bash
