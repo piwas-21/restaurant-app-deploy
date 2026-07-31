@@ -448,6 +448,56 @@ $DEPLOY_COMPOSE exec caddy caddy reload --config /etc/caddy/Caddyfile
 # founder can hand it over if the tenant buys the printer service.
 PRINTER_KEY="$(python3 -c 'import json,sys; print((json.load(open(sys.argv[1])).get("PrinterSettings") or {}).get("ApiKey") or "")' "$TENANT_DIR/app-secrets.json" 2>/dev/null || true)"
 
+# What the RUNNING backend says about modules — never what the .env says. The .env is
+# intent; this is the effective set, and they diverge for real reasons: an empty list
+# reads as unrestricted, `core` is on regardless of the list, and an id outside the
+# catalog is dropped with a startup warning. A fresh tenant enforces by default
+# (tenants/templates/tenant.env.tpl), and this is the line that proves it did rather
+# than asserting it. Same in-network curl the health wait uses, so it needs neither
+# Caddy nor the certificate that has not been issued yet.
+MODULES_JSON="$(docker run --rm --network deploy_rumi curlimages/curl:8.10.1 \
+  -sf --max-time 10 "http://backend-${SLUG}:8080/api/tenant/modules" 2>/dev/null || true)"
+# A failure to OBSERVE must never read as "enforced, all good" — hence the third branch.
+MODULES_NOTE="$(MJ="$MODULES_JSON" REG="$(strip_ws "$REG_MODULES")" ENVF="$TENANT_DIR/.env" python3 <<'PY' || true
+import json, os
+
+pad = "\n" + " " * 16
+raw, want = os.environ.get("MJ", ""), os.environ.get("REG", "")
+try:
+    data = json.loads(raw).get("data") or {}
+    got, enforced = sorted(data["modules"]), bool(data["enforced"])
+except Exception:
+    print("? could not read /api/tenant/modules from the running backend, so this run"
+          + pad + "proves NOTHING about enforcement either way. Check it by hand:"
+          + pad + "  curl -s https://<domain>/api/tenant/modules")
+    raise SystemExit(0)
+
+expect = sorted({m for m in want.split(",") if m} | {"core"})
+if not enforced:
+    # `enforced` is ONE field with TWO causes — the backend computes
+    # `IsEnforced = Enforce && known.Length > 0`, so an empty Modules:Enabled reports
+    # false even with the flag on. Since the template now hardcodes the flag, the empty
+    # list is the LIKELIER cause of the two, and naming only the flag would send the
+    # operator to grep a line that already says `true` and stop there. `modules:` is not
+    # a required registry field (provision-tenant.sh only WARNs on a missing `core`), so
+    # an entry can legitimately arrive with none.
+    print("! NOT enforced — this tenant serves EVERY module whatever it bought."
+          + pad + "Two causes, and the registry list is the likelier one:"
+          + pad + "  * `modules:` empty in the registry — an empty list reads as"
+          + pad + "    unrestricted even with the flag on. Registry says: "
+          + (", ".join(expect) if want else "(nothing)")
+          + pad + "  * TENANT_MODULES_ENFORCE overridden in " + os.environ.get("ENVF", ".env")
+          + pad + "Fix whichever applies, then recreate this tenant's backend.")
+elif got != expect:
+    print("! enforced, but the effective set is NOT the registry list."
+          + pad + "serving : " + ", ".join(got)
+          + pad + "registry: " + ", ".join(expect)
+          + pad + "The customer is short a module they paid for, or has one they did not.")
+else:
+    print("+ enforced, and the backend confirms exactly these ids (core is always on).")
+PY
+)"
+
 cat <<EOF
 
 ==> Provisioned tenant '${SLUG}' (${REG_NAME})
@@ -465,14 +515,7 @@ cat <<EOF
                 line in ${TENANT_DIR}/.env (mode 600) as break-glass — if you ever
                 do use it, change it immediately.
     Modules   : ${REG_MODULES}
-                ⚠ This list is INERT until you opt the tenant in. Enforcement is an
-                operator control, not a registry field, so a freshly provisioned
-                tenant serves EVERY module regardless of what it bought. To hold
-                them to the list:
-                  echo 'TENANT_MODULES_ENFORCE=true' >> ${TENANT_DIR}/.env
-                  (cd ${TENANT_DIR} && docker compose up -d backend-${SLUG})
-                Then confirm: https://${REG_DOMAIN}/api/tenant/modules reports
-                enforced:true and exactly the ids above.
+                ${MODULES_NOTE}
     Printer app (if the tenant buys the printer service — enter in the app's Settings):
                 API Base URL : https://${REG_DOMAIN}
                 Tenant Slug  : ${SLUG}

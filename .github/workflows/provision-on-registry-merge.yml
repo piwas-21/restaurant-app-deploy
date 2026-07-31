@@ -505,10 +505,26 @@ jobs:
             echo "==> provisioning $SLUG on the box"
             # The marker is written ONLY after the script exits 0 — that is the whole
             # point of it (see the header). `&&`, not `;`.
+            # `tee` so the log keeps its live output AND we can read the script's own
+            # module report back out of it below.
             ssh_box "cd /opt/rumi/deploy && ./provision-tenant.sh '${SLUG}' \
-              && date -u +%Y-%m-%dT%H:%M:%SZ > '/opt/rumi/tenants/${SLUG}/.chain-provisioned'"
+              && date -u +%Y-%m-%dT%H:%M:%SZ > '/opt/rumi/tenants/${SLUG}/.chain-provisioned'" \
+              | tee "$STATE/provision-${SLUG}.log"
 
             printf -- '- `%s` provisioned — https://%s\n' "$SLUG" "$DOMAIN" >> "$STATE/notes.md"
+
+            # A tenant can provision perfectly and still serve the wrong PRODUCT. The
+            # script asks the running backend what modules it is actually enforcing and
+            # prints a line starting `!` when the answer is wrong (or `?` when it could
+            # not ask). Exiting non-zero there would be wrong — the tenant IS up — but so
+            # is letting the only copy of that finding sit in a green job log. This is the
+            # unattended path: nobody reads it. Lift it to the PR comment instead.
+            mod_line="$(grep -m1 -E '^ +[!?] (NOT enforced|enforced, but|could not read)' \
+              "$STATE/provision-${SLUG}.log" || true)"
+            if [ -n "$mod_line" ]; then
+              printf -- '  - ⚠ modules: %s — see the run log for the full note\n' \
+                "$(echo "$mod_line" | sed 's/^ *//')" >> "$STATE/notes.md"
+            fi
             echo "::endgroup::"
           done
           printf 'none\n' > "$STATE/stage"
