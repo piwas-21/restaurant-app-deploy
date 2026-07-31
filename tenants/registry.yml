@@ -25,7 +25,15 @@
 #                A record too.
 #   frontend_tag: per-tenant image tag — NEXT_PUBLIC_* are baked per domain; built by the frontend
 #                 repo's build-tenant-image.yml workflow (convention: tenant-<slug>)
-#   backend_tag:  backend image is domain-agnostic — tenants ride :latest unless pinned
+#   backend_tag:  backend image is domain-agnostic — tenants ride :latest unless pinned.
+#                 :latest = released code (published only from main) and is what the sofra
+#                 control plane emits for EVERY generated entry; :staging = the develop
+#                 build, for a SHOWCASE only, written in by hand at the review checkpoint.
+#                 The difference is not just "newer code": the staging box re-pulls and
+#                 recreates :staging tenants on every backend develop merge, which applies
+#                 develop's EF migrations to that tenant's database — not reversible by
+#                 re-pointing the image. A moving tag only tracks on the STAGING box; see
+#                 DEPLOYMENT.md §"Tenants on moving tags".
 #   currency / languages / modules: recorded per ADR-010; provisioning writes them into the
 #                 tenant instance env. The VOCABULARY is validated: modules must come from
 #                 core | kitchen-board | cashier | server | reservations | loyalty |
@@ -98,11 +106,14 @@ tenants:
     db: tenant_demo
     db_role: tenant_demo
     compose_project: tenant-demo
-    # demo is a develop-TRACKING staging surface (like RUMI staging), NOT a prod
-    # mirror — so its backend rides `:staging` (the develop build), never
-    # `:latest` (= main/prod). DEPLOYMENT.md §"do not pin BACKEND_TAG=latest".
-    # Keeps the demo backend on develop-tip so the frontend's runtime palette +
-    # newest develop-only APIs round-trip.
+    # demo is a develop-TRACKING showcase, NOT a customer — so its backend rides
+    # `:staging` (the develop build) rather than the `:latest` every generated entry
+    # gets. Keeps the demo backend on develop-tip so the frontend's runtime palette +
+    # newest develop-only APIs round-trip. This is the ONE tenant for which that trade
+    # is right: it has no paying owner, so develop's migrations landing in its database
+    # on every merge costs nothing. provision-tenant.sh prints a NOTE saying as much.
+    # (Do not read DEPLOYMENT.md §"do not pin BACKEND_TAG=latest" as support for this —
+    # that rule is about the RUMI staging STACK's own .env, not a tenant registry entry.)
     backend_tag: staging
     frontend_tag: tenant-demo
     currency: EUR
