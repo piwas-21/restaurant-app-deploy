@@ -133,18 +133,15 @@ fi
 # tag on any other box describes a tenant that is provisioned once and then frozen for
 # good, with nothing to signal it. An immutable `sha-…` pin is deliberately NOT flagged:
 # never moving is the whole point of pinning one.
-case "$BACKEND_TAG_EFFECTIVE" in
-  latest | staging)
-    if [[ "$REG_BOX" != "staging" ]]; then
-      echo "WARN: tenant '$SLUG' is on box '$REG_BOX' and rides the moving tag" >&2
-      echo "      ':$BACKEND_TAG_EFFECTIVE', but only the STAGING box refreshes tenants" >&2
-      echo "      (refresh-tenant-images.sh is called by the backend repo's" >&2
-      echo "      deploy-staging.yml and refresh-tenants.yml, both of which SSH to the" >&2
-      echo "      staging box only). Nothing will ever roll this tenant — pin an explicit" >&2
-      echo "      'sha-…' if that is intended, or plan to refresh it by hand." >&2
-    fi
-    ;;
-esac
+if [[ "$BACKEND_TAG_EFFECTIVE" == "latest" || "$BACKEND_TAG_EFFECTIVE" == "staging" ]] \
+   && [[ "$REG_BOX" != "staging" ]]; then
+  echo "WARN: tenant '$SLUG' is on box '$REG_BOX' and rides the moving tag" >&2
+  echo "      ':$BACKEND_TAG_EFFECTIVE', but only the STAGING box refreshes tenants" >&2
+  echo "      (refresh-tenant-images.sh is called by the backend repo's" >&2
+  echo "      deploy-staging.yml and refresh-tenants.yml, both of which SSH to the" >&2
+  echo "      staging box only). Nothing will ever roll this tenant — pin an explicit" >&2
+  echo "      'sha-…' if that is intended, or plan to refresh it by hand." >&2
+fi
 
 # Domain mode (ADR-002). Absent -> inferred from the domain, so pre-S10 entries
 # keep working. The consistency check is the point: a `byo` entry that actually
