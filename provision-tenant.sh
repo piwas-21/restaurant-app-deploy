@@ -102,6 +102,22 @@ done
 [[ " ${REG_MODULES//,/ } " == *" core "* ]] \
   || echo "WARN: tenant '$SLUG' has no 'core' module — every instance runs the core surface regardless" >&2
 
+# Backend tag vs box (deploy #61, optional half). `:latest` is published ONLY from
+# refs/heads/main since the 2026-07-16 tag fix, so a staging-box tenant pinned to it
+# runs PRODUCTION backend code. The control plane no longer generates that pairing
+# (sofra lib/provisioning-registry.ts picks the tag from `box`), but a hand-edited
+# entry still can — and since the ADR-012 chain provisions unattended, the box has to
+# be the one that says so out loud rather than trusting the generator.
+#
+# WARN, not ERROR, and deliberately so: the pairing is *ambiguous*, not invalid. A
+# develop-tracking showcase like `demo` wants `:staging`; a real paying tenant that
+# happens to sit on the staging box arguably wants released code. Only the operator
+# knows which this is, so name the ambiguity and provision.
+if [[ "$REG_BOX" == "staging" && "${REG_BACKEND_TAG:-latest}" == "latest" ]]; then
+  echo "WARN: tenant '$SLUG' is on the staging box but rides backend_tag ':latest' (published only from main = PRODUCTION code)." >&2
+  echo "      A develop-tracking staging tenant should carry 'backend_tag: staging'. Leaving it as-is." >&2
+fi
+
 # Domain mode (ADR-002). Absent -> inferred from the domain, so pre-S10 entries
 # keep working. The consistency check is the point: a `byo` entry that actually
 # sits under sofrapiwas.com (or the reverse) sends the founder chasing the wrong
@@ -414,9 +430,24 @@ cat <<EOF
     Verify    : ./verify-env.sh https://${REG_DOMAIN}
     Containers: (cd ${TENANT_DIR} && docker compose ps)
     Logs      : (cd ${TENANT_DIR} && docker compose logs -f backend-${SLUG})
-    Admin     : ${REG_ADMIN_EMAIL} — the generated bootstrap password is the
-                TENANT_ADMIN_PASSWORD line in ${TENANT_DIR}/.env (mode 600).
-                Log in and CHANGE IT before handing the tenant to anyone.
+    Admin     : ${REG_ADMIN_EMAIL} — point the owner at
+                https://${REG_DOMAIN}/forgot-password and let them set their own
+                password. DO NOT read out the bootstrap password: since the
+                frontend release of 2026-07-30 the reset pages exist and work on a
+                freshly provisioned tenant (verified on the chain's first real run),
+                so no credential has to leave this box at all.
+                The generated bootstrap password is still the TENANT_ADMIN_PASSWORD
+                line in ${TENANT_DIR}/.env (mode 600) as break-glass — if you ever
+                do use it, change it immediately.
+    Modules   : ${REG_MODULES}
+                ⚠ This list is INERT until you opt the tenant in. Enforcement is an
+                operator control, not a registry field, so a freshly provisioned
+                tenant serves EVERY module regardless of what it bought. To hold
+                them to the list:
+                  echo 'TENANT_MODULES_ENFORCE=true' >> ${TENANT_DIR}/.env
+                  (cd ${TENANT_DIR} && docker compose up -d backend-${SLUG})
+                Then confirm: https://${REG_DOMAIN}/api/tenant/modules reports
+                enforced:true and exactly the ids above.
     Printer app (if the tenant buys the printer service — enter in the app's Settings):
                 API Base URL : https://${REG_DOMAIN}
                 Tenant Slug  : ${SLUG}

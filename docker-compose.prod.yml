@@ -46,6 +46,8 @@ services:
       # Encrypt issuance for a placeholder host. Prod's ./Caddyfile ignores both.
       SOFRA_DOMAIN: "${SOFRA_DOMAIN:-http://sofra-unset.localhost}"
       SOFRA_WWW_DOMAIN: "${SOFRA_WWW_DOMAIN:-http://www.sofra-unset.localhost}"
+      # Same http:// placeholder rule for the develop-tracking staging control plane.
+      SOFRA_STAGING_DOMAIN: "${SOFRA_STAGING_DOMAIN:-http://sofra-staging-unset.localhost}"
     volumes:
       # Which Caddyfile to mount is env-selectable so the SAME compose file drives
       # both boxes: prod leaves CADDYFILE unset (-> ./Caddyfile, www.rumirestaurant.ch),
@@ -201,6 +203,59 @@ services:
     volumes:
       # DIRECTORY mount (like caddy-tenants): rsync replaces registry.yml by
       # inode, a single-file mount would go stale after the first sync.
+      - ./tenants:/data/tenants:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [rumi]
+
+  # ── sofra STAGING (a second control plane, develop-tracking) ──────────────────
+  # Same box, same shared postgres, its OWN database. Exists so the control plane can
+  # be exercised against a DEPLOYED instance — env wiring, the founder-run migrate
+  # one-off, Caddy, and the actually-published image — none of which the repo's local
+  # e2e suite can see, however unmocked it is.
+  #
+  # profiles: [sofra-staging] — opt-in, exactly like the prod one. A box that does not
+  # list it in COMPOSE_PROFILES never starts it.
+  #
+  # What is DELIBERATELY EMPTY here is the important part. Each of these is a live
+  # capability on the prod service, and a staging copy holding it would act on the real
+  # world with test data:
+  #   PROVISION_GITHUB_TOKEN — would let a staging run open REAL registry PRs on the
+  #                            deploy repo. /admin/provision shows "not configured".
+  #   RESEND_API_KEY         — would email REAL people from a staging signup. Unset, the
+  #                            app logs the mail instead of sending it.
+  #   PRINTER_TELEMETRY_SECRET — would ingest real tenant fleet telemetry into staging.
+  #   CRON_SECRET            — the retention sweep is DATA-LOSS class; no bearer, no run.
+  # Do not "fix" any of these by copying the prod value across.
+  sofra-staging:
+    image: ghcr.io/piwas-21/sofra:${SOFRA_STAGING_TAG:-staging}
+    pull_policy: always
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: 1.0
+    profiles: [sofra-staging]
+    environment:
+      # Own database + role on the shared server. NEVER point this at `sofra`: the whole
+      # value of the environment is that a destructive test cannot reach production data.
+      DATABASE_URL: "postgresql://sofra_staging:${SOFRA_STAGING_DB_PASSWORD:-}@postgres:5432/sofra_staging"
+      # Its own secret — sharing prod's would make a staging session token valid on
+      # sofrapiwas.com.
+      AUTH_SECRET: "${SOFRA_STAGING_AUTH_SECRET:-}"
+      NEXTAUTH_URL: "${SOFRA_STAGING_APP_URL:-https://staging.sofrapiwas.com}"
+      # The TEST Mollie key, and the reason this environment is worth having: billing
+      # flows become exercisable against a deployed control plane. The app itself
+      # refuses the dangerous combination — `webhookUrl()` throws if MOLLIE_WEBHOOK_URL
+      # is set alongside a non-test key — but the real guard is here: never put a
+      # `live_` key on this service.
+      MOLLIE_API_KEY: "${MOLLIE_API_KEY_TEST:-}"
+      # Read-only, same synced registry as prod, so /admin/tenants renders. The control
+      # plane never writes it (ADR-003), and the mount below is :ro regardless.
+      TENANT_REGISTRY_PATH: /data/tenants/registry.yml
+      RETENTION_ENABLED: "false"
+      SENTRY_DSN: "${SENTRY_DSN:-}"
+      SENTRY_ENVIRONMENT: "${SOFRA_STAGING_SENTRY_ENVIRONMENT:-sofra-staging}"
+    volumes:
       - ./tenants:/data/tenants:ro
     depends_on:
       postgres:

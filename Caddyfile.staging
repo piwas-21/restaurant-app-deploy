@@ -72,6 +72,20 @@
 	redir https://{$SOFRA_DOMAIN}{uri} permanent
 }
 
+# ── sofra STAGING (develop-tracking control plane) ────────────────────────────
+# Same shape as the block above, one addition: X-Robots-Tag. `robots.ts` already
+# disallows everything on a non-canonical host (lib/seo.ts IS_CANONICAL_SITE), and this
+# is the belt to that pair of braces — a crawler that never fetches robots.txt still
+# gets told, on every response, not to index a public twin of the marketing site.
+#
+# Empty {$SOFRA_STAGING_DOMAIN} resolves to the http:// placeholder compose injects, so
+# this file parses on a box that does not run the profile.
+{$SOFRA_STAGING_DOMAIN} {
+	encode zstd gzip
+	header X-Robots-Tag "noindex, nofollow, noarchive"
+	reverse_proxy sofra-staging:3000
+}
+
 # ── Sofra tenant instances (S14 provisioning v1, sofra ADR-001/003) ───────────
 # Per-tenant site blocks rendered on the box by provision-tenant.sh into
 # caddy-tenants/ (dir-mounted at /etc/caddy/tenants). The committed

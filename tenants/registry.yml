@@ -126,3 +126,38 @@ tenants:
     # IP). A showcase is meant to be poked at, and 5 fumbled logins locked the
     # single demo admin out for a quarter of an hour. Production tenants keep the
     # tight default — see the note in templates/docker-compose.tenant.yml.tpl.
+
+  # PERMANENT TEST FIXTURE — the provisioning smoke suite's tenant
+  # (.github/workflows/provisioning-smoke.yml). Nothing runs here between smoke
+  # runs: the suite stands this tenant up, checks it, and destroys it again.
+  #
+  # `status: retired` is load-bearing twice over:
+  #   * the merge chain selects on `status: provisioning`, so it will never pick
+  #     this entry up — a registry merge cannot accidentally stand up the fixture;
+  #   * `checkSlug` counts EVERY registry slug as taken regardless of status, so
+  #     the name is still reserved against a customer signing up as `smoke` and
+  #     colliding with a run.
+  #
+  # Do NOT flip this to `provisioning`. That hands the entry to the chain, which
+  # would provision it on the next registry merge and leave it running.
+  smoke:
+    name: Provisioning Smoke
+    status: retired
+    managed: scripts
+    box: staging
+    domain: smoke.sofrapiwas.com
+    domain_mode: subdomain
+    db: tenant_smoke
+    db_role: tenant_smoke
+    compose_project: tenant-smoke
+    # `staging` = the develop build, like demo: this box tracks develop, and the
+    # point of the suite is to catch a break before it reaches a real tenant.
+    backend_tag: staging
+    frontend_tag: tenant-smoke
+    currency: EUR
+    languages: [en]
+    modules: [core]
+    template: classic
+    admin_email: mahmutkaya.nl+smoke@gmail.com
+    city: Amsterdam
+
