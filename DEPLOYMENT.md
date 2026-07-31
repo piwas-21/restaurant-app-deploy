@@ -174,8 +174,21 @@ Not indexed: `robots.ts` disallows everything when the baked `NEXT_PUBLIC_SITE_U
 not the canonical host, and Caddy adds `X-Robots-Tag: noindex` for crawlers that skip
 robots.txt. The staging image is its own bake for exactly this reason.
 
-Verify: `https://staging.sofrapiwas.com/en` 200, `/login` 200, `robots.txt` disallows,
-and `https://sofrapiwas.com/en` still 200.
+Verify with the suite, not by hand — `npm run test:e2e:staging` in the sofra repo
+(`tests/e2e/staging-live.spec.ts`). It checks the entry points serve, that staging is
+noindex in **both** robots.txt and the header while production is still crawlable, that an
+admin can sign in (which is what proves the box env reached the container and the migrate
+one-off actually ran), that a Mollie key is wired in, and — asserted positively — that
+provisioning is still DISARMED. It is read-only: no account, no payment, no row.
+
+It needs `STAGING_ADMIN='{email: …, password: …}'` in the sofra repo's gitignored `.env`.
+**The quotes are load-bearing**: `scripts/e2e-suite.sh` sources that file with
+`set -a && . ./.env`, and bash reads an unquoted brace value as an assignment followed by a
+command, which kills the whole local e2e suite under `set -euo pipefail`.
+
+Do not run the rest of the Playwright directory against this host — those specs mutate
+(real signups, real test-key payments). `playwright.config.ts` enforces the split both
+ways, so an `E2E_REMOTE` run cannot reach them however it is invoked.
 
 ---
 
