@@ -102,21 +102,49 @@ done
 [[ " ${REG_MODULES//,/ } " == *" core "* ]] \
   || echo "WARN: tenant '$SLUG' has no 'core' module — every instance runs the core surface regardless" >&2
 
-# Backend tag vs box (deploy #61, optional half). `:latest` is published ONLY from
-# refs/heads/main since the 2026-07-16 tag fix, so a staging-box tenant pinned to it
-# runs PRODUCTION backend code. The control plane no longer generates that pairing
-# (sofra lib/provisioning-registry.ts picks the tag from `box`), but a hand-edited
-# entry still can — and since the ADR-012 chain provisions unattended, the box has to
-# be the one that says so out loud rather than trusting the generator.
+# Backend tag (deploy #61, optional half; reframed 2026-07-31). `:latest` is published
+# ONLY from refs/heads/main and `:staging` ONLY from develop, so the TAG — not the box —
+# decides which code a tenant runs. sofra lib/provisioning-registry.ts now always emits
+# `latest`; a hand-edited entry can still say anything, and since the ADR-012 chain
+# provisions unattended, the box has to say the consequence out loud.
 #
-# WARN, not ERROR, and deliberately so: the pairing is *ambiguous*, not invalid. A
-# develop-tracking showcase like `demo` wants `:staging`; a real paying tenant that
-# happens to sit on the staging box arguably wants released code. Only the operator
-# knows which this is, so name the ambiguity and provision.
-if [[ "$REG_BOX" == "staging" && "${REG_BACKEND_TAG:-latest}" == "latest" ]]; then
-  echo "WARN: tenant '$SLUG' is on the staging box but rides backend_tag ':latest' (published only from main = PRODUCTION code)." >&2
-  echo "      A develop-tracking staging tenant should carry 'backend_tag: staging'. Leaving it as-is." >&2
+# This block used to warn on `box: staging` + `:latest`, back when the generator derived
+# the tag from the box. That is now the correct default for every paying tenant, so the
+# old warning would have fired on every real customer — and a warning that fires on the
+# legitimate case teaches the operator to ignore it. Two separate questions are asked
+# instead, because they have different answers and different fixes:
+#
+#   1. WHICH CODE does this tenant run?      -> informational; only `:staging` is notable
+#   2. WILL ANYTHING EVER ROLL IT?           -> a real defect when the answer is no
+BACKEND_TAG_EFFECTIVE="${REG_BACKEND_TAG:-latest}"
+
+if [[ "$BACKEND_TAG_EFFECTIVE" == "staging" ]]; then
+  # Not a verdict: `demo` wants exactly this. Both readings are named so that whichever
+  # one applies, the operator recognises it rather than reading past it.
+  echo "NOTE: tenant '$SLUG' rides backend_tag ':staging' — the DEVELOP build." >&2
+  echo "      Every backend develop merge re-pulls and recreates it, applying develop's" >&2
+  echo "      migrations to its database. Correct for a showcase; wrong for a paying" >&2
+  echo "      customer, who should carry 'backend_tag: latest'." >&2
 fi
+
+# Q2: a MOVING tag is only useful if something on THIS box re-pulls it when it moves.
+# Both refreshers run on the staging box and nowhere else — `:staging` from the backend's
+# deploy-staging.yml, `:latest` from refresh-tenants.yml. So a moving
+# tag on any other box describes a tenant that is provisioned once and then frozen for
+# good, with nothing to signal it. An immutable `sha-…` pin is deliberately NOT flagged:
+# never moving is the whole point of pinning one.
+case "$BACKEND_TAG_EFFECTIVE" in
+  latest | staging)
+    if [[ "$REG_BOX" != "staging" ]]; then
+      echo "WARN: tenant '$SLUG' is on box '$REG_BOX' and rides the moving tag" >&2
+      echo "      ':$BACKEND_TAG_EFFECTIVE', but only the STAGING box refreshes tenants" >&2
+      echo "      (refresh-tenant-images.sh is called by the backend repo's" >&2
+      echo "      deploy-staging.yml and refresh-tenants.yml, both of which SSH to the" >&2
+      echo "      staging box only). Nothing will ever roll this tenant — pin an explicit" >&2
+      echo "      'sha-…' if that is intended, or plan to refresh it by hand." >&2
+    fi
+    ;;
+esac
 
 # Domain mode (ADR-002). Absent -> inferred from the domain, so pre-S10 entries
 # keep working. The consistency check is the point: a `byo` entry that actually
