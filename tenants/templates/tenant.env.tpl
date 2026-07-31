@@ -26,17 +26,28 @@ TENANT_ADMIN_PASSWORD=__ADMIN_PASSWORD__
 TENANT_CURRENCY=__CURRENCY__
 TENANT_LANGUAGES=__LANGUAGES__
 TENANT_MODULES=__MODULES__
-# Module RUNTIME ENFORCEMENT opt-in (backend #268 / sofra ADR-010). Unset = the
-# backend serves every module whatever TENANT_MODULES says — which is what every
-# tenant did before enforcement existed, and what RUMI must keep doing forever.
-# Set to exactly `true` or `false` here (NOT in the registry) and restart this
-# tenant's backend to make its module list binding. It binds to a C# bool that the
-# backend resolves at startup, so `1`/`yes`/`on` do not mean true — they throw before
-# the app listens and crash-loop the container. provision-tenant.sh rejects them.
-# Roll out newest tenant first; verify with
+# Module RUNTIME ENFORCEMENT (backend #268 / sofra ADR-010). This file is rendered
+# ONLY when a tenant is provisioned for the FIRST time, so `true` here is the
+# birth default: a new tenant is held to the TENANT_MODULES list above from its
+# first boot. That is what the customer paid for — before this line was active a
+# tenant buying Core (€19) received all eight modules, and closing that gap was a
+# per-tenant step nothing in the funnel performed.
+#
+# It stays an OPERATOR control, not a registry field: provision-tenant.sh only
+# *validates* this line on a re-provision and never rewrites or clears it, so a
+# tenant you deliberately un-enforce stays un-enforced across registry edits.
+#
+# Exactly `true` or `false`. It binds to a C# bool the backend resolves at startup,
+# so `1`/`yes`/`on` do not mean true — they throw before the app listens and
+# crash-loop the container. provision-tenant.sh rejects them.
+#
+# Two safety valves mean this default cannot stand a tenant up crippled: an empty
+# TENANT_MODULES reads as unrestricted, and `core` is always on regardless of the
+# list. Verify the effective set against the running instance, never this file:
 #   curl -s https://<domain>/api/tenant/modules
-# which reports the effective set and whether it is being enforced.
-#   TENANT_MODULES_ENFORCE=true
+# To un-enforce: set `false` here and `docker compose up -d --force-recreate
+# backend-<slug>`.
+TENANT_MODULES_ENFORCE=true
 # UI template (frontend ADR-006 / S15 T2): classic | craft, from the registry's
 # optional `template` field (absent -> classic; anything else fails provisioning).
 # NEXT_PUBLIC_* are baked at frontend image build, so this line records intent —

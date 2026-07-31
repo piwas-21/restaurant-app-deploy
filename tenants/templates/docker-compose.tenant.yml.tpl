@@ -82,9 +82,13 @@ services:
       #                       The legacy RUMI install runs the MAIN compose project, not
       #                       this template, so it never gets these keys at all; if absent
       #                       ever came to mean "off", tenant 1 would lose its whole app.
-      #   Modules__Enforce  — off unless a tenant opts in. Set TENANT_MODULES_ENFORCE=true
-      #                       in the tenant's own .env on the box and restart its backend.
-      #                       Rolled out NEWEST TENANT FIRST; RUMI is never flipped.
+      #   Modules__Enforce  — ON for every tenant provisioned since 2026-08-01: the .env
+      #                       template renders TENANT_MODULES_ENFORCE=true on the FRESH
+      #                       path, so a customer is held to what they bought from their
+      #                       first boot. The `:-false}` default below is still load-bearing
+      #                       — it is what stops a tenant provisioned BEFORE that (whose
+      #                       .env has no such line) from silently flipping on re-provision.
+      #                       RUMI is never flipped: it never gets these keys at all.
       #
       # An upgrade is therefore: edit the registry -> re-provision (rewrites the .env)
       # -> restart the tenant backend. No image rebuild — that is exactly why the flags

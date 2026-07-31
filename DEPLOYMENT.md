@@ -270,27 +270,47 @@ plane later calls the same scripts (ADR-003 — no parallel mechanism).
 
 ### Module runtime enforcement (S11 — backend #268, sofra ADR-010)
 
-The registry's `modules:` list is **enforced at runtime**, but only for a tenant that has
-opted in. Without the opt-in the backend serves every module regardless — which is what
-every tenant did before enforcement existed, and what RUMI must keep doing.
+The registry's `modules:` list is **enforced at runtime**. Since 2026-08-01 a tenant
+provisioned for the **first** time enforces by default — `tenants/templates/tenant.env.tpl`
+renders `TENANT_MODULES_ENFORCE=true`, so a customer is held to what they bought from their
+first boot. Everything below is about the tenants that default did **not** reach.
+
+**Why the default moved.** `provision-tenant.sh` wrote `TENANT_MODULES` and not the enforce
+flag, so every tenant the merge chain stood up served all eight modules whatever it paid for —
+a customer on Core (€19) received the lot. The flip was a manual per-tenant step nothing in the
+funnel performed, which made it a step that did not happen.
+
+**It is still an OPERATOR control, not a registry field.** `provision-tenant.sh` only
+*validates* the line on a re-provision and never rewrites or clears it, so a tenant you
+deliberately un-enforce stays un-enforced across registry edits. The default is a birth value,
+not a policy applied on every run.
 
 **RUMI is never flipped, and cannot be.** It runs the main `deploy` compose project, not the
 tenant template, so it never receives `Modules__*` at all — and an absent list means
 *unrestricted*, deliberately. Its registry `modules:` line documents what tenant 1 has; it is
 not a control.
 
-**First, make sure the tenant's `.env` carries the list you think it does.** Until this shipped,
-`TENANT_MODULES` was written *only* when a tenant's `.env` was first created — a later registry
-edit never reached it. Re-provision now re-applies it, but a tenant that has not been
-re-provisioned since still holds its original list:
+**A missing list is safe; a WRONG list is not, and that asymmetry is the point.** An empty
+`TENANT_MODULES` reads as unrestricted (the backend computes `IsEnforced = Enforce && known
+.Length > 0`, so it reports `enforced:false` even with the flag on), and `core` is on
+regardless. So the default cannot stand a tenant up with no app. But a **partial** list is
+binding — `[core, cashier]` serves core and cashier and nothing else. That is exactly what
+enforcement is for, and it means **the registry entry is now the thing to read carefully at
+the merge checkpoint**: an id missing there is a feature the customer paid for and will not
+get. `/api/tenant/modules` on the live tenant is the check.
+
+**Turning it on for a tenant provisioned before the default** (roll out newest first, never
+RUMI). First make sure the `.env` carries the list you think it does — before deploy #68,
+`TENANT_MODULES` was written *only* on the fresh-render path, so a later registry edit never
+reached a tenant that has not been re-provisioned since:
 
 ```bash
 grep TENANT_MODULES= /opt/rumi/tenants/<slug>/.env     # must match the registry
 cd /opt/rumi/deploy && ./provision-tenant.sh <slug>    # if it does not
 ```
 
-**Then turn it on** (roll out newest first, never RUMI). Set-or-replace, because a tenant
-turned off earlier already has the line and a presence check would silently skip it:
+Then set-or-replace, because a tenant turned off earlier already has the line and a presence
+check would silently skip it:
 
 ```bash
 cd /opt/rumi/tenants/<slug>
@@ -319,10 +339,11 @@ re-provision (re-applies it to the `.env`) → restart that tenant's backend. **
 rebuild** — the flags are served from the backend rather than baked as `NEXT_PUBLIC_*`,
 precisely so an upsell is not a rebuild.
 
-**The flip survives a re-provision.** `TENANT_MODULES_ENFORCE` is an operator rollout control,
-deliberately absent from the registry, so `provision-tenant.sh` only *validates* it — it never
-rewrites or clears it. Re-provisioning a flipped tenant to pick up a registry edit leaves
-enforcement on.
+**Provisioning now reports the answer to this question itself.** `provision-tenant.sh` ends by
+querying the tenant's own `/api/tenant/modules` over the internal docker network and printing
+what the **running backend** says — enforced or not, and whether the effective ids are the
+registry list. A run that could not reach the endpoint says so rather than staying quiet, so
+"no warning" is never the same as "verified".
 
 **Give the UI a second request before believing it.** The frontend reads the module set
 server-side with a 30 s ISR cache, per path. After a flip the first request to each route
@@ -481,13 +502,14 @@ existing tenants are unaffected. Note the 429 is **per IP**, not per account —
 two people behind one NAT share the bucket, which is what makes a mysterious
 "Too many requests" during a demo usually be someone else's attempts.
 
-**v1 limitations (tracked):** the generated admin bootstrap password still has to be
-read off the box and changed at first login (it sits in the tenant `.env`) — the
-one-time-reveal replacement is the remaining half of O3; Google login is off per
-tenant (OAuth origins); tenant email sends via `onboarding@resend.dev`.
-`currency/languages/modules` **are** enforced at runtime as of S11/O5 — see
-§"Module runtime enforcement" above; only tenants opting in with
-`TENANT_MODULES_ENFORCE=true` are gated, and `demo` is the only one today.
+**v1 limitations (tracked):** Google login is off per tenant (OAuth origins); tenant
+email sends via `onboarding@resend.dev`. The bootstrap password no longer has to be
+handed over — since the frontend release of 2026-07-30 a freshly provisioned tenant
+serves `/forgot-password` and `/reset-password`, so the owner sets their own password
+and the generated one stays on the box as break-glass. `currency/languages/modules`
+**are** enforced at runtime as of S11/O5 — see §"Module runtime enforcement" above.
+Every tenant provisioned since 2026-08-01 enforces from its first boot; older ones are
+gated only if an operator flipped them (`demo` is the one such tenant).
 
 ---
 
