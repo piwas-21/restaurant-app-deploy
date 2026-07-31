@@ -174,8 +174,32 @@ Not indexed: `robots.ts` disallows everything when the baked `NEXT_PUBLIC_SITE_U
 not the canonical host, and Caddy adds `X-Robots-Tag: noindex` for crawlers that skip
 robots.txt. The staging image is its own bake for exactly this reason.
 
-Verify: `https://staging.sofrapiwas.com/en` 200, `/login` 200, `robots.txt` disallows,
-and `https://sofrapiwas.com/en` still 200.
+**Confirming what is actually deployed** (either sofra environment): `curl -s https://<host>/api/health`
+returns the commit the running image was baked from —
+
+```bash
+curl -s https://staging.sofrapiwas.com/api/health
+# {"status":"ok","service":"sofra-control-plane","version":"<sha>","builtAt":"…"}
+```
+
+Use it to confirm a rollout landed, or which build to roll back to. `status: "ok"` means the
+process serves HTTP — it does **not** mean the database is reachable, by design.
+
+Verify with the suite, not by hand — `npm run test:e2e:staging` in the sofra repo
+(`tests/e2e/staging-live.spec.ts`). It checks the entry points serve, that staging is
+noindex in **both** robots.txt and the header while production is still crawlable, that an
+admin can sign in (which is what proves the box env reached the container and the migrate
+one-off actually ran), that a Mollie key is wired in, and — asserted positively — that
+provisioning is still DISARMED. It is read-only: no account, no payment, no row.
+
+It needs `STAGING_ADMIN='{email: …, password: …}'` in the sofra repo's gitignored `.env`.
+**The quotes are load-bearing**: `scripts/e2e-suite.sh` sources that file with
+`set -a && . ./.env`, and bash reads an unquoted brace value as an assignment followed by a
+command, which kills the whole local e2e suite under `set -euo pipefail`.
+
+Do not run the rest of the Playwright directory against this host — those specs mutate
+(real signups, real test-key payments). `playwright.config.ts` enforces the split both
+ways, so an `E2E_REMOTE` run cannot reach them however it is invoked.
 
 ---
 
@@ -492,8 +516,27 @@ the fleet endpoints missing while its registry config was already correct
 It reads `tenants/registry.yml`, so a second develop-tracking tenant is covered
 the day it is registered — no workflow edit, no hardcoded slug. Nothing matched
 is a clean exit 0; a tenant that fails to roll is reported and exits non-zero
-(the point is to stop being silent). The backend repo's `deploy-staging.yml`
-calls it after rolling the RUMI staging backend, under the same deploy flock.
+(the point is to stop being silent).
+
+**Both callers live in the backend repo, and both run on the STAGING box** —
+that is where every `managed: scripts` tenant lives, because it is where the
+control plane runs:
+
+| Caller | When | Refreshes |
+|---|---|---|
+| `deploy-staging.yml` | every merge to backend `develop` | tenants on `backend_tag: staging` |
+| `refresh-tenants.yml` | every backend **release** to `main` | tenants on `backend_tag: latest` |
+
+Both share `/tmp/rumi-deploy.lock` with the RUMI rolls.
+
+**Which tag a tenant should carry.** `:latest` (released code) for a paying
+customer; `:staging` (the develop build) only for a showcase like `demo`. The
+sofra control plane emits `latest` for every generated entry — a showcase is a
+hand-edit at the review checkpoint. The distinction is not cosmetic: a
+`:staging` tenant has **develop's EF migrations applied to its database** on
+every develop merge, and that is not reversible by re-pointing the image.
+A moving tag on any box other than staging is never refreshed at all;
+`provision-tenant.sh` warns on exactly that.
 
 ## Manual deploy / redeploy (no rollback)
 
@@ -522,6 +565,36 @@ workflow with `image_tag = latest` to clear the pin.
 > rolling the **backend** image back does **not** revert migrations the bad build
 > already applied. Prefer rolling *forward* with a fix for schema problems; only
 > hard-rollback the backend when the bad build added no migration.
+
+> ⚠️ **A backend rollback does NOT roll tenants back.** The release that just went
+> bad also refreshed every `backend_tag: latest` tenant on the staging box (the
+> backend repo's `refresh-tenants.yml`), so they are running the bad build too. The
+> dispatch rollback above re-points **prod's** container and does **not** move the
+> `:latest` tag, so it reaches no tenant.
+>
+> **Which tenants are affected** — read the registry, do not run the refresh script
+> to find out: it *pulls and recreates*, and while `:latest` still resolves to the
+> bad build that would re-apply it (and re-run its migrations) to every tenant.
+>
+> ```bash
+> grep -B25 'backend_tag: latest' /opt/rumi/deploy/tenants/registry.yml
+> ```
+>
+> **Step 4 — repair them.** Two paths; the first is preferred:
+>
+> 1. **Roll forward.** Merge the fix and release. That moves `:latest` and
+>    `refresh-tenants.yml` picks the tenants up automatically. Nothing manual.
+> 2. **Break-glass retag**, when a forward release is not available fast enough.
+>    Backend repo → Actions → **retag-mutable-tags** → the last-good 40-char SHA.
+>    That re-points `:latest` server-side at the good build. Then, because
+>    `retag-mutable-tags` is `workflow_dispatch`-only and therefore does not chain
+>    `refresh-tenants.yml`, finish by hand: re-run the prod `deploy` dispatch with
+>    `image_tag = latest`, and on the **staging** box run
+>    `./refresh-tenant-images.sh backend latest` — which now genuinely repairs the
+>    tenants, because `:latest` is good again.
+>
+> Today no tenant is affected — every one is on `:staging`, retired, or legacy RUMI —
+> but that changes with the first paying customer.
 
 ---
 
