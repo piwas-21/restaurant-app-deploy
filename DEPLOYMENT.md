@@ -174,6 +174,17 @@ Not indexed: `robots.ts` disallows everything when the baked `NEXT_PUBLIC_SITE_U
 not the canonical host, and Caddy adds `X-Robots-Tag: noindex` for crawlers that skip
 robots.txt. The staging image is its own bake for exactly this reason.
 
+**Confirming what is actually deployed** (either sofra environment): `curl -s https://<host>/api/health`
+returns the commit the running image was baked from —
+
+```bash
+curl -s https://staging.sofrapiwas.com/api/health
+# {"status":"ok","service":"sofra-control-plane","version":"<sha>","builtAt":"…"}
+```
+
+Use it to confirm a rollout landed, or which build to roll back to. `status: "ok"` means the
+process serves HTTP — it does **not** mean the database is reachable, by design.
+
 Verify with the suite, not by hand — `npm run test:e2e:staging` in the sofra repo
 (`tests/e2e/staging-live.spec.ts`). It checks the entry points serve, that staging is
 noindex in **both** robots.txt and the header while production is still crawlable, that an
