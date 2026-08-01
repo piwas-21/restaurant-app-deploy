@@ -374,6 +374,14 @@ else
 fi
 
 echo "==> Up (project tenant-${SLUG})"
+# Clear the completion marker BEFORE touching the running containers. This is a
+# re-provision path too (module upsell, BYO domain, a corrected name), and the next
+# three stages can each exit 1 — the health wait, the admin bootstrap smoke check, the
+# Caddy validate. Without this, such a run leaves the tenant recreated-and-broken while
+# the PREVIOUS run's marker still says provisioned, and the merge chain — which reads
+# the marker as authoritative `done` — would then decline to complete it, forever.
+# `.chain-provisioned` is the pre-2026-08-01 name; clear it too or it outvotes us.
+rm -f "${TENANT_DIR}/.provisioned" "${TENANT_DIR}/.chain-provisioned"
 (cd "$TENANT_DIR" && docker compose up -d)
 
 echo "==> Wait for backend health (migrations + seed run on first boot)"
@@ -497,6 +505,31 @@ else:
     print("+ enforced, and the backend confirms exactly these ids (core is always on).")
 PY
 )"
+
+# Completion marker — written HERE, by the script, and only once every step above has
+# succeeded (`set -e`, so reaching this line IS the success condition). Nothing below
+# it can fail; it is a heredoc.
+#
+# What it asserts, precisely: **a complete provisioning run finished for this tenant.**
+# Not "the site is serving" — the liveness gate above is the backend's /api/health, and
+# a frontend container that starts and then crash-loops still gets here. `verify-env.sh`
+# remains the up-check. The marker is cleared again at the top of every run (see the
+# note by `docker compose up -d`), so it never survives a run that died half-way.
+#
+# It moved here from the merge chain, which used to write `.chain-provisioned` over ssh
+# after the script exited 0. That made the marker mean "the CHAIN provisioned this",
+# when what the chain actually needs to know is "this tenant is already up". Those
+# differ for every tenant stood up by hand (DEPLOYMENT.md / runbook §6 — every
+# re-provision, module upsell and BYO domain), and the difference was a live bug:
+# such a tenant has a `.env` but no marker, so the chain read it as `partial` and,
+# on EVERY subsequent registry merge, re-ran provisioning against it — restarting a
+# tenant serving real traffic, which the chain's own header promises it never does —
+# while permanently occupying one of its MAX_PER_RUN slots. Three of them and the cap
+# refuses the whole batch, blocking a genuinely new customer.
+#
+# The registry `status:` flip was the only thing standing between us and that, and
+# nothing derived or verified it. Now the box records the fact itself.
+date -u +%Y-%m-%dT%H:%M:%SZ > "${TENANT_DIR}/.provisioned"
 
 cat <<EOF
 
