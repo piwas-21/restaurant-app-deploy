@@ -123,8 +123,18 @@ jobs:
           STAGING_USER: ${{ secrets.STAGING_USER }}
           STAGING_HOST: ${{ secrets.STAGING_HOST }}
           FULL: ${{ steps.mode.outputs.full }}
+          EXPIRY_FAIL_DAYS: ${{ env.EXPIRY_FAIL_DAYS }}
+          EXPIRY_WARN_DAYS: ${{ env.EXPIRY_WARN_DAYS }}
         run: |
-          set -uo pipefail
+          # GitHub's default run shell is `bash -e {0}`. With pipefail on, a non-zero exit
+          # from the box script would kill the step AT the ssh line, so the rc plumbing
+          # below — and the report step's ability to distinguish "the token is bad" from
+          # "SSH died" — would never run. `set +e` is what makes that plumbing real.
+          set -uo pipefail; set +e
+          if [ -z "${STAGING_USER:-}" ] || [ -z "${STAGING_HOST:-}" ]; then
+            echo "::error::STAGING_USER / STAGING_HOST are not set — this check cannot run"
+            echo "rc=1" >> "$GITHUB_OUTPUT"; exit 0
+          fi
           args=""
           [ "$FULL" = "1" ] && args="-- --full"
           # The repo's copy is streamed, not the box's rsynced copy: this must test what is
@@ -132,7 +142,8 @@ jobs:
           ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes \
               -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes \
               -o ConnectTimeout=15 "${STAGING_USER}@${STAGING_HOST}" \
-              "bash -s $args" < ./check-provision-token.sh | tee /tmp/provision.txt
+              "EXPIRY_FAIL_DAYS=$EXPIRY_FAIL_DAYS EXPIRY_WARN_DAYS=$EXPIRY_WARN_DAYS bash -s $args" \
+              < ./check-provision-token.sh 2>&1 | tee /tmp/provision.txt
           rc=${PIPESTATUS[0]}
           echo "rc=$rc" >> "$GITHUB_OUTPUT"
           exit 0
@@ -143,7 +154,7 @@ jobs:
         env:
           FRONTEND_DISPATCH_TOKEN: ${{ secrets.FRONTEND_DISPATCH_TOKEN }}
         run: |
-          set -uo pipefail
+          set -uo pipefail; set +e   # see the note in the previous step
           out=/tmp/frontend.txt
           : > "$out"
           rc=0
@@ -200,8 +211,10 @@ jobs:
           case "$code" in
             204) say "OK     POST .../${PROBE_WORKFLOW}/dispatches -> 204: Actions: write is granted" ;;
             403) fail "dispatch -> 403: the token does NOT hold Actions: write. The merge chain cannot build a tenant image." ;;
-            404) say "WARN   ${PROBE_WORKFLOW} is not on ${FRONTEND_REPO}@${FRONTEND_REF} (404), so Actions:"
-                 say "       write is UNPROVEN this run. Merge the probe workflow to that repo's default branch." ;;
+            404) fail "${PROBE_WORKFLOW} is not on ${FRONTEND_REPO}@${FRONTEND_REF} (404), so the only"
+                 say  "       write assertion for this token was never made. An unmade assertion is a"
+                 say  "       failed check, not a pass — merge the probe workflow to that repo's"
+                 say  "       DEFAULT branch (\`develop\`) and re-run." ;;
             *)   fail "dispatch -> $code (unexpected)" ;;
           esac
           rm -f "$hdrs"
