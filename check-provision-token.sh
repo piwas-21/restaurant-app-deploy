@@ -86,6 +86,18 @@ if [[ -z "$TOKEN" ]] && [[ -f "$COMPOSE_DIR/.env" ]]; then
 fi
 
 if [[ -z "$TOKEN" ]]; then
+  # WHICH box you are on decides what a missing token means, and getting that wrong would
+  # make this script cry "provisioning is down" on the PROD box, where the control plane
+  # has never run and the token is not supposed to exist. `sync-to-box.yml` copies this
+  # file to prod along with everything else, so that is a reachable state, not a
+  # hypothetical — and a false alarm from a watchdog is how a watchdog stops being read.
+  if [[ -d "$COMPOSE_DIR" ]] && command -v docker >/dev/null 2>&1 \
+     && ! (cd "$COMPOSE_DIR" && docker compose -f docker-compose.prod.yml config --services 2>/dev/null | grep -qx sofra); then
+    echo "FAIL   this box does not run the sofra control plane, so there is no"
+    echo "       PROVISION_GITHUB_TOKEN here and nothing to check. Provisioning runs on the"
+    echo "       STAGING box — run it there: bash deploy/.ssh/staging.sh 'cd /opt/rumi/deploy && ./check-provision-token.sh'"
+    exit 1
+  fi
   echo "FAIL   PROVISION_GITHUB_TOKEN not found in the sofra container or $COMPOSE_DIR/.env."
   echo "       Provisioning is down right now, silently. See runbook §0."
   exit 1
