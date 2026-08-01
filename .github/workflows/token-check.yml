@@ -1,0 +1,263 @@
+name: token-check
+
+run-name: token-check ${{ github.event_name }}
+
+# Are the two personal access tokens the onboarding funnel depends on still alive?
+#
+# WHY THIS EXISTS (runbook M3). Two PATs sit between a paying customer and a running
+# tenant, and until now the only thing watching either of them was a calendar reminder:
+#
+#   PROVISION_GITHUB_TOKEN   on the STAGING BOX, in /opt/rumi/deploy/.env, read by the
+#                            sofra control plane. Opens the tenant registry PR.
+#                            **Fails SILENTLY**: /admin/provision degrades to a "not
+#                            configured" banner instead of erroring, so the funnel just
+#                            stops — a customer pays and no proposal is ever opened.
+#
+#   FRONTEND_DISPATCH_TOKEN  an Actions secret on THIS repo. Lets the merge chain
+#                            dispatch build-tenant-image.yml in the frontend repo.
+#                            Fails LOUDLY (the chain opens an issue and comments on the
+#                            merged PR before doing any work), which is why it is the
+#                            safer of the two — but it is still unwatched.
+#
+# WHAT A GREEN RUN HERE IS WORTH — the point is to be exact about this, because a check
+# that passes vacuously is worse than no check:
+#
+#   * Both repos are PUBLIC. A `GET /repos/...` therefore returns 200 for ANY valid
+#     token no matter which repositories it selected, so a read proves NOTHING about
+#     scope. (Measured 2026-08-01: the deploy token answers 200 for the frontend repo.)
+#     It does still separate alive from dead — a revoked or expired token gets 401 even
+#     on a public repo, measured the same day.
+#   * For a fine-grained PAT the `permissions` block the API returns describes the
+#     CALLER's role on the repo, not the token's grant. So write capability is proved
+#     only by writing. Both checks below perform a real write.
+#   * `github-authentication-token-expiration` turns this from a death certificate into
+#     an early warning: the run fails 21 days out and warns 60 days out, so the re-mint
+#     is scheduled work rather than an outage. An ABSENT header is reported as a
+#     problem, not as "no expiry" — that would be the vacuous pass.
+#
+# COST OF THE STRONGEST PROOF. The control plane's sequence is POST /git/refs ->
+# PUT /contents -> POST /pulls (sofra lib/provisioning.ts). Walking all three burns a PR
+# number in a repo whose PR numbers are cited throughout the runbooks, so the weekly run
+# stops after the ref (Contents: write) and SAYS that PR-write is unproven; the full
+# walk runs on the first Monday of each month, and on demand via `full: true`.
+
+on:
+  schedule:
+    # Mondays 06:23 UTC. Off the hour (GitHub queues heavily at :00) and well clear of
+    # provisioning-smoke.yml at 04:17, which holds the box's provisioning lock.
+    - cron: "23 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      full:
+        description: "Also prove Pull requests: write by opening and closing a real PR"
+        type: boolean
+        default: false
+
+concurrency:
+  group: token-check
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  # A dead token must reach the founder's inbox, not just this run log.
+  issues: write
+
+env:
+  FRONTEND_REPO: piwas-21/restaurant-app-frontend
+  # Dispatched with ref=develop because that is the frontend repo's DEFAULT branch and
+  # workflow_dispatch resolves the workflow file from there — a probe that only reached
+  # `main` would be undispatchable, the same seam that bit the O3 chain's run-name.
+  FRONTEND_REF: develop
+  PROBE_WORKFLOW: token-probe.yml
+  EXPIRY_FAIL_DAYS: "21"
+  EXPIRY_WARN_DAYS: "60"
+
+jobs:
+  check:
+    name: are both funnel tokens still valid
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Decide how hard to probe
+        id: mode
+        env:
+          FULL_INPUT: ${{ inputs.full }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          full=0
+          if [ "$FULL_INPUT" = "true" ]; then
+            full=1; why="requested by hand"
+          elif [ "$EVENT" = "schedule" ] && [ "$((10#$(date -u +%d)))" -le 7 ]; then
+            full=1; why="first Monday of the month"
+          else
+            why="weekly run — the PR-write probe is monthly, see the header"
+          fi
+          echo "full=$full" >> "$GITHUB_OUTPUT"
+          echo "Full write probe: $full ($why)"
+
+      - name: Configure SSH (pinned host key)
+        env:
+          STAGING_SSH_KEY: ${{ secrets.STAGING_SSH_KEY }}
+          STAGING_KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          if [ -z "${STAGING_SSH_KEY:-}" ] || [ -z "${STAGING_KNOWN_HOSTS:-}" ]; then
+            echo "::error::STAGING_SSH_KEY / STAGING_KNOWN_HOSTS are not set — this check cannot run"
+            exit 1
+          fi
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$STAGING_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$STAGING_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      # PROVISION_GITHUB_TOKEN never leaves the box: the script is streamed TO the box and
+      # runs there, reading the value out of the running sofra container. Nothing about the
+      # token but its length and expiry date crosses back.
+      - name: PROVISION_GITHUB_TOKEN (on the box, where it lives)
+        id: provision_token
+        env:
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          FULL: ${{ steps.mode.outputs.full }}
+        run: |
+          set -uo pipefail
+          args=""
+          [ "$FULL" = "1" ] && args="-- --full"
+          # The repo's copy is streamed, not the box's rsynced copy: this must test what is
+          # in git, so a fix here is live the moment it merges rather than after a sync.
+          ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes \
+              -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes \
+              -o ConnectTimeout=15 "${STAGING_USER}@${STAGING_HOST}" \
+              "bash -s $args" < ./check-provision-token.sh | tee /tmp/provision.txt
+          rc=${PIPESTATUS[0]}
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: FRONTEND_DISPATCH_TOKEN (an Actions secret, so checked here)
+        id: frontend_token
+        if: always()
+        env:
+          FRONTEND_DISPATCH_TOKEN: ${{ secrets.FRONTEND_DISPATCH_TOKEN }}
+        run: |
+          set -uo pipefail
+          out=/tmp/frontend.txt
+          : > "$out"
+          rc=0
+          say()  { printf '%s\n' "$*" | tee -a "$out"; }
+          fail() { say "FAIL   $*"; rc=1; }
+
+          if [ -z "${FRONTEND_DISPATCH_TOKEN:-}" ]; then
+            fail "FRONTEND_DISPATCH_TOKEN is not set on this repo — the merge chain cannot"
+            say  "       build a tenant image. Runbook §0b. (It fails loudly at use time,"
+            say  "       so this is a delayed onboarding, not a lost customer.)"
+            echo "rc=$rc" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+
+          hdrs=$(mktemp)
+          code=$(curl -sS -o /dev/null -D "$hdrs" -w '%{http_code}' --max-time 30 \
+                   -H "Authorization: Bearer $FRONTEND_DISPATCH_TOKEN" \
+                   -H "Accept: application/vnd.github+json" \
+                   "https://api.github.com/repos/${FRONTEND_REPO}" || echo 000)
+          case "$code" in
+            200) say "OK     GET /repos/${FRONTEND_REPO} -> 200: the token authenticates" ;;
+            401) fail "the token is expired or revoked (401). Re-mint — runbook §0b."; echo "rc=$rc" >> "$GITHUB_OUTPUT"; exit 0 ;;
+            *)   fail "GET /repos/${FRONTEND_REPO} -> $code (unexpected)"; echo "rc=$rc" >> "$GITHUB_OUTPUT"; exit 0 ;;
+          esac
+
+          exp=$(grep -i '^github-authentication-token-expiration:' "$hdrs" \
+                  | sed 's/^[^:]*:[[:space:]]*//' | tr -d '\r')
+          if [ -z "$exp" ]; then
+            say "WARN   no expiry header, so this run cannot tell you when the token dies —"
+            say "       it is not a fine-grained PAT, contrary to runbook §0b."
+          else
+            secs=$(date -u -d "$exp" +%s 2>/dev/null || echo "")
+            if [ -z "$secs" ]; then
+              say "WARN   could not parse the expiry header ('$exp')"
+            else
+              days=$(( (secs - $(date -u +%s)) / 86400 ))
+              if   [ "$days" -lt 0 ];                      then fail "the token expired on $exp"
+              elif [ "$days" -lt "$EXPIRY_FAIL_DAYS" ];    then fail "the token expires in $days day(s), on $exp — re-mint now (runbook §0b)"
+              elif [ "$days" -lt "$EXPIRY_WARN_DAYS" ];    then say "WARN   expires in $days day(s), on $exp — schedule the re-mint"
+              else say "OK     expires in $days day(s), on $exp"
+              fi
+            fi
+          fi
+
+          # The write. `POST .../dispatches` needs Actions: write and answers 403 without
+          # it, so a 204 is the proof — the no-op token-probe.yml exists in the frontend
+          # repo purely so this can be asserted without building a tenant image.
+          code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 -X POST \
+                   -H "Authorization: Bearer $FRONTEND_DISPATCH_TOKEN" \
+                   -H "Accept: application/vnd.github+json" \
+                   -H "Content-Type: application/json" \
+                   -d "{\"ref\":\"${FRONTEND_REF}\"}" \
+                   "https://api.github.com/repos/${FRONTEND_REPO}/actions/workflows/${PROBE_WORKFLOW}/dispatches" \
+                   || echo 000)
+          case "$code" in
+            204) say "OK     POST .../${PROBE_WORKFLOW}/dispatches -> 204: Actions: write is granted" ;;
+            403) fail "dispatch -> 403: the token does NOT hold Actions: write. The merge chain cannot build a tenant image." ;;
+            404) say "WARN   ${PROBE_WORKFLOW} is not on ${FRONTEND_REPO}@${FRONTEND_REF} (404), so Actions:"
+                 say "       write is UNPROVEN this run. Merge the probe workflow to that repo's default branch." ;;
+            *)   fail "dispatch -> $code (unexpected)" ;;
+          esac
+          rm -f "$hdrs"
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Report — and say what was NOT proven
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROVISION_RC: ${{ steps.provision_token.outputs.rc }}
+          FRONTEND_RC: ${{ steps.frontend_token.outputs.rc }}
+          FULL: ${{ steps.mode.outputs.full }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          body=$(mktemp)
+          # An empty rc means the step never produced one (it died, or was skipped because
+          # SSH setup failed). That is a failed check, not a pass — never default to 0.
+          p="${PROVISION_RC:-1}"; f="${FRONTEND_RC:-1}"
+          {
+            echo "## Funnel token check"
+            echo
+            echo "### \`PROVISION_GITHUB_TOKEN\` — silent failure mode, on the staging box"
+            echo '```'
+            cat /tmp/provision.txt 2>/dev/null || echo "(the step produced no output — it did not run)"
+            echo '```'
+            echo "### \`FRONTEND_DISPATCH_TOKEN\` — loud failure mode, Actions secret"
+            echo '```'
+            cat /tmp/frontend.txt 2>/dev/null || echo "(the step produced no output — it did not run)"
+            echo '```'
+            echo "### What this run did not prove"
+            echo "- **Neither token's repository scoping.** Both repos are public, so any valid"
+            echo "  token reads either one; scope is enforced when the PAT is minted and is not"
+            echo "  observable afterwards. A green run is not evidence of least privilege."
+            if [ "${FULL:-0}" != "1" ]; then
+              echo "- **\`Pull requests: write\` on the deploy token** — the weekly run stops at"
+              echo "  \`POST /git/refs\`. The monthly run (first Monday) and \`full: true\` walk the"
+              echo "  whole \`/admin/provision\` sequence."
+            fi
+            echo
+            echo "[run log]($RUN_URL) · \`token-check.yml\` · runbook §0/§0b/M3"
+          } > "$body"
+          cat "$body" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$p" = "0" ] && [ "$f" = "0" ]; then
+            echo "both tokens OK"; exit 0
+          fi
+
+          title="Funnel token check failed"
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+                       --search "\"$title\" in:title" --json number --jq '.[0].number // empty' || true)
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body-file "$body" || true
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file "$body" || true
+          fi
+          echo "::error::a funnel token check failed — see the issue this run opened"
+          exit 1
