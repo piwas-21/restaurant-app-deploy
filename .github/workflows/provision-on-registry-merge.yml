@@ -32,8 +32,22 @@ run-name: >-
 # revert-and-remerge: reverting the entry and merging it again reproduces the same diff
 # and would provision a second time.
 #
-# The state we key on is a marker THIS CHAIN writes, `/opt/rumi/tenants/<slug>/.chain-provisioned`,
-# and the reason it is not simply the tenant's `.env` is worth spelling out, because
+# The state we key on is `/opt/rumi/tenants/<slug>/.provisioned`, a marker
+# **provision-tenant.sh** writes as its last act on success — by whatever route it was
+# run. It used to be `.chain-provisioned`, written by this workflow over ssh after the
+# script exited 0, and that was a real bug rather than a naming quibble: it recorded
+# "the CHAIN provisioned this" when the question being asked is "is this tenant already
+# up?". A tenant stood up BY HAND (DEPLOYMENT.md §Tenant provisioning / runbook §6 —
+# every re-provision, module upsell and BYO domain) got no marker, so it read as
+# `partial` forever and was re-provisioned on EVERY later registry merge: a live tenant
+# restarted by an unrelated edit, which the "first provisioning only" note below
+# promises cannot happen, and one of the MAX_PER_RUN slots burned permanently. Three
+# such tenants and the cap refuses the whole batch, so a genuinely new customer does
+# not get provisioned at all. The registry `status:` flip was the only guard, and
+# nothing derived or verified it (runbook "What is still manual", M2).
+# `.chain-provisioned` is still accepted, so a box carrying the old marker is unaffected.
+#
+# The reason the marker is not simply the tenant's `.env` is worth spelling out, because
 # `.env` was the obvious choice and it is wrong. provision-tenant.sh renders `.env`
 # early (well before `docker compose pull`, `up -d`, and a five-minute health wait that
 # can exit 1), so `.env` means "the script started", not "the tenant is up". Keying on
@@ -43,7 +57,8 @@ run-name: >-
 # "nothing to do".
 #
 # So each candidate resolves to one of three states, and each is handled differently:
-#   done     — marker present. Skip; the chain finished this tenant already.
+#   done     — marker present. Skip; this tenant has already been provisioned
+#              successfully, by this chain or by hand.
 #   partial  — `.env` but no marker. Provision: the script is idempotent, so this
 #              completes an interrupted run. Reported as such, never silently.
 #   absent   — nothing on the box. Provision.
@@ -322,7 +337,7 @@ jobs:
                 "${STAGING_USER}@${STAGING_HOST}" \
                 'while read -r s; do
                    d="/opt/rumi/tenants/$s"
-                   if [ -f "$d/.chain-provisioned" ]; then echo "$s done"
+                   if [ -f "$d/.provisioned" ] || [ -f "$d/.chain-provisioned" ]; then echo "$s done"
                    elif [ -f "$d/.env" ]; then echo "$s partial"
                    else echo "$s absent"; fi
                  done' \
@@ -503,12 +518,12 @@ jobs:
             wait_for_build "$IMAGE_TAG" "$since"
 
             echo "==> provisioning $SLUG on the box"
-            # The marker is written ONLY after the script exits 0 — that is the whole
-            # point of it (see the header). `&&`, not `;`.
+            # The completion marker is no longer written here — provision-tenant.sh
+            # writes `.provisioned` itself, as its last act, on the same "only after
+            # every step succeeded" condition this `&&` used to buy. See the header.
             # `tee` so the log keeps its live output AND we can read the script's own
             # module report back out of it below.
-            ssh_box "cd /opt/rumi/deploy && ./provision-tenant.sh '${SLUG}' \
-              && date -u +%Y-%m-%dT%H:%M:%SZ > '/opt/rumi/tenants/${SLUG}/.chain-provisioned'" \
+            ssh_box "cd /opt/rumi/deploy && ./provision-tenant.sh '${SLUG}'" \
               | tee "$STATE/provision-${SLUG}.log"
 
             printf -- '- `%s` provisioned — https://%s\n' "$SLUG" "$DOMAIN" >> "$STATE/notes.md"

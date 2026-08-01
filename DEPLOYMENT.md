@@ -451,7 +451,7 @@ away is the founder copying two `gh workflow run` commands out of the PR body.
    | | |
    |---|---|
    | eligible slug | the entry says `managed: scripts` + `box: staging` + `status: provisioning`, and the chain has not already finished it |
-   | idempotency key | `/opt/rumi/tenants/<slug>/.chain-provisioned`, written by the chain **only after `provision-tenant.sh` exits 0**. Box state, not the push diff — so a re-merge, a re-run of the sync, and a **revert-and-remerge** all skip. `deprovision-tenant.sh --purge` is what makes a slug eligible again |
+   | idempotency key | `/opt/rumi/tenants/<slug>/.provisioned`, written by **`provision-tenant.sh` itself** as its last act, whichever route ran it — the chain, or a `provision-tenant.yml` dispatch. Box state, not the push diff, so a re-merge, a re-run of the sync and a **revert-and-remerge** all skip. Cleared at the start of every run and by `deprovision-tenant.sh` (with or without `--purge`), so it never outlives the thing it asserts. (Before 2026-08-01 the *chain* wrote `.chain-provisioned` over ssh, so a tenant stood up **by hand** carried no marker at all and was re-provisioned on every later registry merge — see below. The old name is still accepted.) |
    | **not** the tenant's `.env` | `provision-tenant.sh` renders `.env` early and then keeps going through `docker compose pull`, `up -d` and a 5-minute health wait, so `.env` means "the script started". Keying on it would make a provision that died at `pull` invisible: the retry would skip and report green |
    | `.env` but no marker | **completed**, not skipped — the script is idempotent, so the chain finishes an interrupted run and says so in its report |
    | first provisioning only | a tenant the chain has finished is never re-applied automatically. Module upsells and corrections stay a manual `provision-tenant.yml` dispatch (below) |
@@ -472,8 +472,23 @@ away is the founder copying two `gh workflow run` commands out of the PR body.
    the `provision-tenant` concurrency group, so they cannot collide on the box.
 6. **Verify** — step 5 of the manual runbook (`./verify-env.sh https://<domain>`),
    then flip the registry `status` to `active` in git. The chain does not flip it
-   (ADR-007: no script edits the registry), and it does not need to — a provisioned
-   tenant is skipped on `.env` presence whatever its `status` says.
+   (ADR-007: no script edits the registry).
+
+   **This paragraph used to add "and it does not need to — a provisioned tenant is
+   skipped on `.env` presence whatever its `status` says". That was false, and the
+   falsehood is why the following went unnoticed for as long as it did.** The chain
+   skips on the **marker**, never on `.env`: `.env` present + no marker is `partial`,
+   which the chain *provisions*. So before 2026-08-01, when only the chain wrote a
+   marker, a tenant stood up **by hand** (step 5 — every re-provision, module upsell
+   and BYO domain) sat at `partial` for as long as its entry read
+   `status: provisioning`, and each later registry merge re-ran provisioning against
+   it: containers of a **live** tenant recreated by an unrelated edit, and one of the
+   two `MAX_PER_RUN` slots gone for good. Three such tenants and the cap refuses the
+   whole batch, so a new customer is not provisioned at all.
+
+   `provision-tenant.sh` now writes the marker itself, which removes that entirely.
+   The `status` flip is still yours, and it is now only about keeping the registry
+   honest — nothing behavioural hangs on it.
 
 **Tear down:**
 
