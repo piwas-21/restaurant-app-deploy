@@ -80,6 +80,13 @@ else
   echo "   skip: no compose project at $TENANT_DIR"
 fi
 
+# The completion marker means "this tenant is up" (provision-tenant.sh writes it as its
+# last act), so a teardown has to clear it whether or not the directory goes with it.
+# Without this, a `--purge`-less teardown leaves a marker asserting a tenant that is now
+# stopped, and the merge chain — which reads the marker as `done` — would decline to
+# stand it back up. `.chain-provisioned` is the pre-2026-08-01 name, cleared too.
+rm -f "$TENANT_DIR/.provisioned" "$TENANT_DIR/.chain-provisioned"
+
 if $DROP_DB; then
   echo "==> Backup + drop database ${REG_DB} (role ${REG_DB_ROLE})"
   PGUSER="$(grep '^POSTGRES_USER=' .env | cut -d= -f2- || true)"
@@ -114,5 +121,6 @@ fi
 cat <<EOF
 
 ==> Deprovisioned tenant '${SLUG}'.
+    Completion marker cleared, so the merge chain can stand this tenant up again.
     Remember: flip its status in tenants/registry.yml (git) to keep the registry honest.
 EOF
