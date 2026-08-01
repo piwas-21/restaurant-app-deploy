@@ -42,10 +42,14 @@
 #                 list price of each; the pricing sheet is the workspace repo's
 #                 docs/plans/SOFRA-MODULE-CATALOG-AND-PRICING.md.
 #
-#                 `modules` is ENFORCED AT RUNTIME since backend #268 (S11) — but only for a
-#                 tenant that has opted in with TENANT_MODULES_ENFORCE=true in its own .env
-#                 on the box. Without that opt-in the backend serves every module regardless,
-#                 exactly as before. Two consequences worth knowing before editing a list:
+#                 `modules` is ENFORCED AT RUNTIME since backend #268 (S11), and since
+#                 2026-08-01 a tenant provisioned for the FIRST time enforces by default —
+#                 tenant.env.tpl renders TENANT_MODULES_ENFORCE=true, so this list is what
+#                 the customer actually gets. It remains an operator control on the box
+#                 (provision-tenant.sh only validates it, never rewrites it), so a tenant
+#                 deliberately un-enforced stays that way. A tenant provisioned BEFORE that
+#                 date serves every module regardless of this list until someone flips it.
+#                 Two consequences worth knowing before editing a list:
 #                   - Editing `modules` here changes nothing until you re-provision AND
 #                     restart that tenant's backend. There is no image rebuild — the set is
 #                     served from the backend (GET /api/tenant/modules) rather than baked
@@ -120,9 +124,11 @@ tenants:
     languages: [en, nl]
     # The full-service bundle, because that is what the demo actually SHOWS: kitchen
     # board, cashier, server, reservations and loyalty are all reachable on it today.
-    # ENFORCED: demo is the one tenant running TENANT_MODULES_ENFORCE=true (its .env on
-    # the staging box — the flag is an operator control, not a registry field). So this
-    # list is binding here, unlike everywhere else: dropping an id takes that surface off
+    # ENFORCED: demo was the FIRST tenant flipped, by hand, back when enforcement was
+    # opt-in (its .env on the staging box). Every tenant provisioned since 2026-08-01
+    # is born enforcing, so demo is no longer the exception — but it is still the only
+    # one whose flag was set by an operator rather than by the template.
+    # So this list is binding here: dropping an id takes that surface off
     # the demo, and `printing` is absent deliberately, as the standing proof that a
     # module nobody bought 404s. Edit this list only via re-provision + backend restart.
     modules: [core, kitchen-board, cashier, server, reservations, loyalty]
