@@ -45,6 +45,11 @@ BOX_ROLE="$(grep -E '^BOX_ROLE=' .env | cut -d= -f2- || true)"
 # box => that tenant's telemetry stays inert (the backend pusher self-guards; Sentry no-ops).
 BOX_SENTRY_DSN="$(grep -E '^SENTRY_DSN=' .env | cut -d= -f2- || true)"
 BOX_TELEMETRY_SECRET="$(grep -E '^PRINTER_TELEMETRY_SECRET=' .env | cut -d= -f2- || true)"
+# Same shape, same reasoning: ONE platform key per box, not per tenant. A Stripe restricted key
+# cannot be scoped to a single connected account, so the key is narrowed by permission and by an
+# Access policy pinning it to the box IPs (SOFRA-PAYMENTS-PLAN §4). Empty on the box => every
+# tenant on it stays inert, because the backend gateway needs key AND account AND the module.
+BOX_STRIPE_KEY="$(grep -E '^STRIPE_PLATFORM_API_KEY=' .env | cut -d= -f2- || true)"
 
 # Read the tenant's registry entry into REG_* shell vars (lists -> csv).
 eval "$(python3 - "$SLUG" <<'PY'
@@ -59,7 +64,7 @@ if not t:
 for k in ("name", "status", "managed", "box", "domain", "domain_mode",
           "domain_aliases", "db", "db_role", "compose_project", "backend_tag",
           "frontend_tag", "currency", "languages", "modules", "admin_email",
-          "city", "template"):
+          "city", "template", "stripe_account"):
     v = t.get(k, "")
     if isinstance(v, list):
         v = ",".join(map(str, v))
@@ -82,6 +87,16 @@ case "$TENANT_TEMPLATE" in
   *) echo "ERROR: registry entry '$SLUG' has template '$TENANT_TEMPLATE' — allowed: classic | craft (absent = classic)"; exit 1 ;;
 esac
 
+# Online payments needs BOTH halves or it is not a working purchase. A tenant that bought the
+# module but has no connected account would provision happily and then fail at the diner's first
+# card payment — the worst place to discover it. Refuse here instead. (The reverse, an account
+# recorded before the module is bought, is fine: it stays inert until the module is added.)
+if [[ " ${REG_MODULES//,/ } " == *" online-payments "* && -z "$REG_STRIPE_ACCOUNT" ]]; then
+  echo "ERROR: tenant '$SLUG' buys 'online-payments' but has no 'stripe_account' in the registry" >&2
+  echo "       Onboard the restaurant at Stripe first (hosted onboarding — see the runbook), then record its acct_ id." >&2
+  exit 1
+fi
+
 # Module flags (ADR-010 catalog). Same reasoning as `template`: an unknown value
 # is a typo, and a typo here is SILENT — it lands in the tenant env and the
 # tenant simply never gets the module they are paying for. The vocabulary is
@@ -91,7 +106,7 @@ esac
 # YAML, so "a, b" is normal and " " is not a module).
 strip_ws() { local raw="$1"; printf '%s' "$raw" | tr -d '[:space:]'; }
 
-KNOWN_MODULES="core kitchen-board cashier server reservations loyalty printing extra-languages"
+KNOWN_MODULES="core kitchen-board cashier server reservations loyalty printing online-payments extra-languages"
 IFS=',' read -ra _MODULES <<< "$REG_MODULES"
 for m in "${_MODULES[@]}"; do
   m="$(strip_ws "$m")"
@@ -302,6 +317,17 @@ set_env_line SENTRY_DSN "$BOX_SENTRY_DSN"
 set_env_line SENTRY_ENVIRONMENT "$BOX_ROLE"
 set_env_line PRINTER_TELEMETRY_SECRET "$BOX_TELEMETRY_SECRET"
 
+# Stripe: the key is the box's, the account is the tenant's, and ENABLED is derived from the
+# module list rather than being a separate operator switch — a tenant that did not buy
+# online-payments must not be one env edit away from taking card payments.
+set_env_line STRIPE_PLATFORM_API_KEY "$BOX_STRIPE_KEY"
+set_env_line STRIPE_CONNECTED_ACCOUNT_ID "$REG_STRIPE_ACCOUNT"
+if [[ " ${REG_MODULES//,/ } " == *" online-payments "* ]]; then
+  set_env_line STRIPE_ENABLED "true"
+else
+  set_env_line STRIPE_ENABLED "false"
+fi
+
 echo "==> Tenant app-secrets.json"
 if [[ -f "$TENANT_DIR/app-secrets.json" ]]; then
   echo "   keep: app-secrets.json exists (JWT/printer secrets preserved)"
@@ -420,6 +446,65 @@ elif [[ "$FRESH_ENV" == 0 ]]; then
   echo "   skip: re-provision (bootstrap creds only apply to the first boot; the admin may have rotated the password since)"
 else
   echo "   skip: no TENANT_ADMIN_* in the tenant .env (pre-#116 tenant — adopting needs a DB reset: deprovision --drop-db, then provision fresh)"
+fi
+
+echo "==> Stripe payment methods (only when this tenant bought online-payments)"
+# MEASURED, not assumed (SOFRA-PAYMENTS-PLAN §3): TWINT is OFF by default and will not appear at
+# checkout even with the capability active — with twint_payments:active, dynamic methods still
+# returned ['card','link','klarna']. Flipping the display preference to `on` is what adds it. For a
+# Swiss restaurant that is not a nice-to-have; TWINT is the local default.
+#
+# Each connected account has TWO payment-method configurations: its own (parent:None — the one
+# Checkout actually uses) and one inherited from the platform's. This flips the account's OWN one.
+if [[ " ${REG_MODULES//,/ } " == *" online-payments "* ]]; then
+  if [[ -z "$BOX_STRIPE_KEY" ]]; then
+    echo "ERROR: tenant '$SLUG' bought online-payments but STRIPE_PLATFORM_API_KEY is unset on this box" >&2
+    echo "       The tenant would provision with a checkout that cannot take a card. Set it and re-run." >&2
+    exit 1
+  fi
+
+  # The account's own configuration is the one with no parent. jq is not assumed present on the
+  # box (nothing else in this script needs it), so python3 — already a hard dependency above —
+  # does the parsing.
+  PMC_JSON="$(curl -sS --max-time 20 \
+    -u "${BOX_STRIPE_KEY}:" \
+    -H "Stripe-Account: ${REG_STRIPE_ACCOUNT}" \
+    "https://api.stripe.com/v1/payment_method_configurations" || true)"
+
+  PMC_ID="$(printf '%s' "$PMC_JSON" | python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+for cfg in data.get("data", []):
+    # parent is null on the account own configuration; the inherited one names the platform.
+    if not cfg.get("parent"):
+        print(cfg.get("id", ""))
+        break
+' || true)"
+
+  if [[ -z "$PMC_ID" ]]; then
+    echo "ERROR: could not read the payment-method configuration for '$REG_STRIPE_ACCOUNT'" >&2
+    echo "       Stripe said: $(printf '%s' "$PMC_JSON" | head -c 300)" >&2
+    exit 1
+  fi
+
+  # FAILS THE PROVISION on purpose. A tenant who paid for online payments and silently got a
+  # checkout without TWINT is a broken purchase that nobody would notice until a Swiss diner
+  # complained — the "gate that fails open" shape this repo has been bitten by before.
+  if curl -sS --fail --max-time 20 \
+      -u "${BOX_STRIPE_KEY}:" \
+      -H "Stripe-Account: ${REG_STRIPE_ACCOUNT}" \
+      -X POST "https://api.stripe.com/v1/payment_method_configurations/${PMC_ID}" \
+      -d "twint[display_preference][preference]=on" >/dev/null; then
+    echo "   ok: TWINT display preference on for ${REG_STRIPE_ACCOUNT} (${PMC_ID})"
+  else
+    echo "ERROR: failed to enable TWINT on ${REG_STRIPE_ACCOUNT} (${PMC_ID})" >&2
+    exit 1
+  fi
+else
+  echo "   skip: '$SLUG' has no online-payments module"
 fi
 
 echo "==> Caddy site block + validate + reload"

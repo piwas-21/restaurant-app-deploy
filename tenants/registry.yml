@@ -37,7 +37,8 @@
 #   currency / languages / modules: recorded per ADR-010; provisioning writes them into the
 #                 tenant instance env. The VOCABULARY is validated: modules must come from
 #                 core | kitchen-board | cashier | server | reservations | loyalty |
-#                 printing | extra-languages, or provision-tenant.sh fails loudly. Same list
+#                 printing | online-payments | extra-languages, or provision-tenant.sh fails
+#                 loudly. Same list
 #                 in the control plane (sofra lib/module-catalog.ts), which also carries the
 #                 list price of each; the pricing sheet is the workspace repo's
 #                 docs/plans/SOFRA-MODULE-CATALOG-AND-PRICING.md.
@@ -49,6 +50,13 @@
 #                 (provision-tenant.sh only validates it, never rewrites it), so a tenant
 #                 deliberately un-enforced stays that way. A tenant provisioned BEFORE that
 #                 date serves every module regardless of this list until someone flips it.
+#   stripe_account: OPTIONAL `acct_...`, required only when `modules` includes
+#                 `online-payments` — provisioning refuses that combination without it, because
+#                 a tenant who bought payments but has no account would fail at the diner's
+#                 first card, which is the worst place to find out. Recorded AFTER the
+#                 restaurant completes Stripe's hosted onboarding (it cannot be pre-filled:
+#                 the platform cannot write KYC to a Standard account). See the runbook.
+#
 #                 Two consequences worth knowing before editing a list:
 #                   - Editing `modules` here changes nothing until you re-provision AND
 #                     restart that tenant's backend. There is no image rebuild — the set is
