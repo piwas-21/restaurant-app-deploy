@@ -53,3 +53,26 @@ TENANT_MODULES_ENFORCE=true
 # NEXT_PUBLIC_* are baked at frontend image build, so this line records intent —
 # it becomes effective with the frontend T2 template-alias PR (build input).
 NEXT_PUBLIC_TEMPLATE=__TEMPLATE__
+
+# --- Tenant→diner Stripe Connect (ADR-011 Job B, SOFRA-PAYMENTS-PLAN §4) -----------------
+# All three lines are written by provision-tenant.sh on EVERY run, so they are recorded here
+# only for readability — editing them by hand is overwritten on the next re-provision.
+#
+# STRIPE_PLATFORM_API_KEY is the BOX's, not the tenant's: a Stripe restricted key cannot be
+# bound to a single connected account, so one key serves every tenant on the box and is
+# narrowed by permission (Checkout write, PaymentIntent read, NO refunds) plus an Access
+# policy pinning it to the box IPs. Empty on the box => every tenant here stays inert.
+#
+# STRIPE_ENABLED is DERIVED from the registry's `modules` list, not an operator switch —
+# unlike TENANT_MODULES_ENFORCE above. A tenant that did not buy online-payments must not be
+# one env edit away from taking card payments on someone else's Stripe account.
+#
+# Refunds are deliberately impossible from here: the restaurant has a full Stripe dashboard
+# and a refund is two clicks there. That is what makes a leaked key survivable.
+# Deliberately literal rather than __PLACEHOLDER__ substitutions: set_env_line rewrites all
+# three on every run, so a placeholder would only ever be visible if that rewrite failed — and
+# then it would render as the literal string, which STRIPE_ENABLED would reject at startup.
+# Safe-by-default values mean a half-finished provision leaves the tenant inert, not broken.
+STRIPE_ENABLED=false
+STRIPE_PLATFORM_API_KEY=
+STRIPE_CONNECTED_ACCOUNT_ID=

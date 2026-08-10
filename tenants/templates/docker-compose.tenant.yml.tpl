@@ -106,6 +106,18 @@ services:
       # to it. Overridable via FLEET_INGEST_URL in the tenant .env for a future self-hosted sofra.
       FleetPush__SofraIngestUrl: "${FLEET_INGEST_URL:-https://sofrapiwas.com/api/telemetry/fleet}"
       FleetPush__Secret: "${PRINTER_TELEMETRY_SECRET:-}"
+
+      # Tenant→diner Stripe Connect (ADR-011 Job B, plan §4). Rides the same rail as
+      # PRINTER_TELEMETRY_SECRET above: the KEY is a shared per-box value flowed in by
+      # provision-tenant.sh, because a restricted key cannot be bound to one acct_ — it is
+      # narrowed by permission and by an Access policy pinning it to the box IPs instead.
+      # The ACCOUNT is per-tenant, from the registry.
+      #
+      # All three default empty, and the backend's gateway requires all three, so a tenant
+      # that did not buy the module cannot reach Stripe even if a key is present on the box.
+      Stripe__Enabled: "${STRIPE_ENABLED:-false}"
+      Stripe__PlatformApiKey: "${STRIPE_PLATFORM_API_KEY:-}"
+      Stripe__ConnectedAccountId: "${STRIPE_CONNECTED_ACCOUNT_ID:-}"
       FleetPush__TenantSlug: "__SLUG__"
       # Server-side error tracking (shared Sentry EU project; inert without a DSN).
       # SENTRY_ENVIRONMENT is flowed from the box (=BOX_ROLE) by provision-tenant.sh; empty here
