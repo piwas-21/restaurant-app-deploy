@@ -128,6 +128,28 @@ services:
       # in with SEED_E2E_MENU_FIXTURES=true. Forgetting FLEET_PUSH_ENABLED is loud; forgetting this
       # one has to be SAFE, because the failure mode is "E2E Menu Deal" on a paying tenant's menu.
       SeedSettings__SeedE2EMenuFixtures: "${SEED_E2E_MENU_FIXTURES:-false}"
+      # Tenant→diner Stripe Connect (ADR-011 Job B, SOFRA-PAYMENTS-PLAN §4). The same three
+      # variables the per-tenant template has carried since deploy #96 — RUMI had none of them,
+      # so it was the one deployment on the fleet that could not take an online payment even in
+      # principle: no env to fill meant Stripe:Enabled was structurally false rather than
+      # deliberately false, and nothing said so.
+      #
+      # ALL THREE DEFAULT EMPTY/FALSE AND THIS CHANGES NOTHING TODAY. The backend's gateway
+      # requires all three together (IStripeGateway.IsConfigured), so RUMI keeps answering
+      # `available:false` and the checkout keeps hiding online payment until an operator sets
+      # them on the box. This is the wiring, not the switch.
+      #
+      # The KEY is the BOX's, shared, on the same rail as PRINTER_TELEMETRY_SECRET above: a
+      # Stripe restricted key cannot be bound to one acct_, so it is narrowed by permission and
+      # by an Access policy pinning it to the box IPs instead. The ACCOUNT is RUMI's own —
+      # Connect Standard, so the restaurant owns it outright and funds never pass through Sofra.
+      #
+      # ⚠️ This compose runs on BOTH boxes. Setting these on staging points the staging RUMI at
+      # whatever account the key can reach, so leave them unset there unless a test account is
+      # deliberately in play.
+      Stripe__Enabled: "${STRIPE_ENABLED:-false}"
+      Stripe__PlatformApiKey: "${STRIPE_PLATFORM_API_KEY:-}"
+      Stripe__ConnectedAccountId: "${STRIPE_CONNECTED_ACCOUNT_ID:-}"
     volumes:
       - ./app-secrets.json:/app/app-secrets.json:ro   # all app secrets/config (git-ignored)
       - backend_keys:/app/keys                          # DataProtection keys — persist or every redeploy invalidates tokens/sessions
