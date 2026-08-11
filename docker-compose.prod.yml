@@ -222,6 +222,31 @@ services:
       # SENTRY_ENVIRONMENT labels events per box (e.g. staging vs prod).
       SENTRY_DSN: "${SENTRY_DSN:-}"
       SENTRY_ENVIRONMENT: "${SENTRY_ENVIRONMENT:-}"
+      # --- The company's OWN registration details (sofra ADR-013, B0/B4) ---
+      # Printed on every invoice AND on the public /legal imprint, from this one
+      # source so the two can never disagree. Not secrets: a KVK and a VAT number
+      # are public registry data that must appear on both.
+      #
+      # Unset is NOT neutral and is the state today — sofra REFUSES to issue any
+      # invoice until all of them are set, deliberately, because a placeholder KVK
+      # number on a real invoice is worse than no invoice: it looks finished.
+      # /admin/invoices names exactly which are missing.
+      #
+      # SOFRA_VAT_NUMBER does double duty: it is also sent to VIES as the
+      # requester, which is the ONLY way a check comes back with a consultation
+      # reference — the evidence that substantiates a reverse charge. Without it
+      # every check still answers, but unevidenced.
+      SOFRA_LEGAL_NAME: "${SOFRA_LEGAL_NAME:-}"
+      SOFRA_LEGAL_ADDRESS: "${SOFRA_LEGAL_ADDRESS:-}"
+      SOFRA_LEGAL_ADDRESS_2: "${SOFRA_LEGAL_ADDRESS_2:-}"
+      SOFRA_LEGAL_POSTAL: "${SOFRA_LEGAL_POSTAL:-}"
+      SOFRA_LEGAL_CITY: "${SOFRA_LEGAL_CITY:-}"
+      SOFRA_LEGAL_COUNTRY: "${SOFRA_LEGAL_COUNTRY:-NL}"
+      SOFRA_LEGAL_EMAIL: "${SOFRA_LEGAL_EMAIL:-}"
+      SOFRA_KVK: "${SOFRA_KVK:-}"
+      SOFRA_VAT_NUMBER: "${SOFRA_VAT_NUMBER:-}"
+      SOFRA_IBAN: "${SOFRA_IBAN:-}"
+      SOFRA_INVOICE_SERIES: "${SOFRA_INVOICE_SERIES:-SP}"
     volumes:
       # DIRECTORY mount (like caddy-tenants): rsync replaces registry.yml by
       # inode, a single-file mount would go stale after the first sync.
