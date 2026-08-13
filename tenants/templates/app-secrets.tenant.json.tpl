@@ -16,6 +16,8 @@
     "FromEmail": "__FROM_EMAIL__",
     "FromName": "__TENANT_NAME__",
     "AdminEmail": "__ADMIN_EMAIL__",
+    "_replyto_note": "Set only when the tenant is on the SHARED platform domain, where FromEmail is an address nobody reads — without it a guest replying to an order confirmation reaches a black hole. EMPTY when the tenant has its own mail_from, because that is already a monitored mailbox. Empty = no Reply-To header at all.",
+    "ReplyToEmail": "__REPLY_TO_EMAIL__",
     "FrontendBaseUrl": "https://__DOMAIN__",
     "BackendBaseUrl": "https://__DOMAIN__"
   },
