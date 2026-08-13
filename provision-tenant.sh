@@ -388,12 +388,13 @@ if [[ -f "$TENANT_DIR/app-secrets.json" ]]; then
     if [[ "$CURRENT_FROM" == "onboarding@resend.dev" ]]; then
       echo "      Until it is changed this tenant can email only the Resend account owner." >&2
     fi
+    # Printed as two single-line commands on purpose. An earlier version echoed a
+    # multi-line python heredoc, which reads as an actual heredoc OPENING in this
+    # script to anyone (or anything) scanning it — it already cost one reviewer a
+    # false "unbalanced if/fi" verdict. Keep emitted instructions free of shell
+    # block syntax.
     echo "      Apply by hand on the box, then restart the tenant:" >&2
-    echo "        python3 - <<'EOF'" >&2
-    echo "        import json; p='$TENANT_DIR/app-secrets.json'" >&2
-    echo "        d=json.load(open(p)); d['EmailSettings']['FromEmail']='$TENANT_FROM_EMAIL'" >&2
-    echo "        json.dump(d, open(p,'w'), indent=2)" >&2
-    echo "        EOF" >&2
+    echo "        python3 -c \"import json;p='$TENANT_DIR/app-secrets.json';d=json.load(open(p));d['EmailSettings']['FromEmail']='$TENANT_FROM_EMAIL';json.dump(d,open(p,'w'),indent=2)\"" >&2
     echo "        docker compose -p ${REG_COMPOSE_PROJECT} -f $TENANT_DIR/docker-compose.yml up -d" >&2
   fi
 else
