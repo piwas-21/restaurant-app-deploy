@@ -82,6 +82,20 @@
 #             control plane (tenant-registry.ts) to pre-fill the /admin/onboard
 #             "Live since" field; provision-tenant.sh never reads it. Absent = the
 #             admin enters the date manually. Quote it so YAML keeps it a string.
+#   mail_from: OPTIONAL bare address the tenant's mail is sent FROM, e.g. info@kebabhouse.ch.
+#             Absent = the default and the normal case: <slug>@$PLATFORM_MAIL_DOMAIN (the box's
+#             shared, Resend-verified platform domain). The display name is ALWAYS the
+#             restaurant's `name`, so the guest reads "Kebab House" either way — this field
+#             only decides the envelope domain, i.e. whose deliverability reputation is at
+#             stake. Set it only once that domain is VERIFIED in Resend; an unverified
+#             domain does not degrade, it 403s every send.
+#             Bare address only — no display name, no angle brackets (provisioning
+#             shape-checks it), and never rumirestaurant.ch for any tenant but `rumi`:
+#             tenant 1's verified domain is its identity, and sharing it puts tenant 1's
+#             deliverability behind a stranger's spam complaints.
+#             ⚠️ Changing this on an ALREADY-provisioned tenant does not take effect by
+#             re-running provisioning — app-secrets.json is kept so JWT/printer secrets
+#             survive. The script detects the mismatch and prints the exact hand-fix.
 #   status:   provisioning -> active -> retired (descriptive; keep honest)
 
 version: 1
