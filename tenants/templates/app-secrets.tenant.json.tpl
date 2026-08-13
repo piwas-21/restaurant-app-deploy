@@ -9,11 +9,11 @@
     "RefreshTokenExpiryDays": 7
   },
 
-  "_email_note": "Tenants send via the shared Resend onboarding sender until a per-tenant (or sofra brand) sending domain is verified — same reputation-protection rule as staging: never send as rumirestaurant.ch.",
+  "_email_note": "FromEmail is rendered from PLATFORM_MAIL_DOMAIN on the box (<slug>@<domain>), or from the entry's `mail_from:` when the tenant brings its own verified domain. FromName stays the restaurant, so the guest sees the restaurant and not the vendor. If PLATFORM_MAIL_DOMAIN is unset this renders Resend's shared onboarding@resend.dev, which reaches ONLY the Resend account owner's address (403 for everyone else) — provisioning warns about it. Reputation-protection rule is unchanged: never send as rumirestaurant.ch.",
   "EmailSettings": {
     "Provider": "Resend",
     "ResendApiKey": "__RESEND_API_KEY__",
-    "FromEmail": "onboarding@resend.dev",
+    "FromEmail": "__FROM_EMAIL__",
     "FromName": "__TENANT_NAME__",
     "AdminEmail": "__ADMIN_EMAIL__",
     "FrontendBaseUrl": "https://__DOMAIN__",

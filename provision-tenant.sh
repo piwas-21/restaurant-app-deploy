@@ -51,6 +51,11 @@ BOX_TELEMETRY_SECRET="$(grep -E '^PRINTER_TELEMETRY_SECRET=' .env | cut -d= -f2-
 # tenant on it stays inert, because the backend gateway needs key AND account AND the module.
 BOX_STRIPE_KEY="$(grep -E '^STRIPE_PLATFORM_API_KEY=' .env | cut -d= -f2- || true)"
 
+# The Resend-verified domain every tenant on this box sends from (EMAIL-IDENTITY-PLAN).
+# Quotes are stripped because .env is read by BOTH bash (which sources it) and this grep,
+# so a value may legitimately be written `PLATFORM_MAIL_DOMAIN="send.sofrapiwas.com"`.
+PLATFORM_MAIL_DOMAIN="$(grep -E '^PLATFORM_MAIL_DOMAIN=' .env | cut -d= -f2- | tr -d '"'"'"'' || true)"
+
 # Read the tenant's registry entry into REG_* shell vars (lists -> csv).
 eval "$(python3 - "$SLUG" <<'PY'
 import sys, yaml, shlex
@@ -64,7 +69,7 @@ if not t:
 for k in ("name", "status", "managed", "box", "domain", "domain_mode",
           "domain_aliases", "db", "db_role", "compose_project", "backend_tag",
           "frontend_tag", "currency", "languages", "modules", "admin_email",
-          "city", "template", "stripe_account"):
+          "city", "template", "stripe_account", "mail_from"):
     v = t.get(k, "")
     if isinstance(v, list):
         v = ",".join(map(str, v))
@@ -95,6 +100,47 @@ if [[ " ${REG_MODULES//,/ } " == *" online-payments "* && -z "$REG_STRIPE_ACCOUN
   echo "ERROR: tenant '$SLUG' buys 'online-payments' but has no 'stripe_account' in the registry" >&2
   echo "       Onboard the restaurant at Stripe first (hosted onboarding — see the runbook), then record its acct_ id." >&2
   exit 1
+fi
+
+# Sending identity (EMAIL-IDENTITY-PLAN). Two sources, in precedence order:
+#
+#   1. the entry's `mail_from:`   -> the tenant brought its OWN verified domain
+#   2. <slug>@$PLATFORM_MAIL_DOMAIN -> the shared platform domain (the default)
+#
+# The display name stays the restaurant either way (FromName in the template), so
+# a guest reads "Kebab House", not "Sofra". Only the envelope domain is shared.
+#
+# This is checked BEFORE anything is written, because the failure it guards is not
+# a bounce and not a log line — with neither source set the tenant falls back to
+# Resend's shared onboarding@resend.dev, which answers 403 for every recipient
+# except the Resend account owner's own address. The tenant then serves its guests
+# perfectly and silently emails none of them.
+TENANT_FROM_EMAIL=""
+if [[ -n "$REG_MAIL_FROM" ]]; then
+  # A typo here is silent and total — the address lands in app-secrets.json and every
+  # send 4xxs — so it is shape-checked rather than trusted.
+  [[ "$REG_MAIL_FROM" =~ ^[A-Za-z0-9._%+-]+@[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]] \
+    || { echo "ERROR: registry entry '$SLUG' has mail_from '$REG_MAIL_FROM' — expected a bare address like info@kebabhouse.ch (no display name, no angle brackets)" >&2; exit 1; }
+  # The one address the platform must never send as: RUMI's verified domain is
+  # tenant 1's identity, and a second tenant borrowing it puts tenant 1's
+  # deliverability behind a stranger's spam complaints.
+  [[ "$REG_MAIL_FROM" == *@rumirestaurant.ch ]] && [[ "$SLUG" != "rumi" ]] \
+    && { echo "ERROR: tenant '$SLUG' cannot send as rumirestaurant.ch — that is tenant 1's verified domain" >&2; exit 1; }
+  TENANT_FROM_EMAIL="$REG_MAIL_FROM"
+  echo "NOTE: tenant '$SLUG' sends from its own address '$TENANT_FROM_EMAIL'" >&2
+  echo "      That domain must be VERIFIED in Resend or every send 403s." >&2
+elif [[ -n "$PLATFORM_MAIL_DOMAIN" ]]; then
+  TENANT_FROM_EMAIL="${SLUG}@${PLATFORM_MAIL_DOMAIN}"
+else
+  TENANT_FROM_EMAIL="onboarding@resend.dev"
+  echo "WARN: PLATFORM_MAIL_DOMAIN is unset on this box and tenant '$SLUG' has no" >&2
+  echo "      'mail_from', so it falls back to Resend's shared onboarding@resend.dev." >&2
+  echo "      That sender reaches ONLY the Resend account owner's own address — every" >&2
+  echo "      other recipient is refused 403. For this tenant that means:" >&2
+  echo "        - /forgot-password answers HTTP 502 to the owner, permanently;" >&2
+  echo "        - verification, welcome, order and reservation mail fail SILENTLY." >&2
+  echo "      Do not hand this tenant to a paying customer. Verify a platform sending" >&2
+  echo "      domain in Resend, set PLATFORM_MAIL_DOMAIN, and re-run." >&2
 fi
 
 # Module flags (ADR-010 catalog). Same reasoning as `template`: an unknown value
@@ -331,6 +377,26 @@ fi
 echo "==> Tenant app-secrets.json"
 if [[ -f "$TENANT_DIR/app-secrets.json" ]]; then
   echo "   keep: app-secrets.json exists (JWT/printer secrets preserved)"
+  # The keep is deliberate, but it means the sender resolved above is NOT applied to
+  # an already-provisioned tenant. Left unsaid, that is the original defect repeating:
+  # the operator sets PLATFORM_MAIL_DOMAIN, re-runs, sees a green provision, and the
+  # tenant goes on emailing nobody. Compare and say so; do not rewrite a secrets file.
+  CURRENT_FROM="$(python3 -c 'import json;print(json.load(open("'"$TENANT_DIR"'/app-secrets.json")).get("EmailSettings",{}).get("FromEmail",""))' 2>/dev/null || true)"
+  if [[ -n "$CURRENT_FROM" && "$CURRENT_FROM" != "$TENANT_FROM_EMAIL" ]]; then
+    echo "WARN: this tenant still sends as '$CURRENT_FROM', but its configured sender is now" >&2
+    echo "      '$TENANT_FROM_EMAIL'. Re-provisioning does NOT change it (secrets are kept)." >&2
+    if [[ "$CURRENT_FROM" == "onboarding@resend.dev" ]]; then
+      echo "      Until it is changed this tenant can email only the Resend account owner." >&2
+    fi
+    # Printed as two single-line commands on purpose. An earlier version echoed a
+    # multi-line python heredoc, which reads as an actual heredoc OPENING in this
+    # script to anyone (or anything) scanning it — it already cost one reviewer a
+    # false "unbalanced if/fi" verdict. Keep emitted instructions free of shell
+    # block syntax.
+    echo "      Apply by hand on the box, then restart the tenant:" >&2
+    echo "        python3 -c \"import json;p='$TENANT_DIR/app-secrets.json';d=json.load(open(p));d['EmailSettings']['FromEmail']='$TENANT_FROM_EMAIL';json.dump(d,open(p,'w'),indent=2)\"" >&2
+    echo "        docker compose -p ${REG_COMPOSE_PROJECT} -f $TENANT_DIR/docker-compose.yml up -d" >&2
+  fi
 else
   # Reuse this box's Resend key (tenants send via onboarding@resend.dev — see
   # template note). Reads the key from the box's own app-secrets.json.
@@ -343,13 +409,14 @@ else
   # silently corrupt the JSON. Also parse-checks the result before writing.
   T_SLUG="$SLUG" T_DOMAIN="$REG_DOMAIN" T_NAME="$REG_NAME" T_ADMIN="$REG_ADMIN_EMAIL" \
   T_JWT="$JWT_SECRET" T_PRINTER="$PRINTER_APIKEY" T_RESEND="$RESEND_KEY" \
+  T_FROM="$TENANT_FROM_EMAIL" \
   T_OUT="$TENANT_DIR/app-secrets.json" python3 - <<'PY'
 import json, os
 tpl = open("tenants/templates/app-secrets.tenant.json.tpl").read()
 for token, env in (("__SLUG__", "T_SLUG"), ("__DOMAIN__", "T_DOMAIN"),
                    ("__TENANT_NAME__", "T_NAME"), ("__ADMIN_EMAIL__", "T_ADMIN"),
                    ("__JWT_SECRET__", "T_JWT"), ("__PRINTER_APIKEY__", "T_PRINTER"),
-                   ("__RESEND_API_KEY__", "T_RESEND")):
+                   ("__RESEND_API_KEY__", "T_RESEND"), ("__FROM_EMAIL__", "T_FROM")):
     tpl = tpl.replace(token, json.dumps(os.environ[env])[1:-1])
 json.loads(tpl)  # refuse to write corrupt JSON
 os.umask(0o177)
