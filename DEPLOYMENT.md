@@ -268,6 +268,46 @@ plane later calls the same scripts (ADR-003 — no parallel mechanism).
    page `<title>` and footer © should show the tenant name, and a decoded
    access token should carry `tenant: <slug>` (backend #117).
 
+### Tenant sending identity (`PLATFORM_MAIL_DOMAIN` — EMAIL-IDENTITY-PLAN)
+
+A tenant's `FromEmail` is resolved at provision time, in precedence order:
+
+| source | result |
+|---|---|
+| the registry entry's `mail_from:` | that address — the tenant brought its **own** Resend-verified domain |
+| box `.env` `PLATFORM_MAIL_DOMAIN` | `<slug>@<domain>` — the shared platform domain, the normal case |
+| neither | `onboarding@resend.dev` — **broken, see below** |
+
+`FromName` is always the restaurant's registry `name`, so a guest reads
+`Kebab House <kebabhouse@send.sofrapiwas.com>`. Only the envelope domain is shared.
+
+**Reply-To is set only on the shared domain.** `<slug>@send.sofrapiwas.com` is an address
+nobody reads, so provisioning renders `ReplyToEmail` = the tenant's `admin_email` (the same
+value that seeds `RestaurantInfo.Email`) and a guest replying to an order confirmation
+reaches the restaurant. A tenant with its own `mail_from:` gets **no** Reply-To — that
+address is already a monitored mailbox. Empty means no header at all, and a malformed value
+fails at **startup**, not at send time. RUMI is unaffected: it is `managed: legacy`, so these
+scripts never touch it, and its `FromEmail` is already a real monitored address.
+
+⚠️ **The fallback does not degrade, it fails.** Resend accepts `onboarding@resend.dev`
+**only for the Resend account owner's own address** and answers **403** for every other
+recipient. A tenant left on it serves its guests perfectly and emails none of them:
+`/forgot-password` answers **HTTP 502** to the owner permanently, while verification,
+welcome and order/reservation mail fail **silently** (they are swallowed so a dead mailer
+cannot fail a booking). `provision-tenant.sh` **warns loudly** rather than refusing —
+a tenant with broken mail still beats a funnel that cannot provision at all — but this is
+not a state to hand a paying customer.
+
+⚠️ **Setting `PLATFORM_MAIL_DOMAIN` does NOT fix an already-provisioned tenant.**
+`app-secrets.json` is *kept* when it exists so JWT and printer secrets survive, so a
+re-run shows a green provision and changes nothing. The script detects the mismatch and
+prints the exact one-line hand-fix plus the compose restart. Treat that as a real step.
+
+Setting the var requires a Resend plan that allows a second domain (free tier is **one**,
+already spent on `rumirestaurant.ch`, **and** caps sending at 100/day) and DKIM/SPF
+published **by hand** — `sofrapiwas.com`'s zone is not writable through `domainio-dns.sh`
+(domainio#231). Full owner checklist: the workspace repo's `docs/plans/EMAIL-IDENTITY-PLAN.md`.
+
 ### Module runtime enforcement (S11 — backend #268, sofra ADR-010)
 
 The registry's `modules:` list is **enforced at runtime**. Since 2026-08-01 a tenant
