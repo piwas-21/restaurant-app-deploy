@@ -281,6 +281,14 @@ A tenant's `FromEmail` is resolved at provision time, in precedence order:
 `FromName` is always the restaurant's registry `name`, so a guest reads
 `Kebab House <kebabhouse@send.sofrapiwas.com>`. Only the envelope domain is shared.
 
+**Reply-To is set only on the shared domain.** `<slug>@send.sofrapiwas.com` is an address
+nobody reads, so provisioning renders `ReplyToEmail` = the tenant's `admin_email` (the same
+value that seeds `RestaurantInfo.Email`) and a guest replying to an order confirmation
+reaches the restaurant. A tenant with its own `mail_from:` gets **no** Reply-To — that
+address is already a monitored mailbox. Empty means no header at all, and a malformed value
+fails at **startup**, not at send time. RUMI is unaffected: it is `managed: legacy`, so these
+scripts never touch it, and its `FromEmail` is already a real monitored address.
+
 ⚠️ **The fallback does not degrade, it fails.** Resend accepts `onboarding@resend.dev`
 **only for the Resend account owner's own address** and answers **403** for every other
 recipient. A tenant left on it serves its guests perfectly and emails none of them:

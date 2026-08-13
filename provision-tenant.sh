@@ -127,12 +127,22 @@ if [[ -n "$REG_MAIL_FROM" ]]; then
   [[ "$REG_MAIL_FROM" == *@rumirestaurant.ch ]] && [[ "$SLUG" != "rumi" ]] \
     && { echo "ERROR: tenant '$SLUG' cannot send as rumirestaurant.ch — that is tenant 1's verified domain" >&2; exit 1; }
   TENANT_FROM_EMAIL="$REG_MAIL_FROM"
+  # Own domain = a real monitored mailbox, so replies already land somewhere a human
+  # reads. Adding a Reply-To here would be noise at best and, if it pointed at the
+  # operator's alerting inbox, would publish that inbox to every guest.
+  TENANT_REPLY_TO=""
   echo "NOTE: tenant '$SLUG' sends from its own address '$TENANT_FROM_EMAIL'" >&2
   echo "      That domain must be VERIFIED in Resend or every send 403s." >&2
 elif [[ -n "$PLATFORM_MAIL_DOMAIN" ]]; then
   TENANT_FROM_EMAIL="${SLUG}@${PLATFORM_MAIL_DOMAIN}"
+  # On the SHARED domain the From is <slug>@send.sofrapiwas.com — an address nobody
+  # reads. Without this, a guest replying to an order confirmation is talking to a
+  # black hole. admin_email is the right target: it is the tenant's own contact
+  # address and the same value that seeds RestaurantInfo.Email.
+  TENANT_REPLY_TO="$REG_ADMIN_EMAIL"
 else
   TENANT_FROM_EMAIL="onboarding@resend.dev"
+  TENANT_REPLY_TO="$REG_ADMIN_EMAIL"
   echo "WARN: PLATFORM_MAIL_DOMAIN is unset on this box and tenant '$SLUG' has no" >&2
   echo "      'mail_from', so it falls back to Resend's shared onboarding@resend.dev." >&2
   echo "      That sender reaches ONLY the Resend account owner's own address — every" >&2
@@ -409,14 +419,15 @@ else
   # silently corrupt the JSON. Also parse-checks the result before writing.
   T_SLUG="$SLUG" T_DOMAIN="$REG_DOMAIN" T_NAME="$REG_NAME" T_ADMIN="$REG_ADMIN_EMAIL" \
   T_JWT="$JWT_SECRET" T_PRINTER="$PRINTER_APIKEY" T_RESEND="$RESEND_KEY" \
-  T_FROM="$TENANT_FROM_EMAIL" \
+  T_FROM="$TENANT_FROM_EMAIL" T_REPLY_TO="$TENANT_REPLY_TO" \
   T_OUT="$TENANT_DIR/app-secrets.json" python3 - <<'PY'
 import json, os
 tpl = open("tenants/templates/app-secrets.tenant.json.tpl").read()
 for token, env in (("__SLUG__", "T_SLUG"), ("__DOMAIN__", "T_DOMAIN"),
                    ("__TENANT_NAME__", "T_NAME"), ("__ADMIN_EMAIL__", "T_ADMIN"),
                    ("__JWT_SECRET__", "T_JWT"), ("__PRINTER_APIKEY__", "T_PRINTER"),
-                   ("__RESEND_API_KEY__", "T_RESEND"), ("__FROM_EMAIL__", "T_FROM")):
+                   ("__RESEND_API_KEY__", "T_RESEND"), ("__FROM_EMAIL__", "T_FROM"),
+                   ("__REPLY_TO_EMAIL__", "T_REPLY_TO")):
     tpl = tpl.replace(token, json.dumps(os.environ[env])[1:-1])
 json.loads(tpl)  # refuse to write corrupt JSON
 os.umask(0o177)
