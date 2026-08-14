@@ -179,7 +179,17 @@ services:
       # returns 503 and the form falls back to a mailto link; the site still serves.
       RESEND_API_KEY: "${RESEND_API_KEY:-}"
       WAITLIST_TO: "${WAITLIST_TO:-}"
-      WAITLIST_FROM: "${WAITLIST_FROM:-Sofra Waitlist <onboarding@resend.dev>}"
+      # NO DEFAULT SENDER, deliberately. This used to default to
+      # `Sofra Waitlist <onboarding@resend.dev>`, which silently re-armed the exact
+      # sandbox sender `sofra/lib/email.ts` was rewritten to refuse: Resend accepts
+      # that address ONLY for the account owner's own mailbox and answers 403 for
+      # every other recipient. A default here meant the app's refusal could never
+      # fire -- the var was never unset -- so a missing setting produced a mailer
+      # that works perfectly for the one person who would test it and reaches no
+      # customer at all. Empty is correct: `lib/email.ts` then logs loudly and
+      # returns {sent:false}. Set WAITLIST_FROM to a sender on a Resend-VERIFIED
+      # domain, e.g. "Sofra <sofra@send.sofrapiwas.com>".
+      WAITLIST_FROM: "${WAITLIST_FROM:-}"
       # Control plane (partner program — sofra ADR-008/009). Own DB + role on
       # the shared postgres server; RUMI's restaurantdb untouched. Migrations
       # are founder-run one-offs via ghcr.io/piwas-21/sofra-migrate — never on
