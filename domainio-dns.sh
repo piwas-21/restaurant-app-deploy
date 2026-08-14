@@ -89,6 +89,10 @@ for r in items:
         case "$line" in
           "OK  "*) echo "  ${line#OK  }"; total=$((total+1)) ;;
           "ERR "*) echo "  !! ${line#ERR }" >&2 ;;
+          # Anything else is output this parser does not understand, and dropping
+          # it silently would be the very bug this script exists to fix: an
+          # unreadable answer must never shrink the record count in silence.
+          *) echo "  !! unparsed line for $t: $line" >&2; errors=$((errors+1)) ;;
         esac
       done <<< "$out"
     done
