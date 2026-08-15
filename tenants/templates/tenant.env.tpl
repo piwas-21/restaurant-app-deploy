@@ -25,6 +25,14 @@ TENANT_ADMIN_PASSWORD=__ADMIN_PASSWORD__
 #   TENANT_AUTH_PERMIT_LIMIT=20
 TENANT_CURRENCY=__CURRENCY__
 TENANT_LANGUAGES=__LANGUAGES__
+# Language for mail with NO guest to follow — the operator's own new-order and
+# new-reservation alerts, and anything a background job sends. Unset = the FIRST
+# entry of TENANT_LANGUAGES above, computed by the backend, which is what a tenant
+# that sells in one language wants. Set it only to split the two: a venue whose
+# staff read German while its guests are served French first. It must be one of the
+# languages listed above (provision-tenant.sh refuses anything else) — a guest's own
+# mail is NEVER affected by this, that follows the guest.
+#   TENANT_DEFAULT_LANGUAGE=de
 TENANT_MODULES=__MODULES__
 # Module RUNTIME ENFORCEMENT (backend #268 / sofra ADR-010). This file is rendered
 # ONLY when a tenant is provisioned for the FIRST time, so `true` here is the

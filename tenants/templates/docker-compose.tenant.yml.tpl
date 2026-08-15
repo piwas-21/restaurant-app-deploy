@@ -61,6 +61,29 @@ services:
       # fallback stays the single source of truth. TENANT_CURRENCY above stays too
       # (plain record, same pattern as TENANT_LANGUAGES/TENANT_MODULES below).
       Localization__Currency: "${TENANT_CURRENCY:-}"
+      # Feeds the backend's LocalizationSettings.SupportedLanguages / DefaultLanguage
+      # (EMAIL-LOCALISATION-PLAN §1 rank 4 + §5 S9) — the languages this tenant's MAIL is
+      # written in. Same shape as Localization__Currency above: TENANT_LANGUAGES stays the
+      # plain record, this is the key the backend binds.
+      #
+      # THE EMPTY DEFAULT IS LOAD-BEARING, exactly as with Modules__Enabled: an ABSENT or
+      # empty list means ALL TEN, never "no language at all". The legacy RUMI install runs
+      # the MAIN compose project rather than this template, so it never receives these keys
+      # and must keep the backend's in-code defaults (all ten, `en`).
+      #
+      # A code the product has no copy for is dropped by the backend (LanguageCode) rather
+      # than honoured, and provision-tenant.sh refuses the registry entry outright — a typo
+      # here is otherwise silent, and the tenant simply never mails in the language it sells.
+      Localization__SupportedLanguages: "${TENANT_LANGUAGES:-}"
+      # The language for mail with NO guest to follow: operator alerts, background jobs.
+      # Deliberately blank by default — the backend then takes the FIRST entry of the list
+      # above, so the tenant's own order decides and there is exactly one place that computes
+      # it. Set TENANT_DEFAULT_LANGUAGE in the tenant .env only to override that (a venue
+      # whose staff read German while it sells to guests in French first). It is an OPERATOR
+      # control, not a registry field, so it survives a re-provision untouched — the same
+      # reasoning as TENANT_MODULES_ENFORCE below. provision-tenant.sh validates it against
+      # this tenant's own language list, because a value outside it is silently ignored.
+      Localization__DefaultLanguage: "${TENANT_DEFAULT_LANGUAGE:-}"
       # Login throttle (backend RateLimiterSettings.AuthPermitLimit). Production
       # tenants keep the backend's own tight default — it is the ONLY active
       # brute-force throttle on the login path, so it is not loosened casually.

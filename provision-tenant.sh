@@ -173,6 +173,38 @@ done
 [[ " ${REG_MODULES//,/ } " == *" core "* ]] \
   || echo "WARN: tenant '$SLUG' has no 'core' module — every instance runs the core surface regardless" >&2
 
+# Languages (EMAIL-LOCALISATION-PLAN §5 S9). Validated for the same reason the modules are,
+# and from S9 on it matters twice: this list is no longer only the UI switcher, it is the set
+# of languages the tenant's MAIL may be written in (Localization__SupportedLanguages). The
+# backend drops a code it has no copy for, so an unknown value does not break a boot — it just
+# quietly shrinks the list, and a tenant that believes it sells in that language never mails in
+# it. The vocabulary is the product's ten UI locales (backend LanguageCode.Supported /
+# frontend src/i18n.ts); it is refused here rather than shrugged off there.
+KNOWN_LANGUAGES="ar de en es fr it nl ru tr zh"
+IFS=',' read -ra _LANGUAGES <<< "$REG_LANGUAGES"
+for l in "${_LANGUAGES[@]}"; do
+  l="$(strip_ws "$l")"
+  [[ -z "$l" ]] && continue
+  [[ " $KNOWN_LANGUAGES " == *" $l "* ]] \
+    || { echo "ERROR: registry entry '$SLUG' lists unknown language '$l' — allowed: $KNOWN_LANGUAGES" >&2; exit 1; }
+done
+[[ -n "$(strip_ws "$REG_LANGUAGES")" ]] \
+  || echo "WARN: tenant '$SLUG' lists no languages — the backend then offers all ten and mails in 'en'" >&2
+
+# The operator's optional override for OPERATOR-facing mail (alerts, background jobs). Like
+# TENANT_MODULES_ENFORCE it is hand-written into the tenant .env and never touched by the
+# registry, so this is the only place it can be checked. A value outside the tenant's own list
+# is not an error in the backend — it logs a warning and uses the first entry — which means the
+# operator gets exactly what they did not ask for, silently, until someone reads a container
+# log. Catch it here instead.
+if [[ -f "$TENANT_DIR/.env" ]]; then
+  _DEFAULT_LANG="$(strip_ws "$(grep -m1 '^TENANT_DEFAULT_LANGUAGE=' "$TENANT_DIR/.env" | cut -d= -f2- || true)")"
+  if [[ -n "$_DEFAULT_LANG" ]]; then
+    [[ " $(strip_ws "$REG_LANGUAGES" | tr ',' ' ') " == *" $_DEFAULT_LANG "* ]] \
+      || { echo "ERROR: tenant '$SLUG' sets TENANT_DEFAULT_LANGUAGE='$_DEFAULT_LANG', which is not in its languages ($REG_LANGUAGES)" >&2; exit 1; }
+  fi
+fi
+
 # Backend tag (deploy #61, optional half; reframed 2026-07-31). `:latest` is published
 # ONLY from refs/heads/main and `:staging` ONLY from develop, so the TAG — not the box —
 # decides which code a tenant runs. sofra lib/provisioning-registry.ts now always emits
