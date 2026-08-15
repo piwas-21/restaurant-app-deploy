@@ -88,6 +88,17 @@ services:
       # reasoning as TENANT_MODULES_ENFORCE below. provision-tenant.sh validates it against
       # this tenant's own language list, because a value outside it is silently ignored.
       Localization__DefaultLanguage: "${TENANT_DEFAULT_LANGUAGE:-}"
+      # The wall clock this restaurant keeps (backend #363, ITenantClock). It decides what
+      # time a mail prints — "changed on … 21:30 (UTC+02:00)" — and what "are we open now"
+      # answers. An IANA id, e.g. Europe/Zurich, Europe/Amsterdam, America/New_York.
+      #
+      # Empty = the backend's product default, Europe/Zurich: the value WorkingHoursService
+      # used to hardcode, so the legacy RUMI install (which runs the MAIN compose project and
+      # never receives this key) is unchanged. An OPERATOR control like
+      # TENANT_DEFAULT_LANGUAGE above, not a registry field — a re-provision leaves it alone.
+      # An id the container's tzdata does not know is logged and falls back rather than
+      # stopping the tenant; provision-tenant.sh refuses it here, where a human can read why.
+      Localization__TimeZone: "${TENANT_TIMEZONE:-}"
       # Login throttle (backend RateLimiterSettings.AuthPermitLimit). Production
       # tenants keep the backend's own tight default — it is the ONLY active
       # brute-force throttle on the login path, so it is not loosened casually.
