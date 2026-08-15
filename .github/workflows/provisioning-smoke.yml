@@ -66,6 +66,10 @@ env:
   # inline in the assertion so widening the fixture is one edit in two obvious places,
   # not a red smoke blaming enforcement for a registry change.
   MODULES: core
+  # Must equal the fixture's `languages:` in tenants/registry.yml, for the same reason
+  # MODULES does — and it is asserted against the container env rather than an endpoint,
+  # because nothing serves this one over HTTP (GAP-2 S9).
+  LANGUAGES: en
   EXPECTED_STATUS: retired
   FRONTEND_REPO: piwas-21/restaurant-app-frontend
   FRONTEND_REF: main
@@ -264,6 +268,43 @@ jobs:
 
           [ "$fail" = "0" ] || exit 1
           echo "all checks passed"
+
+      - name: Verify the registry reached the container (email languages)
+        env:
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          set -euo pipefail
+          # GAP-2 S9. The languages list is the one registry field with no public endpoint
+          # to observe it: it decides what language this tenant's MAIL is written in, and
+          # mail is exactly what a smoke run cannot receive. So it is asserted where it
+          # lands — the container's own environment — rather than left to the first guest
+          # who orders in French to discover.
+          #
+          # `Localization__SupportedLanguages` and not `TENANT_LANGUAGES`: the second has
+          # been rendered into every tenant since ADR-010 as a plain record, and asserting
+          # it would pass on precisely the state S9 exists to fix (rendered, bound to
+          # nothing). An EMPTY value is a legitimate configuration meaning "all ten", which
+          # is why this is equality with the fixture rather than "non-empty".
+          #
+          # The container is found by its COMPOSE LABELS, not by a guessed name: the
+          # project is `tenant-<slug>` and the service is `backend-<slug>`, so the actual
+          # name is `tenant-smoke-backend-smoke-1` and any hand-built string is one
+          # template edit away from silently matching nothing. Env is fetched whole and
+          # grepped HERE, so the remote command carries no nested quoting.
+          ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes \
+            -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=15 "${STAGING_USER}@${STAGING_HOST}" \
+            "docker ps -q --filter label=com.docker.compose.project=tenant-${SLUG} --filter label=com.docker.compose.service=backend-${SLUG} | head -1 | xargs -r docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}'" \
+            > /tmp/tenant-env.txt || true
+          env_line="$(grep '^Localization__SupportedLanguages=' /tmp/tenant-env.txt || true)"
+          echo "  container env: ${env_line:-<absent>}"
+          if [ "$env_line" != "Localization__SupportedLanguages=${LANGUAGES}" ]; then
+            echo "::error::expected 'Localization__SupportedLanguages=${LANGUAGES}' in the tenant container, got '${env_line:-<absent>}'"
+            echo "::error::the registry's languages list did not reach the backend — this tenant would mail its guests in the wrong language"
+            exit 1
+          fi
+          echo "registry languages reached the container"
 
       - name: Destroy the tenant
         if: always()

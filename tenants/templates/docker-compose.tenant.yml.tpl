@@ -74,6 +74,10 @@ services:
       # A code the product has no copy for is dropped by the backend (LanguageCode) rather
       # than honoured, and provision-tenant.sh refuses the registry entry outright — a typo
       # here is otherwise silent, and the tenant simply never mails in the language it sells.
+      # The value must reach the container UNQUOTED. compose strips the quotes off a .env
+      # value, so `TENANT_LANGUAGES="en,nl"` in the tenant .env is fine; a value quoted
+      # inside the registry YAML string itself would arrive as a literal `"en,nl"`, which
+      # the backend reads as no usable code at all and answers with all ten.
       Localization__SupportedLanguages: "${TENANT_LANGUAGES:-}"
       # The language for mail with NO guest to follow: operator alerts, background jobs.
       # Deliberately blank by default — the backend then takes the FIRST entry of the list
