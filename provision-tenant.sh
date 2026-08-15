@@ -215,14 +215,39 @@ done
 # PLATFORM_MAIL_DOMAIN is read with `tr -d '"'` at the top of this script. LAST occurrence, not
 # first: a duplicated key means compose uses the last one, so checking the first would validate
 # a line the container never sees.
+# The read itself is a function because it is now used twice, and because the inline version had
+# a defect that only a value with BOTH a quote and a trailing comment could show:
+# `TENANT_DEFAULT_LANGUAGE="de"   # staff read German` stripped the comment, left the trailing
+# SPACES, and so never matched the `["']$` rule — the value came out as `de"` and the check
+# refused a tenant docker compose reads perfectly well. Trailing whitespace is dropped BEFORE the
+# closing quote, and both are dropped before the value is used.
+env_value() {
+  local key="$1" file="$2"
+
+  strip_ws "$(grep "^${key}=" "$file" | tail -1 | cut -d= -f2- \
+    | sed -e 's/[[:space:]]#.*$//' -e 's/[[:space:]]*$//' -e 's/^["'"'"']//' -e 's/["'"'"']$//' || true)"
+}
+
 if [[ -f "$TENANT_DIR/.env" ]]; then
-  _DEFAULT_LANG="$(strip_ws "$(grep '^TENANT_DEFAULT_LANGUAGE=' "$TENANT_DIR/.env" | tail -1 | cut -d= -f2- \
-    | sed -e 's/[[:space:]]#.*$//' -e 's/^["'"'"']//' -e 's/["'"'"']$//' || true)")"
+  _DEFAULT_LANG="$(env_value TENANT_DEFAULT_LANGUAGE "$TENANT_DIR/.env")"
   if [[ -n "$_DEFAULT_LANG" ]]; then
     _EFFECTIVE_LANGS="$(strip_ws "$REG_LANGUAGES" | tr ',' ' ')"
     [[ -n "$_EFFECTIVE_LANGS" ]] || _EFFECTIVE_LANGS="$KNOWN_LANGUAGES"
     [[ " $_EFFECTIVE_LANGS " == *" $_DEFAULT_LANG "* ]] \
       || { echo "ERROR: tenant '$SLUG' sets TENANT_DEFAULT_LANGUAGE='$_DEFAULT_LANG', which is not one of its languages ($_EFFECTIVE_LANGS)" >&2; exit 1; }
+  fi
+
+  # Same read, same trap (last occurrence, quotes and trailing comments stripped), for the
+  # tenant's wall clock (backend #363). A typo'd id is not fatal in the container — the
+  # backend logs it and falls back to Europe/Zurich — which is precisely why it is refused
+  # HERE: the alternative is a tenant that mails the wrong hour, in the right format, with
+  # the reason buried in a startup log nobody reads. Checked against the box's own tzdata,
+  # which is the same database the container carries; if this host has none, the check is
+  # skipped rather than turned into a refusal it cannot justify.
+  _TENANT_TZ="$(env_value TENANT_TIMEZONE "$TENANT_DIR/.env")"
+  if [[ -n "$_TENANT_TZ" && -d /usr/share/zoneinfo ]]; then
+    [[ -f "/usr/share/zoneinfo/$_TENANT_TZ" ]] \
+      || { echo "ERROR: tenant '$SLUG' sets TENANT_TIMEZONE='$_TENANT_TZ' (read with whitespace removed), which is not an IANA timezone this box knows (e.g. Europe/Zurich)" >&2; exit 1; }
   fi
 fi
 
