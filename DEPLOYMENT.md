@@ -252,6 +252,23 @@ plane later calls the same scripts (ADR-003 — no parallel mechanism).
    half `TENANT_CURRENCY` → `Localization__Currency` ships via the tenant
    compose template since #33). All three are optional (defaults preserve old
    dispatches) but every real tenant should pass the registry values.
+3b. **Languages** — the registry `languages:` list is not only the UI switcher: since
+   GAP-2 S9 it also ships as `Localization__SupportedLanguages`, the set of languages
+   this tenant's **email** may be written in (backend translates `en`, `fr`, `de`;
+   anything else falls back to English). `provision-tenant.sh` refuses a code outside
+   `ar de en es fr it nl ru tr zh`, lower-case primary subtag only — `fr`, never `FR`
+   or `fr-CH`. An **empty** list means all ten, exactly as an empty `Modules__Enabled`
+   means unrestricted; RUMI runs the main compose project and never receives the key
+   at all.
+   Mail with no guest to follow — the operator's own new-order and new-reservation
+   alerts, and anything a background job sends — goes out in the **first** entry of
+   that list. To split the two (staff who read German while guests are served French
+   first), hand-write `TENANT_DEFAULT_LANGUAGE=<code>` in the tenant's `.env`: it is an
+   operator control, never a registry field, so a re-provision leaves it alone, and it
+   must be one of the tenant's own languages (provisioning refuses anything else).
+   A guest's own mail is never affected by it — that follows the guest.
+   Both keys are read at startup: changing either needs a re-provision **and** a
+   container recreate, not just a restart of the script.
 4. **Provision** (on the box):
    ```bash
    bash .ssh/staging.sh 'cd /opt/rumi/deploy && ./provision-tenant.sh <slug>'
