@@ -173,6 +173,60 @@ done
 [[ " ${REG_MODULES//,/ } " == *" core "* ]] \
   || echo "WARN: tenant '$SLUG' has no 'core' module — every instance runs the core surface regardless" >&2
 
+# Languages (EMAIL-LOCALISATION-PLAN §5 S9). Validated for the same reason the modules are,
+# and from S9 on it matters twice: this list is no longer only the UI switcher, it is the set
+# of languages the tenant's MAIL may be written in (Localization__SupportedLanguages). The
+# backend drops a code it has no copy for, so an unknown value does not break a boot — it just
+# quietly shrinks the list, and a tenant that believes it sells in that language never mails in
+# it. The vocabulary is the product's ten UI locales (backend LanguageCode.Supported /
+# frontend src/i18n.ts); it is refused here rather than shrugged off there.
+#
+# Deliberately STRICTER than the backend, which also accepts "FR" and "fr-CH" and normalises
+# them: the registry is a canonical record, not a request. The message says so, because an
+# operator who wrote `fr-CH` has misspelled a language the product HAS, and being told it is
+# unknown sends them looking for the wrong thing.
+KNOWN_LANGUAGES="ar de en es fr it nl ru tr zh"
+IFS=',' read -ra _LANGUAGES <<< "$REG_LANGUAGES"
+for l in "${_LANGUAGES[@]}"; do
+  l="$(strip_ws "$l")"
+  [[ -z "$l" ]] && continue
+  [[ " $KNOWN_LANGUAGES " == *" $l "* ]] \
+    || { echo "ERROR: registry entry '$SLUG' lists unknown language '$l' — allowed: $KNOWN_LANGUAGES (lower-case primary subtag only: 'fr', never 'FR' or 'fr-CH')" >&2; exit 1; }
+done
+[[ -n "$(strip_ws "$REG_LANGUAGES")" ]] \
+  || echo "WARN: tenant '$SLUG' lists no languages — the backend then offers all ten and mails in 'en'" >&2
+
+# The operator's optional override for OPERATOR-facing mail (alerts, background jobs). Like
+# TENANT_MODULES_ENFORCE it is hand-written into the tenant .env and never touched by the
+# registry, so this is the only place it can be checked. A value outside the tenant's own list
+# is not an error in the backend — it logs a warning and uses the first entry — which means the
+# operator gets exactly what they did not ask for, silently, until someone reads a container
+# log. Catch it here instead.
+#
+# The value is compared against the tenant's EFFECTIVE set, not the literal registry string:
+# an empty `languages` means ALL TEN downstream (compose passes "", the backend reads that as
+# unconfigured), so validating against the empty string would refuse a default that the running
+# container accepts and honours — and would do it on a re-provision the operator started for
+# some entirely unrelated reason.
+#
+# It is read the way `.env` actually gets written, not the way it is documented: quotes and a
+# trailing ` # comment` are both legal there and both stripped by docker compose, so a raw grep
+# refuses a tenant that is configured correctly and running correctly. Same reason
+# PLATFORM_MAIL_DOMAIN is read with `tr -d '"'` at the top of this script. LAST occurrence, not
+# first: a duplicated key means compose uses the last one, so checking the first would validate
+# a line the container never sees.
+if [[ -f "$TENANT_DIR/.env" ]]; then
+  _DEFAULT_LANG="$(strip_ws "$(grep '^TENANT_DEFAULT_LANGUAGE=' "$TENANT_DIR/.env" | tail -1 | cut -d= -f2- \
+    | sed -e 's/[[:space:]]#.*$//' -e 's/^["'"'"']//' -e 's/["'"'"']$//' || true)")"
+  if [[ -n "$_DEFAULT_LANG" ]]; then
+    _EFFECTIVE_LANGS="$(strip_ws "$REG_LANGUAGES" | tr ',' ' ')"
+    [[ -n "$_EFFECTIVE_LANGS" ]] || _EFFECTIVE_LANGS="$KNOWN_LANGUAGES"
+    [[ " $_EFFECTIVE_LANGS " == *" $_DEFAULT_LANG "* ]] \
+      || { echo "ERROR: tenant '$SLUG' sets TENANT_DEFAULT_LANGUAGE='$_DEFAULT_LANG', which is not one of its languages ($_EFFECTIVE_LANGS)" >&2; exit 1; }
+  fi
+fi
+
+
 # Backend tag (deploy #61, optional half; reframed 2026-07-31). `:latest` is published
 # ONLY from refs/heads/main and `:staging` ONLY from develop, so the TAG — not the box —
 # decides which code a tenant runs. sofra lib/provisioning-registry.ts now always emits
@@ -345,6 +399,11 @@ else
   # upper/lower/digit/symbol classes the backend's Identity policy requires —
   # random alnum alone can miss a class and the seeder would silently skip.
   TENANT_ADMIN_PASSWORD="$(rand 48 24)!Aa1"
+  # strip_ws on the three product lists (currency/languages/modules), because the
+  # RE-PROVISION path above already writes them stripped (set_env_line "$(strip_ws ...)").
+  # Without it a tenant's .env said `TENANT_LANGUAGES=en, nl` on its first day and `en,nl`
+  # after any later re-provision — the same tenant, two spellings, and every reader has to
+  # forgive both forever. The YAML string form (`languages: "en, nl"`) is what produces it.
   sed -e "s|__SLUG__|${SLUG}|g" \
       -e "s|__DOMAIN__|${REG_DOMAIN}|g" \
       -e "s|__NAME__|$(sed_escape "$ENV_NAME")|g" \
@@ -356,9 +415,9 @@ else
       -e "s|__DB_PASSWORD__|${TENANT_DB_PASSWORD}|g" \
       -e "s|__ADMIN_EMAIL__|${REG_ADMIN_EMAIL}|g" \
       -e "s|__ADMIN_PASSWORD__|${TENANT_ADMIN_PASSWORD}|g" \
-      -e "s|__CURRENCY__|${REG_CURRENCY}|g" \
-      -e "s|__LANGUAGES__|${REG_LANGUAGES}|g" \
-      -e "s|__MODULES__|${REG_MODULES}|g" \
+      -e "s|__CURRENCY__|$(strip_ws "$REG_CURRENCY")|g" \
+      -e "s|__LANGUAGES__|$(strip_ws "$REG_LANGUAGES")|g" \
+      -e "s|__MODULES__|$(strip_ws "$REG_MODULES")|g" \
       -e "s|__TEMPLATE__|${TENANT_TEMPLATE}|g" \
       tenants/templates/tenant.env.tpl > "$TENANT_DIR/.env"
   chmod 600 "$TENANT_DIR/.env"
