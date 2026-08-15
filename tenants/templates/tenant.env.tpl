@@ -33,6 +33,12 @@ TENANT_LANGUAGES=__LANGUAGES__
 # languages listed above (provision-tenant.sh refuses anything else) — a guest's own
 # mail is NEVER affected by this, that follows the guest.
 #   TENANT_DEFAULT_LANGUAGE=de
+# The restaurant's own wall clock, as an IANA timezone id. Unset = Europe/Zurich,
+# which is what the backend has always assumed. It decides the time printed in a
+# mail (with its offset marker, e.g. "21:30 (UTC+02:00)") and the answer to "are we
+# open now" — so a tenant outside Switzerland MUST set it or both are an hour or
+# more out. provision-tenant.sh refuses an id the box does not know.
+#   TENANT_TIMEZONE=Europe/Amsterdam
 TENANT_MODULES=__MODULES__
 # Module RUNTIME ENFORCEMENT (backend #268 / sofra ADR-010). This file is rendered
 # ONLY when a tenant is provisioned for the FIRST time, so `true` here is the

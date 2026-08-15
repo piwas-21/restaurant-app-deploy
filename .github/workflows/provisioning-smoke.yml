@@ -306,6 +306,21 @@ jobs:
           fi
           echo "registry languages reached the container"
 
+          # backend #363, same reasoning one level weaker. TENANT_TIMEZONE is an OPERATOR
+          # control, so a smoke tenant has none and the correct value here is the EMPTY
+          # string — which is exactly why it is worth asserting: an absent KEY and an empty
+          # VALUE look identical to a guest and mean different things to compose. Present
+          # and empty proves the template wiring; the backend then applies its own
+          # Europe/Zurich default, which is the state every tenant provisioned today is in.
+          tz_line="$(grep '^Localization__TimeZone=' /tmp/tenant-env.txt || true)"
+          echo "  container env: ${tz_line:-<absent>}"
+          if [ "$tz_line" != "Localization__TimeZone=" ]; then
+            echo "::error::expected an empty 'Localization__TimeZone=' in the tenant container, got '${tz_line:-<absent>}'"
+            echo "::error::the wall-clock key is not wired — this tenant would print the wrong hour in every mail with no way to correct it"
+            exit 1
+          fi
+          echo "the wall-clock key reached the container"
+
       - name: Destroy the tenant
         if: always()
         env:
