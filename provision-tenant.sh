@@ -247,7 +247,7 @@ if [[ -f "$TENANT_DIR/.env" ]]; then
   _TENANT_TZ="$(env_value TENANT_TIMEZONE "$TENANT_DIR/.env")"
   if [[ -n "$_TENANT_TZ" && -d /usr/share/zoneinfo ]]; then
     [[ -f "/usr/share/zoneinfo/$_TENANT_TZ" ]] \
-      || { echo "ERROR: tenant '$SLUG' sets TENANT_TIMEZONE='$_TENANT_TZ', which is not an IANA timezone this box knows (e.g. Europe/Zurich)" >&2; exit 1; }
+      || { echo "ERROR: tenant '$SLUG' sets TENANT_TIMEZONE='$_TENANT_TZ' (read with whitespace removed), which is not an IANA timezone this box knows (e.g. Europe/Zurich)" >&2; exit 1; }
   fi
 fi
 
