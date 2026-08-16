@@ -11,7 +11,12 @@ backend auto-migrates and seeds a fresh Postgres on first boot, and file uploads
 This repo is the source of truth; the box (`/opt/rumi/deploy`) is a plain directory, not a git
 checkout. On every push to `main`, **`.github/workflows/sync-to-box.yml` rsyncs these files to the
 box** over SSH (read-only deploy access; `.env` and `app-secrets.json` are excluded and never
-touched — edit those on the box directly). Requires `rsync` on the box (installed) and repo secrets
+touched — edit those on the box directly). **The rsync never uses `--delete`, and never will:** the
+destination is not a mirror of this repo — `provision-tenant.sh` renders every live tenant's
+`caddy-tenants/<slug>.caddy` *inside* `/opt/rumi/deploy` (which is why that glob is in `.gitignore`),
+so `--delete` would take every tenant site off the internet on the next push to `main`. The cost of
+that choice is that a file deleted here lingers on the box; the sync job therefore prints a **dry-run**
+list of such leftovers on every run, and they are removed by hand. Requires `rsync` on the box (installed) and repo secrets
 `DEPLOY_HOST` / `DEPLOY_USER` / `DEPLOY_SSH_KEY` / `DEPLOY_KNOWN_HOSTS`. App **image** rollouts are
 separate — each app repo's own `deploy.yml` handles those (see [DEPLOYMENT.md](DEPLOYMENT.md)).
 
