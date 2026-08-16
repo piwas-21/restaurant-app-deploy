@@ -35,7 +35,10 @@ run-name: provisioning-smoke ${{ github.event_name }}
 #   3. Teardown is `if: always()`. A failed check must not leave a tenant running, and
 #      `--purge` is what makes the slug re-runnable next week.
 #   4. Concurrency group is SHARED with provision-tenant.yml and the chain, so this can
-#      never touch the box's Caddy/compose while a real provision is in flight.
+#      never touch the box's Caddy/compose while a real provision is in flight. It is held
+#      by the `smoke` JOB only — the image build deliberately runs outside it, because
+#      holding a lock a real customer needs while waiting on a build in another repo is
+#      not safety, it is a queue.
 
 on:
   schedule:
@@ -44,16 +47,17 @@ on:
     - cron: "17 4 * * 1"
   workflow_dispatch: {}
 
-concurrency:
-  # SHARED with provision-tenant.yml and provision-on-registry-merge.yml: all three run
-  # provision-tenant.sh against the same box, and it touches shared Caddy + compose.
-  group: provision-tenant
-  cancel-in-progress: false
+# NOTE: the shared `provision-tenant` concurrency group is declared on the `smoke` JOB,
+# not here. Workflow-level concurrency holds the lock for the whole run, and this run
+# spends its first ~3.5 minutes waiting on an image build in another repo — during which
+# a real customer's provision would have been queued behind a fixture. The lock is now
+# taken only for the part that actually touches the box.
 
 permissions:
   contents: read
-  # Reporting only — a failed smoke must reach the founder's inbox, not just this log.
-  issues: write
+  # `issues: write` is NOT granted here. Only the `report` job needs it, and it is the one
+  # job that never touches the box — no reason for the SSH-bearing job to be able to write
+  # to the tracker.
 
 env:
   SLUG: smoke
@@ -76,10 +80,140 @@ env:
   BUILD_WAIT_SECS: "1200"
 
 jobs:
+  # Builds the tenant image, and holds NO lock while doing it. Two changes in one job:
+  #
+  # 1. It is a separate job so the shared `provision-tenant` concurrency group (now on
+  #    the `smoke` job below) is not held for the 172-212s this takes. Measured over four
+  #    runs, the build was 76% of the whole smoke; the thing actually under test —
+  #    provision, verify over the internet, destroy, confirm — is 44-51s. On a Monday
+  #    morning when a real customer's registry PR merges, the fixture used to sit in front
+  #    of it for ~4 minutes.
+  #
+  # 2. It usually does not build at all. The image tag (`tenant-smoke`) and the frontend
+  #    ref (`main`) are both fixed, so if `main` has not moved since the last smoke, the
+  #    rebuild produces an equivalent image. The last-built SHA is remembered in the
+  #    Actions cache.
+  #
+  # What this gives up: re-proving weekly that the tenant image BUILDS. That is not lost —
+  # the frontend repo's own CI builds on every change to `main` — but a break that only the
+  # tenant-arg path exposes would surface on the next frontend change rather than next
+  # Monday. Hence the forced rebuild in the first week of each month, which puts a floor
+  # under how stale that proof can get.
+  image:
+    name: build the tenant image (only when the frontend moved)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Decide whether the tenant image needs rebuilding
+        id: decide
+        env:
+          FRONTEND_DISPATCH_TOKEN: ${{ secrets.FRONTEND_DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          sha="$(GH_TOKEN="$FRONTEND_DISPATCH_TOKEN" gh api \
+                  "repos/${FRONTEND_REPO}/commits/${FRONTEND_REF}" --jq .sha)"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "${FRONTEND_REPO}@${FRONTEND_REF} is at $sha"
+
+          # First week of the month: rebuild regardless, so "the tenant image still
+          # builds" is re-proved at least monthly even if the frontend is quiet.
+          # %-d, not %d: `[ 08 -le 7 ]` is an octal-parse error in bash, and the failure
+          # would land on exactly two days of the month.
+          day="$(date -u +%-d)"
+          if [ "$day" -le 7 ]; then
+            echo "monthly forced rebuild (day ${day} of the month)"
+            echo "forced=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "forced=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # A marker keyed on the SHA. A hit means the last smoke already built this exact
+      # frontend commit into the `tenant-smoke` tag. A miss is the safe direction: build.
+      # (Cache entries expire after 7 days unused; a weekly schedule keeps this one warm,
+      # and an expiry costs one extra build, never a wrong one.)
+      - name: Look up the last built frontend SHA
+        id: marker
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .smoke-image-marker
+          key: tenant-smoke-image-${{ steps.decide.outputs.sha }}
+
+      - name: Build the tenant image
+        id: build
+        if: ${{ steps.marker.outputs.cache-hit != 'true' || steps.decide.outputs.forced == 'true' }}
+        env:
+          FRONTEND_DISPATCH_TOKEN: ${{ secrets.FRONTEND_DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          # A minute of slack: the runs list is eventually consistent, and clock skew that
+          # put `since` in the future would never match the run we just made.
+          since="$(python3 -c 'import datetime as d; print((d.datetime.now(d.timezone.utc) - d.timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
+
+          GH_TOKEN="$FRONTEND_DISPATCH_TOKEN" gh workflow run build-tenant-image.yml \
+            --repo "$FRONTEND_REPO" --ref "$FRONTEND_REF" \
+            -f tenant_domain="$DOMAIN" \
+            -f image_tag="$IMAGE_TAG" \
+            -f restaurant_name="$TENANT_NAME" \
+            -f template="$TEMPLATE" \
+            -f currency="$CURRENCY"
+
+          # Match on `run-name`, which build-tenant-image sets to
+          # "build-tenant-image <image_tag>". That seam reached main with frontend #350,
+          # so unlike the merge chain — which still carries a time-matching fallback for
+          # refs that predate it — this can REQUIRE the name and fail loudly without it.
+          # A fallback that silently picks "some recent run" is how you verify the wrong
+          # build.
+          deadline=$(( $(date +%s) + BUILD_WAIT_SECS ))
+          run_id=""
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            run_id="$(GH_TOKEN="$FRONTEND_DISPATCH_TOKEN" gh run list \
+              --repo "$FRONTEND_REPO" --workflow build-tenant-image.yml \
+              --created ">=${since}" --limit 20 \
+              --json databaseId,displayTitle,status,conclusion \
+              --jq "[.[] | select(.displayTitle == \"build-tenant-image ${IMAGE_TAG}\")] | .[0].databaseId // empty")"
+            [ -n "$run_id" ] && break
+            sleep 10
+          done
+          if [ -z "$run_id" ]; then
+            echo "::error::no build-tenant-image run named 'build-tenant-image ${IMAGE_TAG}' appeared within ${BUILD_WAIT_SECS}s."
+            echo "::error::If the frontend's run-name has changed, fix the match rather than adding a fallback."
+            exit 1
+          fi
+          echo "watching frontend run $run_id"
+          GH_TOKEN="$FRONTEND_DISPATCH_TOKEN" gh run watch "$run_id" --repo "$FRONTEND_REPO" --exit-status
+
+      - name: Skipped the rebuild
+        if: ${{ steps.build.outcome == 'skipped' }}
+        run: |
+          echo "::notice::${FRONTEND_REPO}@${FRONTEND_REF} is unchanged (${{ steps.decide.outputs.sha }}) — reusing the existing ${IMAGE_TAG} image."
+
+      # Written only after a build that actually succeeded, so a failed build cannot make
+      # the next run believe the image is current.
+      - name: Remember the built frontend SHA
+        if: ${{ steps.build.outcome == 'success' }}
+        run: echo "${{ steps.decide.outputs.sha }}" > .smoke-image-marker
+
+      # Not when the marker was already a hit (a forced monthly rebuild of an unchanged
+      # SHA): re-saving an existing key is a no-op that logs a scary warning.
+      - name: Save the marker
+        if: ${{ steps.build.outcome == 'success' && steps.marker.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .smoke-image-marker
+          key: tenant-smoke-image-${{ steps.decide.outputs.sha }}
+
   smoke:
     name: provision, verify, destroy
+    needs: image
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    # SHARED with provision-tenant.yml and provision-on-registry-merge.yml: all three run
+    # provision-tenant.sh against the same box, and it touches shared Caddy + compose.
+    # Declared on the job rather than the workflow so the image build above does not hold
+    # it — see the note at the top of this file.
+    concurrency:
+      group: provision-tenant
+      cancel-in-progress: false
     steps:
       - name: Configure SSH (pinned host key)
         env:
@@ -129,48 +263,6 @@ jobs:
             echo "::error::Clear it with: ./deprovision-tenant.sh ${SLUG} --drop-db --purge"
             exit 1
           fi
-
-      - name: Build the tenant image
-        env:
-          FRONTEND_DISPATCH_TOKEN: ${{ secrets.FRONTEND_DISPATCH_TOKEN }}
-        run: |
-          set -euo pipefail
-          # A minute of slack: the runs list is eventually consistent, and clock skew that
-          # put `since` in the future would never match the run we just made.
-          since="$(python3 -c 'import datetime as d; print((d.datetime.now(d.timezone.utc) - d.timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
-
-          GH_TOKEN="$FRONTEND_DISPATCH_TOKEN" gh workflow run build-tenant-image.yml \
-            --repo "$FRONTEND_REPO" --ref "$FRONTEND_REF" \
-            -f tenant_domain="$DOMAIN" \
-            -f image_tag="$IMAGE_TAG" \
-            -f restaurant_name="$TENANT_NAME" \
-            -f template="$TEMPLATE" \
-            -f currency="$CURRENCY"
-
-          # Match on `run-name`, which build-tenant-image sets to
-          # "build-tenant-image <image_tag>". That seam reached main with frontend #350,
-          # so unlike the merge chain — which still carries a time-matching fallback for
-          # refs that predate it — this can REQUIRE the name and fail loudly without it.
-          # A fallback that silently picks "some recent run" is how you verify the wrong
-          # build.
-          deadline=$(( $(date +%s) + BUILD_WAIT_SECS ))
-          run_id=""
-          while [ "$(date +%s)" -lt "$deadline" ]; do
-            run_id="$(GH_TOKEN="$FRONTEND_DISPATCH_TOKEN" gh run list \
-              --repo "$FRONTEND_REPO" --workflow build-tenant-image.yml \
-              --created ">=${since}" --limit 20 \
-              --json databaseId,displayTitle,status,conclusion \
-              --jq "[.[] | select(.displayTitle == \"build-tenant-image ${IMAGE_TAG}\")] | .[0].databaseId // empty")"
-            [ -n "$run_id" ] && break
-            sleep 10
-          done
-          if [ -z "$run_id" ]; then
-            echo "::error::no build-tenant-image run named 'build-tenant-image ${IMAGE_TAG}' appeared within ${BUILD_WAIT_SECS}s."
-            echo "::error::If the frontend's run-name has changed, fix the match rather than adding a fallback."
-            exit 1
-          fi
-          echo "watching frontend run $run_id"
-          GH_TOKEN="$FRONTEND_DISPATCH_TOKEN" gh run watch "$run_id" --repo "$FRONTEND_REPO" --exit-status
 
       - name: Provision on the box
         env:
@@ -354,8 +446,19 @@ jobs:
           fi
           echo "box is clean"
 
-      - name: Report a failure where it will be seen
-        if: failure()
+  # Its own job, so a failure in EITHER job is reported. It used to be a step inside the
+  # single smoke job; once the image build moved out, a build failure would have gone to
+  # nobody but the Actions tab on a Monday morning.
+  report:
+    name: report a failure where it will be seen
+    needs: [image, smoke]
+    if: ${{ failure() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Open or update the failure issue
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -370,6 +473,9 @@ jobs:
             "" \
             "- run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             "- slug: \`${SLUG}\` (${DOMAIN})" \
+            "" \
+            "If the failed job is \`image\`, nothing was provisioned and the box was never" \
+            "touched — the tenant image build in the frontend repo is what broke." \
             "" \
             "The teardown step runs on failure too, so the box should be clean — the run" \
             "log's 'Confirm nothing was left behind' step says whether it is. If that step" \
