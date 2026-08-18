@@ -366,6 +366,37 @@ install -d "$TENANT_DIR" "$TENANT_DIR/uploads"
 # URL/connection-string-safe randoms (same recipe as gen-secrets.sh).
 rand() { local bytes="$1" len="$2"; openssl rand -base64 "$bytes" | tr -d '/+=' | cut -c1-"$len"; }
 
+# --- BEGIN admin-password helpers (extracted verbatim by tests/admin-password.sh) ---
+# True when the same character appears three times in a row anywhere in $1.
+#
+# Written in bash rather than as `grep -E '(.)\1{2,}'` on purpose: that pattern needs a
+# BACKREFERENCE, which POSIX ERE does not have. GNU grep happens to accept it and BusyBox
+# does not, so the grep spelling would silently stop matching on an Alpine box and the
+# guard below would pass everything — a check that fails open, on the one box nobody would
+# think to re-test.
+has_triple_run() {
+  local s="$1" i
+  for (( i = 2; i < ${#s}; i++ )); do
+    if [[ "${s:i-2:1}" == "${s:i-1:1}" && "${s:i-1:1}" == "${s:i:1}" ]]; then return 0; fi
+  done
+  return 1
+}
+
+# An admin bootstrap password the backend will actually accept. See the call site for what
+# happens when it does not. Bounded: at ~0.56% per candidate, ten tries fail once in 10^23
+# provisions, and an unbounded loop against a future rule that rejects EVERYTHING would
+# hang the provision instead of failing it.
+gen_admin_password() {
+  local candidate i
+  for (( i = 0; i < 10; i++ )); do
+    candidate="$(rand 48 24)!Aa1"
+    if ! has_triple_run "$candidate"; then printf '%s' "$candidate"; return 0; fi
+  done
+  echo "ERROR: could not generate an admin password without a repeated run in 10 tries" >&2
+  return 1
+}
+# --- END admin-password helpers ---
+
 # Escape free-text registry values (name, city) for use in a sed REPLACEMENT:
 # backslash, ampersand, and the | delimiter would otherwise corrupt the render.
 sed_escape() { local text="$1"; printf '%s' "$text" | sed -e 's/[\\&|]/\\&/g'; }
@@ -427,7 +458,21 @@ else
   # Admin bootstrap password (backend #116): the "!Aa1" suffix guarantees the
   # upper/lower/digit/symbol classes the backend's Identity policy requires —
   # random alnum alone can miss a class and the seeder would silently skip.
-  TENANT_ADMIN_PASSWORD="$(rand 48 24)!Aa1"
+  #
+  # But the classes are not the only rule. `StrongPasswordValidator.HasRepeatingPatterns`
+  # rejects any password containing the SAME CHARACTER THREE TIMES IN A ROW — `(.)\1{2,}`
+  # — and `rand` knows nothing about that. MEASURED 2026-08-18 on a real provision: the
+  # generated password began `WWW`, the seeder logged "Failed to create admin user:
+  # Password contains repeating patterns", and the provision died at the login smoke check
+  # BELOW — after the database, the containers, the Caddy block and the certificate all
+  # existed. 24 characters over a 62-symbol alphabet gives ~0.56%, about 1 provision in
+  # 178: rare enough to read as a fluke, common enough to hit a paying customer.
+  #
+  # And it is NOT recoverable by re-running. The database now exists, so the next
+  # provision takes the `keep:` path and the bootstrap credentials no longer apply — the
+  # tenant needs a `--drop-db` teardown first. Which is why this is generated correctly
+  # rather than merely detected.
+  TENANT_ADMIN_PASSWORD="$(gen_admin_password)"
   # strip_ws on the three product lists (currency/languages/modules), because the
   # RE-PROVISION path above already writes them stripped (set_env_line "$(strip_ws ...)").
   # Without it a tenant's .env said `TENANT_LANGUAGES=en, nl` on its first day and `en,nl`
@@ -604,6 +649,10 @@ if [[ "$FRESH_ENV" == 1 && -n "$ADMIN_EMAIL_CHECK" && -n "$ADMIN_PW_CHECK" ]]; t
   else
     echo "ERROR: seeded admin login FAILED — check backend logs for the seeder warning/error" >&2
     echo "       (cd $TENANT_DIR && docker compose logs backend-${SLUG} | grep -i -A2 seed)" >&2
+    echo "       If the log says 'Password contains repeating patterns', the generated" >&2
+    echo "       bootstrap password broke the backend's own policy — gen_admin_password above" >&2
+    echo "       is supposed to make that impossible, so treat it as a defect in this script." >&2
+    echo "       Recovery is NOT a re-run: ./deprovision-tenant.sh $SLUG --drop-db --purge first." >&2
     echo "       Note: the seeder only creates the admin on an EMPTY database; on an existing" >&2
     echo "       DB the bootstrap credentials in .env do not apply (use the app's password reset)." >&2
     exit 1

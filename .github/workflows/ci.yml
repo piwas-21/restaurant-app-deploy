@@ -9,6 +9,11 @@
 # Gates, all on PRs + pushes to main:
 #   - shellcheck    : BLOCKING. Static analysis of every *.sh (warning severity —
 #                     the tree is already clean at this level, so it's a real gate).
+#   - script tests  : BLOCKING. tests/*.sh. Added 2026-08-18 after a real provision
+#                     failed on something no linter can see — a generated password that
+#                     broke the BACKEND's password policy, a rule living in another
+#                     repo's C#. Point 1 below ("almost nothing here a linter can check")
+#                     is still true and is exactly why this job is not a linter.
 #   - compose config: BLOCKING. `docker compose config -q` on the production
 #                     compose file. Cheap, and it is the file that deploys prod:
 #                     a YAML/interpolation error here is a broken box, discovered
@@ -77,7 +82,25 @@ jobs:
           if [ ${#files[@]} -eq 0 ]; then echo "no *.sh found"; exit 0; fi
           printf 'Linting %d script(s):\n' "${#files[@]}"
           printf '  %s\n' "${files[@]}"
+          files+=( tests/*.sh )
           shellcheck --severity=warning --color=always "${files[@]}"
+
+  # The first executable test this repo has ever had, and it exists because a real
+  # provision died on 2026-08-18 for a reason no linter can see: the generated admin
+  # bootstrap password broke the BACKEND's own password policy. `shellcheck` cannot know
+  # about a rule that lives in another repo's C#, and the only other thing that would have
+  # caught it is a customer's failed onboarding — the shape this repo keeps being bitten
+  # by. See tests/admin-password.sh for the measurement.
+  unit_tests:
+    name: script unit tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: admin bootstrap password generator
+        run: bash tests/admin-password.sh
 
   # Renamed from `trivy_config` when the compose validation was added; the
   # `main-develop` ruleset's required-status-check list was updated in the same
