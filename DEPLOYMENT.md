@@ -285,6 +285,34 @@ plane later calls the same scripts (ADR-003 — no parallel mechanism).
    page `<title>` and footer © should show the tenant name, and a decoded
    access token should carry `tenant: <slug>` (backend #117).
 
+### Granting `online-payments` to a tenant that is already live
+
+The self-serve buyer of `online-payments` is provisioned **without** it — sofra's generator
+withholds the module when it has no `acct_` to pair it with, because
+[`provision-tenant.sh:99`](provision-tenant.sh) refuses that combination **before the database**:
+an entry with one half yields no tenant at all, not a tenant without card payment. Granting it
+later is therefore a normal module upsell **plus** the account, in one registry commit:
+
+```yaml
+    modules: [core, cashier, online-payments]   # the id goes back in
+    stripe_account: acct_1Example…              # and the account arrives with it
+```
+
+Then the usual upsell sequence — merging the registry PR does **not** touch a live tenant:
+
+```bash
+gh workflow run provision-tenant.yml --repo piwas-21/restaurant-app-deploy -f slug=<slug>
+bash .ssh/staging.sh 'cd /opt/rumi/deploy/tenants/<slug> && docker compose restart backend-<slug>'
+curl -s https://<domain>/api/payments/availability      # {"available": true}
+```
+
+No image rebuild: the module set is served from the backend, not baked into the frontend image.
+`availability` is ANDed from the module flag **and** a configured gateway, so it cannot go true on
+half the work — which makes it the only check worth running. Expect the provision to `exit 1` at the
+per-account TWINT flip until Stripe approves the platform's own `twint_payments` capability; that
+refusal is deliberate. Full walk-through, including what the founder and the buyer should see
+afterwards: workspace `docs/runbooks/signup-to-live-tenant.md` §2b.5.
+
 ### Tenant sending identity (`PLATFORM_MAIL_DOMAIN` — EMAIL-IDENTITY-PLAN)
 
 A tenant's `FromEmail` is resolved at provision time, in precedence order:
