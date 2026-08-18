@@ -24,7 +24,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 SLUG="${1:?usage: $0 <slug>   (a tenant key in tenants/registry.yml)}"
-[[ "$SLUG" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]] || { echo "ERROR: slug must be lowercase [a-z0-9-], 2-31 chars"; exit 2; }
+[[ "$SLUG" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]] || { echo "ERROR: slug must be lowercase [a-z0-9-], 2-31 chars" >&2; exit 2; }
 
 REGISTRY="tenants/registry.yml"
 TENANT_DIR="/opt/rumi/tenants/${SLUG}"
@@ -32,12 +32,12 @@ DEPLOY_COMPOSE="docker compose -f docker-compose.prod.yml"
 BE_REPO="ghcr.io/piwas-21/restaurant-app-backend"
 
 echo "==> Preflight"
-[[ -f .env ]] || { echo "ERROR: box .env missing"; exit 1; }
-[[ -f "$REGISTRY" ]] || { echo "ERROR: $REGISTRY missing (push + sync the deploy repo first)"; exit 1; }
-python3 -c 'import yaml' 2>/dev/null || { echo "ERROR: python3-yaml missing (apt-get install -y python3-yaml)"; exit 1; }
+[[ -f .env ]] || { echo "ERROR: box .env missing" >&2; exit 1; }
+[[ -f "$REGISTRY" ]] || { echo "ERROR: $REGISTRY missing (push + sync the deploy repo first)" >&2; exit 1; }
+python3 -c 'import yaml' 2>/dev/null || { echo "ERROR: python3-yaml missing (apt-get install -y python3-yaml)" >&2; exit 1; }
 
 BOX_ROLE="$(grep -E '^BOX_ROLE=' .env | cut -d= -f2- || true)"
-[[ -n "$BOX_ROLE" ]] || { echo "ERROR: BOX_ROLE not set in the box .env (prod|staging) — refusing to guess"; exit 1; }
+[[ -n "$BOX_ROLE" ]] || { echo "ERROR: BOX_ROLE not set in the box .env (prod|staging) — refusing to guess" >&2; exit 1; }
 
 # Shared fleet-observability + error-tracking config, flowed from the box .env into every
 # tenant .env below so a new tenant gets fleet telemetry + Sentry automatically. Both are
@@ -77,11 +77,11 @@ for k in ("name", "status", "managed", "box", "domain", "domain_mode",
 PY
 )"
 
-[[ "$REG_MANAGED" == "scripts" ]] || { echo "ERROR: tenant '$SLUG' is managed:'$REG_MANAGED' — this script only touches managed:scripts tenants (ADR-006 protects tenant 1)"; exit 1; }
-[[ "$REG_BOX" == "$BOX_ROLE" ]] || { echo "ERROR: tenant '$SLUG' belongs on box '$REG_BOX' but this box is '$BOX_ROLE'"; exit 1; }
+[[ "$REG_MANAGED" == "scripts" ]] || { echo "ERROR: tenant '$SLUG' is managed:'$REG_MANAGED' — this script only touches managed:scripts tenants (ADR-006 protects tenant 1)" >&2; exit 1; }
+[[ "$REG_BOX" == "$BOX_ROLE" ]] || { echo "ERROR: tenant '$SLUG' belongs on box '$REG_BOX' but this box is '$BOX_ROLE'" >&2; exit 1; }
 for f in name domain db db_role compose_project frontend_tag admin_email; do
   var="REG_$(echo "$f" | tr '[:lower:]' '[:upper:]')"
-  [[ -n "${!var}" ]] || { echo "ERROR: registry entry '$SLUG' missing required field '$f'"; exit 1; }
+  [[ -n "${!var}" ]] || { echo "ERROR: registry entry '$SLUG' missing required field '$f'" >&2; exit 1; }
 done
 
 # UI template (frontend ADR-006 / S15 T2): optional, absent -> classic. Anything
@@ -89,7 +89,7 @@ done
 TENANT_TEMPLATE="${REG_TEMPLATE:-classic}"
 case "$TENANT_TEMPLATE" in
   classic|craft) ;;
-  *) echo "ERROR: registry entry '$SLUG' has template '$TENANT_TEMPLATE' — allowed: classic | craft (absent = classic)"; exit 1 ;;
+  *) echo "ERROR: registry entry '$SLUG' has template '$TENANT_TEMPLATE' — allowed: classic | craft (absent = classic)" >&2; exit 1 ;;
 esac
 
 # Online payments needs BOTH halves or it is not a working purchase. A tenant that bought the
@@ -361,19 +361,20 @@ fi
 install -d "$TENANT_DIR" "$TENANT_DIR/uploads"
 
 # URL/connection-string-safe randoms (same recipe as gen-secrets.sh).
-rand() { openssl rand -base64 "$1" | tr -d '/+=' | cut -c1-"$2"; }
+rand() { local bytes="$1" len="$2"; openssl rand -base64 "$bytes" | tr -d '/+=' | cut -c1-"$len"; }
 
 # Escape free-text registry values (name, city) for use in a sed REPLACEMENT:
 # backslash, ampersand, and the | delimiter would otherwise corrupt the render.
-sed_escape() { printf '%s' "$1" | sed -e 's/[\\&|]/\\&/g'; }
+sed_escape() { local text="$1"; printf '%s' "$text" | sed -e 's/[\\&|]/\\&/g'; }
 
 # Replace-or-append KEY=value in the tenant .env (idempotent). $TENANT_DIR resolves at call
 # time. Used for registry-owned identity lines and the shared fleet/Sentry values.
 set_env_line() { # $1=key $2=value (free text)
-  if grep -q "^$1=" "$TENANT_DIR/.env"; then
-    sed -i "s|^$1=.*|$1=$(sed_escape "$2")|" "$TENANT_DIR/.env"
+  local key="$1" value="$2"
+  if grep -q "^$key=" "$TENANT_DIR/.env"; then
+    sed -i "s|^$key=.*|$key=$(sed_escape "$value")|" "$TENANT_DIR/.env"
   else
-    printf '%s=%s\n' "$1" "$2" >> "$TENANT_DIR/.env"
+    printf '%s=%s\n' "$key" "$value" >> "$TENANT_DIR/.env"
   fi
 }
 
@@ -528,7 +529,7 @@ sed -e "s|__SLUG__|${SLUG}|g" \
 
 echo "==> Database (role + db on the shared postgres, idempotent)"
 PGUSER="$(grep '^POSTGRES_USER=' .env | cut -d= -f2- || true)"
-[[ -n "$PGUSER" ]] || { echo "ERROR: POSTGRES_USER not set in .env"; exit 1; }
+[[ -n "$PGUSER" ]] || { echo "ERROR: POSTGRES_USER not set in .env" >&2; exit 1; }
 psql_deploy() { $DEPLOY_COMPOSE exec -T postgres psql -v ON_ERROR_STOP=1 -U "$PGUSER" -d postgres "$@"; }
 if psql_deploy -tAc "SELECT 1 FROM pg_roles WHERE rolname='${REG_DB_ROLE}'" | grep -q 1; then
   echo "   keep: role ${REG_DB_ROLE} exists"
@@ -578,7 +579,7 @@ for i in $(seq 1 60); do
     echo "   backend-${SLUG} healthy"
     break
   fi
-  [[ "$i" == 60 ]] && { echo "ERROR: backend-${SLUG} not healthy after 5m — check: (cd $TENANT_DIR && docker compose logs backend-${SLUG})"; exit 1; }
+  [[ "$i" == 60 ]] && { echo "ERROR: backend-${SLUG} not healthy after 5m — check: (cd $TENANT_DIR && docker compose logs backend-${SLUG})" >&2; exit 1; }
   sleep 5
 done
 
@@ -598,10 +599,10 @@ if [[ "$FRESH_ENV" == 1 && -n "$ADMIN_EMAIL_CHECK" && -n "$ADMIN_PW_CHECK" ]]; t
        "http://backend-${SLUG}:8080/api/auth/login" | grep -q '"success":true'; then
     echo "   admin login OK (${ADMIN_EMAIL_CHECK})"
   else
-    echo "ERROR: seeded admin login FAILED — check backend logs for the seeder warning/error"
-    echo "       (cd $TENANT_DIR && docker compose logs backend-${SLUG} | grep -i -A2 seed)"
-    echo "       Note: the seeder only creates the admin on an EMPTY database; on an existing"
-    echo "       DB the bootstrap credentials in .env do not apply (use the app's password reset)."
+    echo "ERROR: seeded admin login FAILED — check backend logs for the seeder warning/error" >&2
+    echo "       (cd $TENANT_DIR && docker compose logs backend-${SLUG} | grep -i -A2 seed)" >&2
+    echo "       Note: the seeder only creates the admin on an EMPTY database; on an existing" >&2
+    echo "       DB the bootstrap credentials in .env do not apply (use the app's password reset)." >&2
     exit 1
   fi
 elif [[ "$FRESH_ENV" == 0 ]]; then
@@ -693,7 +694,7 @@ done
 # recreating with a broken import would take down every site on the box.
 if ! $DEPLOY_COMPOSE exec caddy caddy validate --config /etc/caddy/Caddyfile; then
   rm -f "caddy-tenants/${SLUG}.caddy"
-  echo "ERROR: rendered caddy block failed validation — removed it again; live config untouched"
+  echo "ERROR: rendered caddy block failed validation — removed it again; live config untouched" >&2
   exit 1
 fi
 $DEPLOY_COMPOSE exec caddy caddy reload --config /etc/caddy/Caddyfile

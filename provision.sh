@@ -48,7 +48,10 @@ echo "==> Docker Engine + compose plugin"
 if ! command -v docker &>/dev/null; then
   . /etc/os-release   # $ID = debian|ubuntu, $VERSION_CODENAME = trixie|noble|...
   install -m 0755 -d /etc/apt/keyrings
-  curl -fsSL "https://download.docker.com/linux/${ID}/gpg" -o /etc/apt/keyrings/docker.asc
+  # --proto/--proto-redir pin the transfer to HTTPS even across a redirect, so a
+  # hijacked redirect cannot downgrade the fetch of a key we are about to trust.
+  curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 \
+    "https://download.docker.com/linux/${ID}/gpg" -o /etc/apt/keyrings/docker.asc
   chmod a+r /etc/apt/keyrings/docker.asc
   echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/${ID} ${VERSION_CODENAME} stable" \
     > /etc/apt/sources.list.d/docker.list

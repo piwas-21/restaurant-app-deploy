@@ -18,8 +18,8 @@ COMPOSE="docker compose -f docker-compose.prod.yml"
 BE_REPO="ghcr.io/piwas-21/restaurant-app-backend"
 
 echo "==> Preflight: required config present"
-[[ -f .env ]] || { echo "ERROR: .env missing (cp .env.example .env and fill in)"; exit 1; }
-[[ -f app-secrets.json ]] || { echo "ERROR: app-secrets.json missing (cp app-secrets.example.json app-secrets.json and fill in)"; exit 1; }
+[[ -f .env ]] || { echo "ERROR: .env missing (cp .env.example .env and fill in)" >&2; exit 1; }
+[[ -f app-secrets.json ]] || { echo "ERROR: app-secrets.json missing (cp app-secrets.example.json app-secrets.json and fill in)" >&2; exit 1; }
 
 # Upsert KEY=VALUE in .env (replace in place, or append if absent).
 upsert_env() {

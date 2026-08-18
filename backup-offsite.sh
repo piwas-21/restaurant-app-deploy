@@ -12,7 +12,7 @@
 set -euo pipefail
 
 ENV_FILE="/root/.rumi-backup-env"
-[[ -f "$ENV_FILE" ]] || { echo "ERROR: $ENV_FILE missing — one-time setup in DEPLOYMENT.md §Backups"; exit 1; }
+[[ -f "$ENV_FILE" ]] || { echo "ERROR: $ENV_FILE missing — one-time setup in DEPLOYMENT.md §Backups" >&2; exit 1; }
 # shellcheck source=/dev/null
 source "$ENV_FILE"
 : "${RESTIC_PASSWORD:?RESTIC_PASSWORD not set in $ENV_FILE}"
@@ -29,9 +29,9 @@ SSH_CMD="ssh -i ${SSH_KEY} -o IdentitiesOnly=yes -o ConnectTimeout=15"
 SFTP_CMD="${SSH_CMD} ${STAGING_USER}@${STAGING_HOST} -s sftp"
 KEEP=(--keep-daily 7 --keep-weekly 4 --keep-monthly 6)
 
-command -v restic >/dev/null || { echo "ERROR: restic not installed (apt-get install -y restic)"; exit 1; }
-[[ -f "$SSH_KEY" ]] || { echo "ERROR: ${SSH_KEY} missing — one-time setup in DEPLOYMENT.md §Backups"; exit 1; }
-[[ -d "$DUMP_DIR" ]] || { echo "ERROR: ${DUMP_DIR} missing — has backup-dump.sh run?"; exit 1; }
+command -v restic >/dev/null || { echo "ERROR: restic not installed (apt-get install -y restic)" >&2; exit 1; }
+[[ -f "$SSH_KEY" ]] || { echo "ERROR: ${SSH_KEY} missing — one-time setup in DEPLOYMENT.md §Backups" >&2; exit 1; }
+[[ -d "$DUMP_DIR" ]] || { echo "ERROR: ${DUMP_DIR} missing — has backup-dump.sh run?" >&2; exit 1; }
 
 echo "==> [$(date -u +%FT%TZ)] backup-offsite start"
 

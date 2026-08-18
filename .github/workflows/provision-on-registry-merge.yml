@@ -108,16 +108,20 @@ concurrency:
   group: provision-tenant
   cancel-in-progress: false
 
-permissions:
-  contents: read
-  # Reporting only — see the failure-visibility note above.
-  issues: write
-  pull-requests: write
+# Permissions are declared per JOB below, never at workflow level (Sonar
+# githubactions:S8264). This workflow has exactly one job, which both touches the box
+# and reports, so the effective scope is unchanged — the write grants stay where the
+# reporting steps are.
 
 jobs:
   chain:
     name: build + provision newly merged tenants
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Reporting only — see the failure-visibility note above.
+      issues: write
+      pull-requests: write
     # Budget: MAX_PER_RUN tenants × (BUILD_WAIT_SECS image build + ~6 min of
     # provision-tenant.sh, whose health wait alone can take 5). Keep these three in
     # step — a job killed mid-`provision-tenant.sh` is how a tenant ends up `partial`.

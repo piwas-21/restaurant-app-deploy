@@ -6,21 +6,38 @@
 # deploy surface. DEV-PHASES-PLAN §4.5 (deploy CI additions), closing the
 # D1/D9/D10 gaps in the §2 matrix for this repo.
 #
-# Two gates, both on PRs + pushes to main:
-#   - shellcheck  : BLOCKING. Static analysis of every *.sh (warning severity —
-#                   the tree is already clean at this level, so it's a real gate).
-#   - trivy config: NON-BLOCKING bed-in (DEV-PHASES §8 "warnings-first, tighten
-#                   by ratchet"). Misconfig scan of docker-compose.prod.yml that
-#                   surfaces findings in the job log without failing the run, so
-#                   the first landing can't red-gate on an un-baselined finding.
-#                   Follow-up: once the CI baseline is confirmed clean, flip
-#                   `exit-code` to "1" at CRITICAL,HIGH to make it blocking;
-#                   accept a specific finding with `#trivy:ignore:<AVD-id>`.
+# Gates, all on PRs + pushes to main:
+#   - shellcheck    : BLOCKING. Static analysis of every *.sh (warning severity —
+#                     the tree is already clean at this level, so it's a real gate).
+#   - compose config: BLOCKING. `docker compose config -q` on the production
+#                     compose file. Cheap, and it is the file that deploys prod:
+#                     a YAML/interpolation error here is a broken box, discovered
+#                     by the deploy rather than by CI.
+#   - trivy config  : misconfiguration scan of the tree. Honest note, because the
+#                     previous comment here promised more than the job delivered:
+#                     Trivy has NO docker-compose misconfiguration scanner, so
+#                     pointing it at docker-compose.prod.yml scanned nothing at all
+#                     ("Not scanned" in the summary table of every run). It now
+#                     scans the whole tree, so it covers a Dockerfile/Kubernetes/
+#                     Terraform file the moment one lands here.
 #
-# This repo is PRIVATE → Actions bills paid minutes, so both jobs are small +
-# pinned; pushes to main are path-filtered, PRs run on every change (linting is
-# cheap and we want it on any diff). permissions: contents: read only. No box
-# secrets are touched here (that's sync-to-box.yml); this only reads + lints.
+# WHY THE GATES ARE THIN, honestly. The comment that used to sit here said "This
+# repo is PRIVATE -> Actions bills paid minutes". That is FALSE — the repo is
+# public (`gh api repos/piwas-21/restaurant-app-deploy --jq .visibility`), so its
+# Actions minutes are FREE and cost has never been a reason to keep anything out.
+# The real reasons, which are about signal rather than money:
+#   1. There is almost nothing here that a linter can check. The repo is shell
+#      scripts, a compose file, Caddyfiles and a tenant registry — no application
+#      code, no test suite, no build.
+#   2. The load-bearing gate for this repo is not CI at all, it is
+#      provisioning-smoke.yml: weekly, unmocked, it runs these very scripts against
+#      a real box and stands a real tenant up and down. That covers what a linter
+#      structurally cannot.
+#   3. What CI can add is fast structural checks, and since minutes are free the
+#      only cost of adding one is the latency of a PR. If a check is worth having,
+#      the honest answer is now "add it", not "we cannot afford it".
+# permissions: contents: read only. No box secrets are touched here (that's
+# sync-to-box.yml); this only reads + lints.
 # ============================================================================
 name: ci
 
@@ -40,13 +57,15 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-permissions:
-  contents: read
+# Permissions are declared per JOB below, never at workflow level (Sonar
+# githubactions:S8264).
 
 jobs:
   shellcheck:
     name: shellcheck (*.sh)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -60,16 +79,37 @@ jobs:
           printf '  %s\n' "${files[@]}"
           shellcheck --severity=warning --color=always "${files[@]}"
 
-  trivy_config:
-    name: trivy config (compose misconfig, bed-in)
+  # Renamed from `trivy_config` when the compose validation was added; the
+  # `main-develop` ruleset's required-status-check list was updated in the same
+  # change, since a required check that no longer exists silently stops requiring
+  # anything.
+  config_checks:
+    name: config checks (compose validate + trivy)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # Structural validation of the file that deploys production. Unset variables
+      # are warnings, not errors (compose defaults them to ""), so this fails on a
+      # genuine YAML/interpolation/schema error and nothing else — which is exactly
+      # the class that turns into a broken box at deploy time.
+      - name: Validate the production compose file
+        run: docker compose -f docker-compose.prod.yml config --quiet
+
+      # Was pointed at docker-compose.prod.yml with exit-code 0 as a "bed-in".
+      # Trivy has no docker-compose misconfiguration scanner, so that combination
+      # scanned NOTHING ("Not scanned" in every run's summary table) and could never
+      # have failed — a gate in name only. Pointed at the tree it covers a
+      # Dockerfile/Kubernetes/Terraform file the moment one lands, and it can be
+      # blocking honestly: there is nothing here for it to find today, so flipping
+      # exit-code cannot break a green tree, only a future bad file.
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: config
-          scan-ref: docker-compose.prod.yml
-          severity: CRITICAL,HIGH,MEDIUM
-          exit-code: "0" # bed-in: report only; flip to "1" (CRITICAL,HIGH) once baselined
+          scan-ref: .
+          severity: CRITICAL,HIGH
+          exit-code: "1"
           hide-progress: "true"

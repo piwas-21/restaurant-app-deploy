@@ -27,13 +27,15 @@ concurrency:
   group: prod-deploy
   cancel-in-progress: false
 
-permissions:
-  contents: read
+# Permissions are declared per JOB below, never at workflow level (Sonar
+# githubactions:S8264).
 
 jobs:
   sync:
     name: rsync deploy files to prod box
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -53,8 +55,15 @@ jobs:
         env:
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-        # No --delete: never risk removing on-box runtime files. Protected files
-        # (.env, app-secrets.json) and CI/local-only paths are excluded outright.
+        # No --delete, deliberately and permanently. The destination is NOT a mirror of
+        # this repo: provision-tenant.sh writes `caddy-tenants/<slug>.caddy` INSIDE
+        # /opt/rumi/deploy for every live tenant (provision-tenant.sh:675, removed again by
+        # deprovision-tenant.sh:59), and those files exist nowhere in git. `--delete` would
+        # remove every live tenant's Caddy site block on the next push to main — every tenant
+        # site off the internet until someone re-provisioned. Protected runtime files
+        # (.env, app-secrets.json, dozzle-users.yml) and CI/local-only paths are excluded
+        # outright; the drift that a missing --delete leaves behind is REPORTED by the next
+        # step instead of being repaired destructively.
         run: |
           rsync -az --human-readable --itemize-changes \
             --exclude='.git/' \
@@ -67,3 +76,30 @@ jobs:
             --exclude='*.bak.*' \
             -e "ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes -o ConnectTimeout=15" \
             ./ "${DEPLOY_USER}@${DEPLOY_HOST}:/opt/rumi/deploy/"
+
+      # The cost of not using --delete is that a file deleted from this repo lives on the
+      # box forever, silently. This makes that visible without touching anything: a DRY-RUN
+      # --delete whose output is printed, never executed. Runtime-owned paths are excluded
+      # from the report too, so what remains is genuinely a leftover rather than the normal
+      # working state of a provisioned box.
+      - name: Report on-box files this repo no longer has (never deletes)
+        continue-on-error: true
+        env:
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+        run: |
+          set -uo pipefail
+          echo "Files present on the box but not in this repo (report only — nothing is deleted):"
+          rsync -az --dry-run --delete --itemize-changes \
+            --exclude='.git/' \
+            --exclude='.github/' \
+            --exclude='.ssh/' \
+            --exclude='.env' \
+            --exclude='app-secrets.json' \
+            --exclude='dozzle-users.yml' \
+            --exclude='*.bak' \
+            --exclude='*.bak.*' \
+            --exclude='caddy-tenants/*.caddy' \
+            -e "ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes -o ConnectTimeout=15" \
+            ./ "${DEPLOY_USER}@${DEPLOY_HOST}:/opt/rumi/deploy/" \
+            | grep '^\*deleting' || echo "  (none — the box matches the repo)"

@@ -57,10 +57,9 @@ concurrency:
   group: token-check
   cancel-in-progress: false
 
-permissions:
-  contents: read
-  # A dead token must reach the founder's inbox, not just this run log.
-  issues: write
+# Permissions are declared per JOB below, never at workflow level (Sonar
+# githubactions:S8264). `issues: write` belongs to the reporting job only — here that
+# is the single job this workflow has.
 
 env:
   FRONTEND_REPO: piwas-21/restaurant-app-frontend
@@ -76,6 +75,10 @@ jobs:
   check:
     name: are both funnel tokens still valid
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # A dead token must reach the founder's inbox, not just this run log.
+      issues: write
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0

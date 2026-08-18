@@ -1,4 +1,19 @@
-# Dependabot — keep the sync workflows' actions current (DEV-PHASES-PLAN W0).
+# Dependabot — SECURITY updates only (workspace CLAUDE.md standing decision:
+# "Dependabot PRs are paused").
+#
+# `open-pull-requests-limit: 0` is the documented way to switch OFF version-update
+# PRs while leaving Dependabot SECURITY updates fully on — which is why this file
+# stays rather than being deleted.
+#
+# Why: the decision not to merge these PRs was already taken, but the bot kept
+# opening them — 12 "Dependabot Updates" runs plus 6 CI runs on dependabot/*
+# branches over 39 days. This repo is PUBLIC, so that costs no money; it costs
+# review attention and it leaves the tooling contradicting the decision. #64 sat
+# open for exactly that reason.
+#
+# To resume version updates: raise the limit below (3 was the previous value) in a
+# PR that also says who will triage them.
+#
 # Compose image tags (postgres:16, redis:7, caddy, dozzle) are pinned majors by
 # design and are NOT dependabot-managed — bump them deliberately via PR + runbook.
 version: 2
@@ -10,4 +25,4 @@ updates:
       day: monday
       time: "06:00"
       timezone: Europe/Amsterdam
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 0  # version-update PRs off; security updates unaffected

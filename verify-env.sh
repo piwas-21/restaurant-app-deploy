@@ -15,7 +15,11 @@ case "${1:-}" in
 esac
 DOMAIN="${HOST#https://}"
 
-code() { curl -sS -o /dev/null -w '%{http_code}' --max-time 12 "$1" 2>/dev/null || echo "000"; }
+code() {
+  local url="$1"
+  curl -sS -o /dev/null -w '%{http_code}' --max-time 12 "$url" 2>/dev/null || echo "000"
+  return 0
+}
 
 echo "==> $HOST"
 FE=$(code "$HOST/"); HE=$(code "$HOST/api/health")
