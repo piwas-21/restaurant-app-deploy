@@ -18,7 +18,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT="$HERE/../provision-tenant.sh"
-[ -f "$SCRIPT" ] || { echo "cannot find provision-tenant.sh next to $HERE"; exit 1; }
+[[ -f "$SCRIPT" ]] || { echo "cannot find provision-tenant.sh next to $HERE"; exit 1; }
 
 FNS="$(mktemp)"
 trap 'rm -f "$FNS"' EXIT
@@ -34,7 +34,7 @@ fail=0
 check() { # <description> <expected 0|1> <string>
   local desc="$1" want="$2" s="$3" got=0
   has_triple_run "$s" || got=1
-  if [ "$got" = "$want" ]; then printf '  ok   %s\n' "$desc"
+  if [[ "$got" == "$want" ]]; then printf '  ok   %s\n' "$desc"
   else printf '  FAIL %s (wanted %s, got %s)\n' "$desc" "$want" "$got"; fail=1; fi
 }
 
@@ -58,9 +58,9 @@ for _ in $(seq 1 "$draws"); do
   case "$p" in *'!Aa1') ;; *) echo "  FAIL suffix lost: $p"; fail=1 ;; esac
   # 24 random + the 4-character suffix. A shorter one would mean `rand` silently
   # produced fewer characters than asked for, which is how the class guarantee is lost.
-  [ "${#p}" -eq 28 ] || { echo "  FAIL length ${#p}, expected 28"; fail=1; }
+  [[ "${#p}" -eq 28 ]] || { echo "  FAIL length ${#p}, expected 28"; fail=1; }
 done
-if [ "$bad" -eq 0 ]; then printf '  ok   %s generated passwords, none with a repeated run\n' "$draws"
+if [[ "$bad" -eq 0 ]]; then printf '  ok   %s generated passwords, none with a repeated run\n' "$draws"
 else printf '  FAIL %s of %s generated passwords had a repeated run\n' "$bad" "$draws"; fail=1; fi
 
 # Distinctness: the backend also requires a minimum number of DIFFERENT characters, and a
@@ -68,8 +68,8 @@ else printf '  FAIL %s of %s generated passwords had a repeated run\n' "$bad" "$
 # violation for another.
 p="$(gen_admin_password)"
 distinct="$(printf '%s' "$p" | fold -w1 | sort -u | wc -l | tr -d ' ')"
-if [ "$distinct" -ge 12 ]; then printf '  ok   %s distinct characters\n' "$distinct"
+if [[ "$distinct" -ge 12 ]]; then printf '  ok   %s distinct characters\n' "$distinct"
 else printf '  FAIL only %s distinct characters\n' "$distinct"; fail=1; fi
 
-[ "$fail" -eq 0 ] || { echo "FAILED"; exit 1; }
+[[ "$fail" -eq 0 ]] || { echo "FAILED"; exit 1; }
 echo "all admin-password checks passed"
