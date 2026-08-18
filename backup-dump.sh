@@ -17,9 +17,9 @@ DEPLOY_COMPOSE="docker compose -f docker-compose.prod.yml"
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
 
 echo "==> [$(date -u +%FT%TZ)] backup-dump start"
-[[ -f .env ]] || { echo "ERROR: box .env missing (run from /opt/rumi/deploy)"; exit 1; }
+[[ -f .env ]] || { echo "ERROR: box .env missing (run from /opt/rumi/deploy)" >&2; exit 1; }
 PGUSER="$(grep -E '^POSTGRES_USER=' .env | cut -d= -f2- || true)"
-[[ -n "$PGUSER" ]] || { echo "ERROR: POSTGRES_USER not set in .env"; exit 1; }
+[[ -n "$PGUSER" ]] || { echo "ERROR: POSTGRES_USER not set in .env" >&2; exit 1; }
 install -d -m 700 "$BACKUP_ROOT" "$DUMP_DIR"
 
 # Fail loudly if postgres is down — a down container must not look like a
@@ -40,7 +40,7 @@ tar_via_container() {
   local vol="$1" out="$2" rc=0
   docker run --rm -v "${vol}" alpine:3 tar -czf - -C /src . > "${out}.tmp" || rc=$?
   if [[ $rc -ge 2 ]]; then
-    echo "ERROR: tar ${vol} failed (rc=${rc})"
+    echo "ERROR: tar ${vol} failed (rc=${rc})" >&2
     rm -f "${out}.tmp"
     return "$rc"
   fi

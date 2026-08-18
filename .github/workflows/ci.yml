@@ -57,13 +57,15 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-permissions:
-  contents: read
+# Permissions are declared per JOB below, never at workflow level (Sonar
+# githubactions:S8264).
 
 jobs:
   shellcheck:
     name: shellcheck (*.sh)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -84,6 +86,8 @@ jobs:
   config_checks:
     name: config checks (compose validate + trivy)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0

@@ -17,14 +17,14 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 SLUG="${1:?usage: $0 <slug> [--drop-db] [--purge]}"
-[[ "$SLUG" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]] || { echo "ERROR: slug must be lowercase [a-z0-9-], 2-31 chars"; exit 2; }
+[[ "$SLUG" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]] || { echo "ERROR: slug must be lowercase [a-z0-9-], 2-31 chars" >&2; exit 2; }
 shift || true
 DROP_DB=false; PURGE=false
 for a in "$@"; do
   case "$a" in
     --drop-db) DROP_DB=true ;;
     --purge)   PURGE=true ;;
-    *) echo "ERROR: unknown flag '$a'"; exit 2 ;;
+    *) echo "ERROR: unknown flag '$a'" >&2; exit 2 ;;
   esac
 done
 
@@ -34,10 +34,10 @@ BACKUP_DIR="/opt/rumi/tenant-backups"
 DEPLOY_COMPOSE="docker compose -f docker-compose.prod.yml"
 
 echo "==> Preflight"
-[[ -f .env ]] || { echo "ERROR: box .env missing"; exit 1; }
-[[ -f "$REGISTRY" ]] || { echo "ERROR: $REGISTRY missing"; exit 1; }
+[[ -f .env ]] || { echo "ERROR: box .env missing" >&2; exit 1; }
+[[ -f "$REGISTRY" ]] || { echo "ERROR: $REGISTRY missing" >&2; exit 1; }
 BOX_ROLE="$(grep -E '^BOX_ROLE=' .env | cut -d= -f2- || true)"
-[[ -n "$BOX_ROLE" ]] || { echo "ERROR: BOX_ROLE not set in the box .env"; exit 1; }
+[[ -n "$BOX_ROLE" ]] || { echo "ERROR: BOX_ROLE not set in the box .env" >&2; exit 1; }
 
 eval "$(python3 - "$SLUG" <<'PY'
 import sys, yaml, shlex
@@ -52,8 +52,8 @@ for k in ("managed", "box", "db", "db_role"):
     print(f"REG_{k.upper()}={shlex.quote(str(t.get(k, '')))}")
 PY
 )"
-[[ "$REG_MANAGED" == "scripts" ]] || { echo "ERROR: tenant '$SLUG' is managed:'$REG_MANAGED' — refusing (ADR-006 protects tenant 1)"; exit 1; }
-[[ "$REG_BOX" == "$BOX_ROLE" ]] || { echo "ERROR: tenant '$SLUG' belongs on box '$REG_BOX', this box is '$BOX_ROLE'"; exit 1; }
+[[ "$REG_MANAGED" == "scripts" ]] || { echo "ERROR: tenant '$SLUG' is managed:'$REG_MANAGED' — refusing (ADR-006 protects tenant 1)" >&2; exit 1; }
+[[ "$REG_BOX" == "$BOX_ROLE" ]] || { echo "ERROR: tenant '$SLUG' belongs on box '$REG_BOX', this box is '$BOX_ROLE'" >&2; exit 1; }
 
 echo "==> Remove Caddy site block (stops public traffic)"
 if [[ -f "caddy-tenants/${SLUG}.caddy" ]]; then
@@ -90,7 +90,7 @@ rm -f "$TENANT_DIR/.provisioned" "$TENANT_DIR/.chain-provisioned"
 if $DROP_DB; then
   echo "==> Backup + drop database ${REG_DB} (role ${REG_DB_ROLE})"
   PGUSER="$(grep '^POSTGRES_USER=' .env | cut -d= -f2- || true)"
-  [[ -n "$PGUSER" ]] || { echo "ERROR: POSTGRES_USER not set in .env"; exit 1; }
+  [[ -n "$PGUSER" ]] || { echo "ERROR: POSTGRES_USER not set in .env" >&2; exit 1; }
   install -d "$BACKUP_DIR"
   # Fail loudly if postgres itself is unreachable — otherwise a down container
   # would be indistinguishable from "database does not exist" below and the
