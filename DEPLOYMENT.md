@@ -301,10 +301,18 @@ later is therefore a normal module upsell **plus** the account, in one registry 
 Then the usual upsell sequence — merging the registry PR does **not** touch a live tenant:
 
 ```bash
+# The re-provision RECREATES the tenant's containers, which is what applies the change.
 gh workflow run provision-tenant.yml --repo piwas-21/restaurant-app-deploy -f slug=<slug>
-bash .ssh/staging.sh 'cd /opt/rumi/deploy/tenants/<slug> && docker compose restart backend-<slug>'
 curl -s https://<domain>/api/payments/availability      # {"available": true}
 ```
+
+> **⚠️ `docker compose restart` does NOT re-read `.env`. Measured 2026-08-18.** Compose fixes a
+> container's environment at **create** time, so `restart` restarts the process inside a container
+> still holding the OLD values. In the O7 P2 rehearsal a tenant's `.env` was edited to a broken
+> Stripe key and `docker compose restart backend-<slug>` changed nothing; `docker compose up -d
+> --force-recreate backend-<slug>` applied it at once. The sequence above works because the
+> re-provision recreates — but **after a hand-edit of a tenant `.env`, `restart` is the wrong
+> command.**
 
 No image rebuild: the module set is served from the backend, not baked into the frontend image.
 `availability` is ANDed from the module flag **and** a configured gateway, so it cannot go true on
@@ -420,7 +428,9 @@ unrestricted reports the whole vocabulary. The backend also logs
 `Module enforcement ON — enabled: …` once at startup.
 
 **Changing what a tenant has** is: edit `modules:` in the registry → PR → merge → sync →
-re-provision (re-applies it to the `.env`) → restart that tenant's backend. **No image
+re-provision, which re-applies it to the `.env` **and recreates the containers** — that recreate is
+what makes the new value visible, since compose bakes a container's environment at create time and
+a bare `docker compose restart` re-reads nothing (measured 2026-08-18). **No image
 rebuild** — the flags are served from the backend rather than baked as `NEXT_PUBLIC_*`,
 precisely so an upsell is not a rebuild.
 
