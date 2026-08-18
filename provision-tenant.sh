@@ -98,7 +98,10 @@ esac
 # recorded before the module is bought, is fine: it stays inert until the module is added.)
 if [[ " ${REG_MODULES//,/ } " == *" online-payments "* && -z "$REG_STRIPE_ACCOUNT" ]]; then
   echo "ERROR: tenant '$SLUG' buys 'online-payments' but has no 'stripe_account' in the registry" >&2
-  echo "       Onboard the restaurant at Stripe first (hosted onboarding — see the runbook), then record its acct_ id." >&2
+  echo "       This refusal is BEFORE the database, so nothing was created — and a tenant already" >&2
+  echo "       live on this slug is untouched, but every re-provision of it stops here." >&2
+  echo "       Fix it in ONE registry commit: add 'stripe_account: acct_...' AND keep" >&2
+  echo "       'online-payments' in modules. See docs/runbooks/signup-to-live-tenant.md §2b.5." >&2
   exit 1
 fi
 
