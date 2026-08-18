@@ -57,6 +57,13 @@
 #                 restaurant completes Stripe's hosted onboarding (it cannot be pre-filled:
 #                 the platform cannot write KYC to a Standard account). See the runbook.
 #
+#                 GRANTING it later (the self-serve buyer's second registry PR) means adding
+#                 `stripe_account:` AND putting `online-payments` back into `modules` in the SAME
+#                 commit — the control plane withholds the module when it has no account, so the
+#                 pair arrives together or not at all. Then re-provision + restart that tenant's
+#                 backend; the lever that proves it is the tenant's own
+#                 `GET /api/payments/availability` flipping false -> true. Runbook §2b.5.
+#
 #                 Two consequences worth knowing before editing a list:
 #                   - Editing `modules` here changes nothing until you re-provision AND
 #                     restart that tenant's backend. There is no image rebuild — the set is
