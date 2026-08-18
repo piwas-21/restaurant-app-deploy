@@ -28,13 +28,15 @@ concurrency:
   group: staging-deploy
   cancel-in-progress: false
 
-permissions:
-  contents: read
+# Permissions are declared per JOB below, never at workflow level (Sonar
+# githubactions:S8264).
 
 jobs:
   sync:
     name: rsync deploy files to staging box
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0

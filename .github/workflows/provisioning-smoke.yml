@@ -53,11 +53,11 @@ on:
 # a real customer's provision would have been queued behind a fixture. The lock is now
 # taken only for the part that actually touches the box.
 
-permissions:
-  contents: read
-  # `issues: write` is NOT granted here. Only the `report` job needs it, and it is the one
-  # job that never touches the box — no reason for the SSH-bearing job to be able to write
-  # to the tracker.
+# NOTE: permissions are declared per JOB below, never at workflow level (Sonar
+# githubactions:S8264). The distinction this file has always made is now enforced by
+# scope rather than by comment: `issues: write` is granted ONLY to the `report` job —
+# the one job that never touches the box. No reason for the SSH-bearing jobs to be able
+# to write to the tracker.
 
 env:
   SLUG: smoke
@@ -102,6 +102,8 @@ jobs:
   image:
     name: build the tenant image (only when the frontend moved)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     timeout-minutes: 30
     steps:
       - name: Decide whether the tenant image needs rebuilding
@@ -206,6 +208,9 @@ jobs:
     name: provision, verify, destroy
     needs: image
     runs-on: ubuntu-latest
+    # Deliberately NOT granted `issues: write`: this is the SSH-bearing job.
+    permissions:
+      contents: read
     timeout-minutes: 40
     # SHARED with provision-tenant.yml and provision-on-registry-merge.yml: all three run
     # provision-tenant.sh against the same box, and it touches shared Caddy + compose.

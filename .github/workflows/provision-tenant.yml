@@ -31,13 +31,16 @@ concurrency:
   group: provision-tenant
   cancel-in-progress: false
 
-permissions:
-  contents: read
+# Permissions are declared per JOB below, never at workflow level (Sonar
+# githubactions:S8264).
 
 jobs:
   provision:
     name: provision tenant on the box
     runs-on: ubuntu-latest
+    # SSH-bearing job: read-only on the repo, nothing else.
+    permissions:
+      contents: read
     timeout-minutes: 15
     steps:
       - name: Resolve + validate slug

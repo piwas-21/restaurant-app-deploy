@@ -20,7 +20,7 @@ ENV_EXAMPLE="${ENV_EXAMPLE:-.env.example}"
 SECRETS_EXAMPLE="${SECRETS_EXAMPLE:-app-secrets.example.json}"
 
 # URL/connection-string-safe randoms (no / + = which can break the PG conn string or JSON)
-rand() { openssl rand -base64 "$1" | tr -d '/+=' | cut -c1-"$2"; }
+rand() { local bytes="$1" len="$2"; openssl rand -base64 "$bytes" | tr -d '/+=' | cut -c1-"$len"; }
 POSTGRES_PASSWORD="$(rand 48 32)"
 JWT_SECRET="$(openssl rand -base64 48)"   # JSON string — base64 is fine here
 PRINTER_APIKEY="$(openssl rand -hex 32)"
