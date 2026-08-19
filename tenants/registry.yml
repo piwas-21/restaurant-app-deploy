@@ -215,7 +215,7 @@ tenants:
   # own Stripe connected account + KYC first — runbook §2b/§2b.5).
   obresse:
     name: O'Bresse
-    status: provisioning
+    status: active
     managed: scripts
     box: staging
     domain: obresse.sofrapiwas.com
