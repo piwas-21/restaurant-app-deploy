@@ -210,3 +210,24 @@ tenants:
     admin_email: mahmutkaya.nl+smoke@gmail.com
     city: Amsterdam
 
+  # Reseller tenant — partner Mustafa Vural (Solution Eva). Full-service bundle
+  # + extra-languages; `online-payments` deliberately absent (needs the restaurant's
+  # own Stripe connected account + KYC first — runbook §2b/§2b.5).
+  obresse:
+    name: O'Bresse
+    status: provisioning
+    managed: scripts
+    box: staging
+    domain: obresse.sofrapiwas.com
+    domain_mode: subdomain
+    db: tenant_obresse
+    db_role: tenant_obresse
+    compose_project: tenant-obresse
+    backend_tag: latest
+    frontend_tag: tenant-obresse
+    currency: EUR
+    languages: [fr, en]
+    modules: [core, kitchen-board, cashier, server, reservations, loyalty, printing, extra-languages]
+    template: craft
+    admin_email: obresse@solutioneva.com
+    city: Montréal-la-Cluse
