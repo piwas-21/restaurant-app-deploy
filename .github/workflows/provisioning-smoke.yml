@@ -363,6 +363,36 @@ jobs:
             echo "  body was: $(head -c 300 /tmp/modules.json 2>/dev/null)"
           fi
 
+          # 6. The paid surfaces the registry did NOT sell it are actually refused, and refused
+          #    in the right ORDER. O7 verified both by hand on a live tenant once (2026-08-18);
+          #    nothing has re-checked them since, and both are one attribute away from silently
+          #    inverting. The fixture buys `core` only, so:
+          #      /api/payments/availability  -> 404 ModuleNotEnabled (the module gate),
+          #      /api/payments/onboarding    -> 401 to an anonymous caller EVEN THOUGH the tenant
+          #                                     does not own the module, because AuthorizationMiddleware
+          #                                     runs ahead of the MVC filter pipeline. A 404 here would
+          #                                     mean the refusal leaks what the tenant bought.
+          curl -s --max-time 20 -o /tmp/pay-availability.json -w '%{http_code}' \
+            "https://${DOMAIN}/api/payments/availability" > /tmp/pay-availability.code || true
+          pay_code="$(cat /tmp/pay-availability.code 2>/dev/null || true)"
+          pay_err="$(python3 -c 'import json; print(json.load(open("/tmp/pay-availability.json")).get("errorCode",""))' 2>/dev/null || true)"
+          echo "  /api/payments/availability -> ${pay_code} ${pay_err}"
+          if [ "$pay_code" != "404" ] || [ "$pay_err" != "ModuleNotEnabled" ]; then
+            note "expected 404 ModuleNotEnabled from /api/payments/availability on a core-only tenant, got '${pay_code} ${pay_err}'"
+            echo "  body was: $(head -c 300 /tmp/pay-availability.json 2>/dev/null)"
+          fi
+
+          onboarding_code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "https://${DOMAIN}/api/payments/onboarding" || true)"
+          echo "  /api/payments/onboarding (anonymous) -> ${onboarding_code}"
+          if [ "$onboarding_code" != "401" ]; then
+            note "expected 401 from an anonymous /api/payments/onboarding, got ${onboarding_code} — auth must refuse before the module gate can answer"
+          fi
+
+          # What this does NOT assert, and why: the GRANTED half of the pair (module +
+          # `stripe_account:` in the registry, answering {"available": true}) needs a sandbox
+          # STRIPE_PLATFORM_API_KEY on the box, which is an owner action and a box secret. Until
+          # that exists this run proves the refusal only — see SOFRA-PAYMENTS-PLAN §9.
+
           [ "$fail" = "0" ] || exit 1
           echo "all checks passed"
 
