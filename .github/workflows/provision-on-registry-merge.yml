@@ -274,12 +274,23 @@ jobs:
                   reject(slug, "slug fails the registry grammar")
                   continue
               name = str(t.get("name") or "")
-              domain = str(t.get("domain") or f"{slug}.sofrapiwas.com")
+              # `base_domain:` absent = ours, exactly as provision-tenant.sh reads it — a
+              # reseller partner may host his clients under his own zone (§D1). This only
+              # feeds the DEFAULT below; the domain/mode cross-check stays where it belongs,
+              # on the box, so the two never drift into two different opinions.
+              base_domain = str(t.get("base_domain") or "sofrapiwas.com")
+              domain = str(t.get("domain") or f"{slug}.{base_domain}")
               template = str(t.get("template") or "classic")
               currency = str(t.get("currency") or "CHF")
               image_tag = str(t.get("frontend_tag") or f"tenant-{slug}")
               if CTRL.search(name) or len(name) > 200:
                   reject(slug, "name holds a control character or is over 200 chars")
+                  continue
+              if not ok(HOST, base_domain):
+                  # Refused here rather than only on the box because everything between is
+                  # expensive: this chain builds a ~20-minute tenant image before
+                  # provision-tenant.sh ever sees the entry.
+                  reject(slug, f"base_domain '{base_domain}' is not a plausible hostname")
                   continue
               if not ok(HOST, domain):
                   reject(slug, f"domain '{domain}' is not a plausible hostname")

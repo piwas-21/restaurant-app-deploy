@@ -231,6 +231,13 @@ plane later calls the same scripts (ADR-003 — no parallel mechanism).
    tags, currency/languages/modules, `city` for the seeded RestaurantInfo
    identity), PR → merge → sync to the box.
 
+   **`base_domain`** (optional, §D1): the zone a `domain_mode: subdomain` tenant
+   lives under. **Absent = `sofrapiwas.com`**, which is what every existing entry
+   means — set it only when a reseller partner hosts the client under his own
+   domain, and read the registry header's three caveats first (no wildcard; the
+   host must be exactly `{slug}.{base_domain}`; it contradicts `domain_mode: byo`
+   and provisioning refuses the pair).
+
    **`template`** (optional, frontend ADR-006 / S15 T2): the tenant's UI
    template — `classic` (the current RUMI look) or `craft`; absent = `classic`.
    `provision-tenant.sh` validates it (any other value fails loudly) and renders
@@ -238,10 +245,24 @@ plane later calls the same scripts (ADR-003 — no parallel mechanism).
    frontend **image build** via the `build-tenant-image.yml` `template` input +
    Dockerfile ARG (shipped 2026-07-10, frontend #165; `craft` is buildable
    since frontend #166 — its full T3 DoD is still in progress).
-2. **DNS**: subdomain tenants ride the `*.sofrapiwas.com` wildcard A record
-   (already points at the staging box, added 2026-07-06 via
-   `./domainio-dns.sh add-a sofrapiwas.com '*' 159.195.34.105`). BYO domains
-   need their own A record + nothing else — the same script provisions them.
+2. **DNS**: subdomain tenants under **our** base domain ride the
+   `*.sofrapiwas.com` wildcard A record (already points at the staging box, added
+   2026-07-06 via `./domainio-dns.sh add-a sofrapiwas.com '*' 159.195.34.105`).
+   BYO domains need their own A record + nothing else — the same script
+   provisions them.
+
+   **A tenant under a PARTNER's base domain** (`base_domain:` in the registry —
+   `obresse.solutioneva.com`, SOFRA-PARTNER-FLEXIBILITY-PLAN §D1) has **no
+   wildcard and cannot be given one**: domainio resells ResellerClub's
+   nameservers and cannot host a zone it holds no order for, so a delegated
+   subzone is impossible rather than merely unbuilt (O-D1). The partner
+   publishes **one A record per client** — `<slug>` → the box IP, TTL ≥ 7200 —
+   **before** you provision. `provision-tenant.sh` still only *warns* when it
+   does not resolve (a fresh record may be propagating, Caddy retries issuance,
+   and refusing would abort re-provisions of live tenants), but it prints the
+   exact record to publish and repeats the whole block as the **last** thing the
+   run says. Treat that block as a stop sign: a tenant with no A record is fully
+   built, running, and answers every visit with a TLS error.
 3. **Frontend image**: `NEXT_PUBLIC_*` are baked per domain, so build the
    tenant's image first (frontend repo):
    `gh workflow run build-tenant-image.yml -f tenant_domain=<domain> -f image_tag=tenant-<slug> -f restaurant_name="<registry name>" -f template=<registry template> -f currency=<registry currency>`
