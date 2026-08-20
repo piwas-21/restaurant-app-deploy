@@ -230,6 +230,16 @@ services:
       # on every tenant-backend box. Empty -> the route 503s (inert).
       PRINTER_TELEMETRY_SECRET: "${PRINTER_TELEMETRY_SECRET:-}"
       RETENTION_ENABLED: "${SOFRA_RETENTION_ENABLED:-false}"
+      # The A record a reseller partner must publish to put a client under their OWN
+      # zone (SOFRA-PARTNER-FLEXIBILITY-PLAN D1: a partner zone has no wildcard, so it
+      # is one record per client, and it must resolve BEFORE provisioning or Caddy
+      # cannot answer the HTTP-01 challenge). This is the value half of that
+      # instruction. Empty is the SAFE default and the app is written for it: the
+      # partner is told "we will send you the address" rather than a plausible wrong
+      # IP, which is the one failure mode worth avoiding here — a partner who
+      # publishes the wrong A record gets a tenant that never certifies and no clue
+      # why. Set per box; this is the STAGING box, where every managed tenant lives.
+      TENANT_BOX_IP: "${TENANT_BOX_IP:-}"
       RETENTION_INVITE_TOKEN_DAYS: "${SOFRA_RETENTION_INVITE_TOKEN_DAYS:-}"
       RETENTION_AUDIT_LOG_MONTHS: "${SOFRA_RETENTION_AUDIT_LOG_MONTHS:-}"
       RETENTION_REJECTED_APPLICATION_MONTHS: "${SOFRA_RETENTION_REJECTED_APPLICATION_MONTHS:-}"
