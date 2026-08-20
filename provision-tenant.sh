@@ -16,8 +16,10 @@
 #   5. caddy        — render caddy-tenants/<slug>.caddy + zero-downtime reload
 #
 # Prereqs (fail loudly if missing): DNS for the tenant domain points at this
-# box (subdomain tenants ride the *.sofrapiwas.com wildcard); the per-tenant
-# frontend image exists (frontend repo: build-tenant-image.yml).
+# box (subdomain tenants under OUR base domain ride the *.sofrapiwas.com
+# wildcard; a tenant under a partner's `base_domain:` has NO wildcard and needs
+# its own A record — see the domain helpers below); the per-tenant frontend
+# image exists (frontend repo: build-tenant-image.yml).
 #
 # Teardown: ./deprovision-tenant.sh <slug> [--drop-db] [--purge]
 set -euo pipefail
@@ -67,9 +69,9 @@ if not t:
     print(f"echo 'ERROR: tenant {slug} not found in tenants/registry.yml'; exit 1")
     sys.exit(0)
 for k in ("name", "status", "managed", "box", "domain", "domain_mode",
-          "domain_aliases", "db", "db_role", "compose_project", "backend_tag",
-          "frontend_tag", "currency", "languages", "modules", "admin_email",
-          "city", "template", "stripe_account", "mail_from"):
+          "base_domain", "domain_aliases", "db", "db_role", "compose_project",
+          "backend_tag", "frontend_tag", "currency", "languages", "modules",
+          "admin_email", "city", "template", "stripe_account", "mail_from"):
     v = t.get(k, "")
     if isinstance(v, list):
         v = ",".join(map(str, v))
@@ -296,25 +298,149 @@ if [[ "$BACKEND_TAG_EFFECTIVE" == "latest" || "$BACKEND_TAG_EFFECTIVE" == "stagi
   echo "      'sha-…' if that is intended, or plan to refresh it by hand." >&2
 fi
 
-# Domain mode (ADR-002). Absent -> inferred from the domain, so pre-S10 entries
-# keep working. The consistency check is the point: a `byo` entry that actually
-# sits under sofrapiwas.com (or the reverse) sends the founder chasing the wrong
-# DNS record, and the tenant sits certless while everyone looks at Caddy.
-DOMAIN_MODE="$REG_DOMAIN_MODE"
-if [[ -z "$DOMAIN_MODE" ]]; then
-  [[ "$REG_DOMAIN" == *.sofrapiwas.com ]] && DOMAIN_MODE=subdomain || DOMAIN_MODE=byo
+# --- BEGIN domain helpers (extracted verbatim by tests/domain-base.sh) ---
+# OUR base domain: the only one with a wildcard A record (`*.sofrapiwas.com`, added
+# 2026-07-06). Named once, because `base_domain:` generalises every use of it — a
+# reseller partner may host N of his clients under HIS zone
+# (`obresse.solutioneva.com`), which has no wildcard and never will.
+PLATFORM_BASE_DOMAIN="sofrapiwas.com"
+
+# A plausible public hostname: lowercase labels, at least one dot, no scheme, no
+# trailing dot, no underscore. One rule for the domain, the aliases and the base.
+is_plausible_host() { # $1=hostname
+  [[ "$1" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]]
+}
+
+# Resolve `domain_mode` (ADR-002) and cross-check it against the domain and the
+# tenant's base domain. Echoes the effective mode; prints the reason and returns 1 on
+# any inconsistency. Pure — no I/O, no globals but PLATFORM_BASE_DOMAIN — so
+# tests/domain-base.sh can drive every branch without a box.
+#
+# The check is not bookkeeping. A mislabelled entry sends the founder chasing the
+# wrong DNS record while the tenant sits certless and everyone looks at Caddy; that
+# was true of `byo` vs `subdomain` and it is truer now, because a partner base domain
+# has no wildcard to fall back on.
+#
+# `base_domain:` ABSENT MEANS EXACTLY THE PRE-2026-08-20 BEHAVIOUR — every entry
+# written before the field existed provisions identically. tests/domain-base.sh holds
+# a frozen copy of the old logic and asserts the two agree on every such input.
+resolve_domain_mode() { # $1=slug $2=domain $3=domain_mode ('' = infer) $4=base_domain ('' = ours)
+  local slug="$1" domain="$2" mode="$3" raw_base="$4" base="$PLATFORM_BASE_DOMAIN"
+
+  if [[ -n "$raw_base" ]]; then
+    if ! is_plausible_host "$raw_base"; then
+      echo "ERROR: registry entry '$slug' has base_domain '$raw_base' — expected a bare dotted hostname like 'solutioneva.com': lowercase labels, at least one dot, no scheme, no trailing dot, no leading dot. Omit the field entirely to mean '${PLATFORM_BASE_DOMAIN}'." >&2
+      return 1
+    fi
+    base="$raw_base"
+  fi
+
+  # Inference, for pre-S10 entries carrying no domain_mode: a name under the
+  # EFFECTIVE base is a subdomain tenant, anything else is a domain of its own.
+  if [[ -z "$mode" ]]; then
+    if [[ "$domain" == *".$base" ]]; then mode=subdomain; else mode=byo; fi
+  fi
+
+  case "$mode" in
+    subdomain)
+      if [[ "$domain" != "${slug}.${base}" ]]; then
+        echo "ERROR: domain_mode 'subdomain' expects domain '${slug}.${base}', registry says '$domain'" >&2
+        if [[ -z "$raw_base" ]]; then
+          echo "       This entry has no 'base_domain:', so the base is OURS (${PLATFORM_BASE_DOMAIN})." >&2
+          echo "       If this tenant lives under a partner's own zone, add 'base_domain: <their domain>';" >&2
+          echo "       if the domain belongs to the restaurant, use 'domain_mode: byo'." >&2
+        else
+          echo "       This entry declares 'base_domain: ${base}', so the host must be the slug and" >&2
+          echo "       nothing else under it — exactly one label, matching the tenant key." >&2
+        fi
+        return 1
+      fi ;;
+    byo)
+      # A contradiction, refused rather than quietly ignored. `byo` means the
+      # RESTAURANT owns the whole name and publishes its own record; `base_domain`
+      # names a zone WE place tenants under, which is the subdomain shape. Accepting
+      # both would leave an entry whose two halves disagree about who owns the DNS,
+      # and then silently drop one of them — reintroducing, in a new place, the exact
+      # failure this cross-check exists to prevent.
+      if [[ -n "$raw_base" ]]; then
+        echo "ERROR: registry entry '$slug' sets domain_mode 'byo' AND base_domain '$raw_base' — those contradict" >&2
+        echo "       'byo'        = a domain the RESTAURANT owns; there is no base to be under." >&2
+        echo "       'base_domain'= a zone we put tenants under; that is 'domain_mode: subdomain'." >&2
+        echo "       Pick one: drop base_domain, or set domain_mode: subdomain." >&2
+        return 1
+      fi
+      if [[ "$domain" == *".$PLATFORM_BASE_DOMAIN" ]]; then
+        echo "ERROR: domain_mode 'byo' but '$domain' is ours — a ${PLATFORM_BASE_DOMAIN} host rides the wildcard, use domain_mode: subdomain" >&2
+        return 1
+      fi
+      if ! is_plausible_host "$domain"; then
+        echo "ERROR: '$domain' is not a plausible hostname (lowercase labels, no scheme, no trailing dot)" >&2
+        return 1
+      fi ;;
+    *)
+      echo "ERROR: registry entry '$slug' has domain_mode '$mode' — allowed: subdomain | byo (absent = inferred)" >&2
+      return 1 ;;
+  esac
+
+  printf '%s' "$mode"
+}
+
+# The exact record a human has to publish for $1 to reach this box, as name / type /
+# value. "Check your DNS" is not an instruction anyone can act on, and this is now the
+# PREDICTABLE failure rather than an unlikely one: our own base has a wildcard, a
+# partner's base has nothing, so "the partner forgot the A record" ends in a fully
+# built tenant with no certificate — which looks, to the customer, exactly like a
+# broken product.
+#
+# Classified by the HOSTNAME, not by domain_mode, so a `domain_aliases:` entry (which
+# need not sit under the tenant's base at all) gets the right advice too.
+dns_record_advice() { # $1=host $2=the tenant's base domain $3=this box's IP
+  local host="$1" base="$2" ip="$3"
+  if [[ -n "$base" && "$base" != "$PLATFORM_BASE_DOMAIN" && "$host" == *".$base" ]]; then
+    printf '      %s\n' \
+      "PARTNER BASE DOMAIN '$base' — there is NO wildcard covering it, so this one" \
+      "record is the only thing that can ever make '$host' resolve." \
+      "Ask whoever runs DNS for '$base' to publish:" \
+      "" \
+      "          name  : ${host%".$base"}   (fully qualified: $host)" \
+      "          type  : A" \
+      "          value : $ip" \
+      "          TTL   : 7200 or more" \
+      ""
+  elif [[ "$host" == *".$PLATFORM_BASE_DOMAIN" ]]; then
+    printf '      %s\n' \
+      "'$host' is under our own base domain, so it rides the *.${PLATFORM_BASE_DOMAIN}" \
+      "wildcard A record and needs no record of its own. Check that the wildcard still" \
+      "points at this box:  A  *.${PLATFORM_BASE_DOMAIN}  ->  $ip" \
+      "(the zone is edited by hand, not through ./domainio-dns.sh — DEPLOYMENT.md)."
+  else
+    printf '      %s\n' \
+      "'$host' is a domain we do not host. At its registrar / DNS provider, publish:" \
+      "" \
+      "          name  : $host" \
+      "          type  : A" \
+      "          value : $ip" \
+      "          TTL   : 7200 or more" \
+      ""
+  fi
+  printf '      %s\n' \
+    "Until that resolves, Caddy cannot answer the HTTP-01 challenge and issues NO" \
+    "certificate: the tenant is built and running, and every visit fails on TLS."
+}
+# --- END domain helpers ---
+
+# Domain mode (ADR-002) + the zone this tenant lives under
+# (SOFRA-PARTNER-FLEXIBILITY-PLAN §D1). Absent `domain_mode` is inferred from the
+# domain, so pre-S10 entries keep working; absent `base_domain` is ours, so every
+# entry that predates the field keeps its meaning.
+BASE_DOMAIN="${REG_BASE_DOMAIN:-$PLATFORM_BASE_DOMAIN}"
+DOMAIN_MODE="$(resolve_domain_mode "$SLUG" "$REG_DOMAIN" "$REG_DOMAIN_MODE" "$REG_BASE_DOMAIN")" || exit 1
+if [[ -n "$REG_BASE_DOMAIN" && "$REG_BASE_DOMAIN" != "$PLATFORM_BASE_DOMAIN" ]]; then
+  echo "NOTE: tenant '$SLUG' lives under the PARTNER base domain '$BASE_DOMAIN', not ours." >&2
+  echo "      That zone has no wildcard: this tenant needs its own A record, published by" >&2
+  echo "      the partner, before any certificate can issue. The DNS check below says so" >&2
+  echo "      precisely if it is missing." >&2
 fi
-case "$DOMAIN_MODE" in
-  subdomain)
-    [[ "$REG_DOMAIN" == "${SLUG}.sofrapiwas.com" ]] \
-      || { echo "ERROR: domain_mode 'subdomain' expects domain '${SLUG}.sofrapiwas.com', registry says '$REG_DOMAIN' (use domain_mode: byo for a tenant-owned domain)" >&2; exit 1; } ;;
-  byo)
-    [[ "$REG_DOMAIN" == *.sofrapiwas.com ]] \
-      && { echo "ERROR: domain_mode 'byo' but '$REG_DOMAIN' is ours — a sofrapiwas.com host rides the wildcard, use domain_mode: subdomain" >&2; exit 1; }
-    [[ "$REG_DOMAIN" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]] \
-      || { echo "ERROR: '$REG_DOMAIN' is not a plausible hostname (lowercase labels, no scheme, no trailing dot)" >&2; exit 1; } ;;
-  *) echo "ERROR: registry entry '$SLUG' has domain_mode '$DOMAIN_MODE' — allowed: subdomain | byo (absent = inferred)" >&2; exit 1 ;;
-esac
 
 # Optional extra hostnames that should reach this tenant (typically the `www.`
 # of a BYO apex). They REDIRECT to the canonical domain rather than proxying:
@@ -329,7 +455,7 @@ IFS=',' read -ra _RAW_ALIASES <<< "${REG_DOMAIN_ALIASES:-}"
 for _a in ${_RAW_ALIASES[@]+"${_RAW_ALIASES[@]}"}; do
   _a="$(strip_ws "$_a")"
   [[ -z "$_a" ]] && continue
-  [[ "$_a" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]] \
+  is_plausible_host "$_a" \
     || { echo "ERROR: domain_alias '$_a' is not a plausible hostname" >&2; exit 1; }
   [[ "$_a" == "$REG_DOMAIN" ]] \
     && { echo "ERROR: domain_alias '$_a' duplicates the canonical domain" >&2; exit 1; }
@@ -337,17 +463,21 @@ for _a in ${_RAW_ALIASES[@]+"${_RAW_ALIASES[@]}"}; do
 done
 
 BOX_IP="$(curl -4 -sS --max-time 10 https://ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')"
-dns_check() { # $1=hostname — warn (never fail) so a propagating record doesn't block a re-run
+# Every hostname that did NOT resolve here, so the whole diagnostic can be repeated as
+# the last thing this script says (bottom of the file). A warning printed at second 5
+# of a six-minute provision scrolls away under the image pull, and with a partner base
+# domain this is the likely failure, not an exotic one.
+DNS_UNRESOLVED=()
+dns_check() { # $1=hostname — warns, never fails (justified at the bottom of this file)
   local host="$1" ip
   ip="$(getent hosts "$host" | awk '{print $1}' | head -1 || true)"
   [[ "$ip" == "$BOX_IP" ]] && return 0
+  DNS_UNRESOLVED+=("$host")
   echo "WARN: $host resolves to '${ip:-nothing}' but this box is '$BOX_IP'." >&2
-  if [[ "$DOMAIN_MODE" == byo ]]; then
-    echo "      BYO domain: the tenant must create  A  $host  ->  $BOX_IP  (TTL >= 7200) at their registrar." >&2
-  else
-    echo "      Subdomain tenants ride the *.sofrapiwas.com wildcard A record — check it still points here." >&2
-  fi
-  echo "      Caddy cannot get a certificate until then. Continuing (a fresh record may still be propagating)." >&2
+  dns_record_advice "$host" "$BASE_DOMAIN" "$BOX_IP" >&2
+  echo "      Continuing anyway: a fresh record may still be propagating, Caddy retries" >&2
+  echo "      issuance on its own, and refusing here would abort the re-provision of a" >&2
+  echo "      LIVE tenant over one resolver hiccup." >&2
 }
 dns_check "$REG_DOMAIN"
 for alias in ${DOMAIN_ALIASES[@]+"${DOMAIN_ALIASES[@]}"}; do
@@ -831,10 +961,21 @@ PY
 # nothing derived or verified it. Now the box records the fact itself.
 date -u +%Y-%m-%dT%H:%M:%SZ > "${TENANT_DIR}/.provisioned"
 
+# Assembled before the heredoc rather than inside it: a `$( ... )` that can exit
+# non-zero inside a heredoc is how a summary line silently disappears.
+DOMAIN_NOTE="domain_mode ${DOMAIN_MODE}"
+if [[ "$DOMAIN_MODE" == subdomain ]]; then
+  DOMAIN_NOTE="${DOMAIN_NOTE} under ${BASE_DOMAIN}"
+fi
+if [[ -n "$REG_BASE_DOMAIN" && "$REG_BASE_DOMAIN" != "$PLATFORM_BASE_DOMAIN" ]]; then
+  DOMAIN_NOTE="${DOMAIN_NOTE} — a PARTNER-owned zone: one A record per client, no wildcard"
+fi
+
 cat <<EOF
 
 ==> Provisioned tenant '${SLUG}' (${REG_NAME})
     URL       : https://${REG_DOMAIN}   (cert issues on first hit; allow ~30s)
+    Domain    : ${DOMAIN_NOTE}
     Verify    : ./verify-env.sh https://${REG_DOMAIN}
     Containers: (cd ${TENANT_DIR} && docker compose ps)
     Logs      : (cd ${TENANT_DIR} && docker compose logs -f backend-${SLUG})
@@ -857,3 +998,33 @@ cat <<EOF
     Fleet obs : automatic — this tenant's backend pushes to sofra /admin/fleet when
                 PRINTER_TELEMETRY_SECRET is set on the box (currently: $([[ -n "$BOX_TELEMETRY_SECRET" ]] && echo set || echo UNSET → inert)).
 EOF
+
+# The DNS warning is printed at the top of the run and then buried under an image pull,
+# a five-minute health wait and this summary. Repeat it — record and all — as the LAST
+# thing on screen, because "the A record was never published" is the failure a partner
+# base domain makes likely, and its symptom (a built tenant answering with a TLS error)
+# is indistinguishable from a broken product.
+#
+# Deliberately a WARNING and not an exit, and the reasons are asymmetric enough to be
+# worth stating: this check runs on every RE-provision too (a module upsell, a corrected
+# name), the box's own resolver view is not authoritative, a record published a minute
+# ago may still be propagating, and Caddy retries issuance by itself — so refusing here
+# would abort healthy runs over a condition that fixes itself, and would do it after the
+# tenant already exists on some earlier run. What it must never be is quiet.
+if [[ ${#DNS_UNRESOLVED[@]} -gt 0 ]]; then
+  {
+    echo
+    echo "############################################################################"
+    echo "## ACTION REQUIRED — ${#DNS_UNRESOLVED[@]} hostname(s) of '${SLUG}' do NOT point at this box"
+    echo "## This tenant is BUILT and RUNNING and is NOT reachable: with no A record"
+    echo "## there is no certificate, so https://${REG_DOMAIN} fails on TLS."
+    for _h in ${DNS_UNRESOLVED[@]+"${DNS_UNRESOLVED[@]}"}; do
+      echo "##"
+      echo "## $_h"
+      dns_record_advice "$_h" "$BASE_DOMAIN" "$BOX_IP" | sed -e 's/^      /##   /'
+    done
+    echo "##"
+    echo "## Re-check with:  getent hosts ${REG_DOMAIN}"
+    echo "############################################################################"
+  } >&2
+fi

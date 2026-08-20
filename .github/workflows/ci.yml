@@ -9,11 +9,12 @@
 # Gates, all on PRs + pushes to main:
 #   - shellcheck    : BLOCKING. Static analysis of every *.sh (warning severity —
 #                     the tree is already clean at this level, so it's a real gate).
-#   - script tests  : BLOCKING. tests/*.sh. Added 2026-08-18 after a real provision
-#                     failed on something no linter can see — a generated password that
-#                     broke the BACKEND's password policy, a rule living in another
-#                     repo's C#. Point 1 below ("almost nothing here a linter can check")
-#                     is still true and is exactly why this job is not a linter.
+#   - script tests  : BLOCKING. Every tests/*.sh, discovered by glob rather than named
+#                     one by one. Added 2026-08-18 after a real provision failed on
+#                     something no linter can see — a generated password that broke the
+#                     BACKEND's password policy, a rule living in another repo's C#.
+#                     Point 1 below ("almost nothing here a linter can check") is still
+#                     true and is exactly why this job is not a linter.
 #   - compose config: BLOCKING. `docker compose config -q` on the production
 #                     compose file. Cheap, and it is the file that deploys prod:
 #                     a YAML/interpolation error here is a broken box, discovered
@@ -99,8 +100,20 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: admin bootstrap password generator
-        run: bash tests/admin-password.sh
+      # Every tests/*.sh, discovered rather than listed. The step used to name
+      # tests/admin-password.sh explicitly, which meant the second test file added to
+      # this repo would have sat there, green, never run — the "gate that silently
+      # covers nothing" shape this workflow's own header complains about.
+      - name: Run every tests/*.sh
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=( tests/*.sh )
+          if [ ${#files[@]} -eq 0 ]; then echo "::error::no tests/*.sh found"; exit 1; fi
+          for t in "${files[@]}"; do
+            printf '\n=== %s ===\n' "$t"
+            bash "$t"
+          done
 
   # Renamed from `trivy_config` when the compose validation was added; the
   # `main-develop` ruleset's required-status-check list was updated in the same
