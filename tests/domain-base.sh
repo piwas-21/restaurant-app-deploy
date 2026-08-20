@@ -39,8 +39,8 @@ grep -q '^PLATFORM_BASE_DOMAIN=' "$FNS" || { echo "extraction missed PLATFORM_BA
 source "$FNS"
 
 fail=0
-pass() { printf '  ok   %s\n' "$1"; }
-bad()  { printf '  FAIL %s\n' "$1"; fail=1; }
+pass() { local desc="$1"; printf '  ok   %s\n' "$desc"; }
+bad()  { local desc="$1"; printf '  FAIL %s\n' "$desc"; fail=1; }
 
 # ── The frozen old logic ─────────────────────────────────────────────────────────
 # A VERBATIM copy of provision-tenant.sh's domain-mode block as it stood at 31d1a62,
@@ -70,9 +70,10 @@ legacy_domain_mode() { # $1=slug $2=domain $3=domain_mode ('' = infer)
 # bash 3.2 (the boxes are bash 5, a laptop is not) has no nameref to return them with.
 RC=0; OUT=""; ERR=""
 run_resolve() { # $1=slug $2=domain $3=mode $4=base
+  local slug="$1" domain="$2" mode="$3" base="$4"
   local errf; errf="$(mktemp)"
   RC=0
-  OUT="$(resolve_domain_mode "$1" "$2" "$3" "$4" 2>"$errf")" || RC=$?
+  OUT="$(resolve_domain_mode "$slug" "$domain" "$mode" "$base" 2>"$errf")" || RC=$?
   ERR="$(cat "$errf")"
   rm -f "$errf"
 }

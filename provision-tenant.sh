@@ -305,10 +305,18 @@ fi
 # (`obresse.solutioneva.com`), which has no wildcard and never will.
 PLATFORM_BASE_DOMAIN="sofrapiwas.com"
 
+# Every line of DNS advice below is printed at the same indent, as its own argument,
+# so the block stays readable in a CI log. A FUNCTION rather than a format variable:
+# naming the format once satisfies the "don't repeat the literal" rule, and passing a
+# variable AS a printf format would trip shellcheck SC2059. One literal, four callers,
+# and no way for the indent to drift between them.
+dns_advice() { printf '      %s\n' "$@"; }
+
 # A plausible public hostname: lowercase labels, at least one dot, no scheme, no
 # trailing dot, no underscore. One rule for the domain, the aliases and the base.
 is_plausible_host() { # $1=hostname
-  [[ "$1" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]]
+  local host="$1"
+  [[ "$host" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]]
 }
 
 # Resolve `domain_mode` (ADR-002) and cross-check it against the domain and the
@@ -397,7 +405,7 @@ resolve_domain_mode() { # $1=slug $2=domain $3=domain_mode ('' = infer) $4=base_
 dns_record_advice() { # $1=host $2=the tenant's base domain $3=this box's IP
   local host="$1" base="$2" ip="$3"
   if [[ -n "$base" && "$base" != "$PLATFORM_BASE_DOMAIN" && "$host" == *".$base" ]]; then
-    printf '      %s\n' \
+    dns_advice \
       "PARTNER BASE DOMAIN '$base' — there is NO wildcard covering it, so this one" \
       "record is the only thing that can ever make '$host' resolve." \
       "Ask whoever runs DNS for '$base' to publish:" \
@@ -408,13 +416,13 @@ dns_record_advice() { # $1=host $2=the tenant's base domain $3=this box's IP
       "          TTL   : 7200 or more" \
       ""
   elif [[ "$host" == *".$PLATFORM_BASE_DOMAIN" ]]; then
-    printf '      %s\n' \
+    dns_advice \
       "'$host' is under our own base domain, so it rides the *.${PLATFORM_BASE_DOMAIN}" \
       "wildcard A record and needs no record of its own. Check that the wildcard still" \
       "points at this box:  A  *.${PLATFORM_BASE_DOMAIN}  ->  $ip" \
       "(the zone is edited by hand, not through ./domainio-dns.sh — DEPLOYMENT.md)."
   else
-    printf '      %s\n' \
+    dns_advice \
       "'$host' is a domain we do not host. At its registrar / DNS provider, publish:" \
       "" \
       "          name  : $host" \
@@ -423,7 +431,7 @@ dns_record_advice() { # $1=host $2=the tenant's base domain $3=this box's IP
       "          TTL   : 7200 or more" \
       ""
   fi
-  printf '      %s\n' \
+  dns_advice \
     "Until that resolves, Caddy cannot answer the HTTP-01 challenge and issues NO" \
     "certificate: the tenant is built and running, and every visit fails on TLS."
 }
