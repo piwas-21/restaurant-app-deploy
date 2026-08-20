@@ -11,13 +11,45 @@
 #                       tenant 1 is registered, never migrated; its box/domain/secrets don't change)
 #             scripts = stamped out by provision-tenant.sh
 #   box:      prod (159.195.137.101) | staging (159.195.34.105) — must match BOX_ROLE in the box .env
-#   domain_mode: subdomain ({slug}.sofrapiwas.com via the wildcard A record, added 2026-07-06)
+#   domain_mode: subdomain ({slug}.{base_domain}, ours by default via the *.sofrapiwas.com
+#                wildcard A record, added 2026-07-06)
 #                | byo (tenant-owned domain, explicit DNS + Caddy block)  [ADR-002]
 #                Absent = inferred from the domain. provision-tenant.sh cross-checks the two:
-#                `subdomain` must be exactly {slug}.sofrapiwas.com, `byo` must NOT be under
+#                `subdomain` must be exactly {slug}.{base_domain}, `byo` must NOT be under
 #                sofrapiwas.com — a mislabelled entry sends you chasing the wrong DNS record
 #                while the tenant sits without a certificate. BYO needs an A record for the
 #                domain pointing at the tenant's box before the cert can issue (S10).
+#   base_domain: OPTIONAL. The zone this tenant's `subdomain` host lives under.
+#                ABSENT = sofrapiwas.com, which is what every entry below means and what
+#                every entry written before 2026-08-20 meant — omitting it is not a
+#                shorthand, it IS the default, and provisioning is byte-for-byte the same.
+#                Set it only for a RESELLER PARTNER's own zone, where the partner wants his
+#                clients to live under his brand rather than ours
+#                (SOFRA-PARTNER-FLEXIBILITY-PLAN §D1):
+#
+#                    obresse:
+#                      domain: obresse.solutioneva.com
+#                      domain_mode: subdomain
+#                      base_domain: solutioneva.com
+#
+#                Three things to know before using it:
+#                  * THERE IS NO WILDCARD on a partner's zone and there cannot be one we
+#                    control — domainio resells ResellerClub's nameservers and cannot host a
+#                    zone it holds no order for, so a delegated `clients.partner.com` subzone
+#                    is impossible, not merely unbuilt (O-D1, answered 2026-08-20). The
+#                    partner publishes ONE A record per client, `<slug>` -> the box IP,
+#                    TTL >= 7200, BEFORE provisioning. A `*.partner.com` wildcard works too
+#                    but takes over their whole company zone — permitted, discouraged, and
+#                    never offered without that sentence.
+#                  * The host must be exactly `{slug}.{base_domain}` — one label, matching
+#                    the tenant key. provision-tenant.sh refuses anything else rather than
+#                    guessing, for the same reason the `subdomain`/`byo` check exists.
+#                  * It CONTRADICTS `domain_mode: byo` and provisioning refuses the pair:
+#                    `byo` is a domain the RESTAURANT owns (no base to be under),
+#                    `base_domain` is a zone we place tenants under. Silently honouring one
+#                    would recreate the mislabelled-entry failure the cross-check prevents.
+#                Changing a LIVE tenant's domain is not a registry edit: NEXT_PUBLIC_* are
+#                baked per domain, so it is a frontend image rebuild plus a re-provision.
 #   domain_aliases: optional list of extra hostnames — typically the `www.` of a BYO apex.
 #                They get their own Caddy block that 301s to `domain`, never a second proxy:
 #                the frontend bundle bakes NEXT_PUBLIC_* for ONE origin, so serving the app
