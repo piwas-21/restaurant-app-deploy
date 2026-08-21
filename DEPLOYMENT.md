@@ -1262,6 +1262,34 @@ openssl rand -hex 32                       # the same value on both sides
 crontab -e   # */5 * * * * /opt/rumi/deploy/backup-agent.sh >> /opt/rumi/backups/backup.log 2>&1
 ```
 
+**Off-box copies — set on ONE box, and it is not the one you expect.** By default the agent
+reports what it finds by walking its own filesystem, so every artifact it reports is
+`location: local`, always. Set `BACKUP_AGENT_RESTIC_REPO` on the box that physically holds a
+restic repository AND its password, and the agent additionally enumerates the newest snapshot
+per tag and reports those copies as `restic`.
+
+Measured 2026-08-21, and it decides who can do this: **only prod qualifies.** Staging has no
+`restic` binary and no `RESTIC_PASSWORD`, and the repository directory it hosts
+(`restic-prod`) is prod's — encrypted and opaque to it. Prod holds `restic-staging`, which is
+where the **staging** box's per-tenant dumps land. So the box reporting a tenant's off-box
+copy is *not* the box that runs the tenant; that is expected and safe, because the ingest's
+natural key is `(box, location, ref)` and the control plane groups artifacts by tenant.
+
+```bash
+# PROD box .env only:
+BACKUP_AGENT_RESTIC_REPO=/opt/rumi/backups/restic-staging
+# BACKUP_AGENT_RESTIC_TAGS defaults to "staging-dumps tenant-archive"
+# RESTIC_PASSWORD is read from /root/.rumi-backup-env — never copied into .env
+./backup-agent.sh --dry-run     # count should jump from 0 to the tenant dumps in the repo
+```
+
+⚠️ **A failure here pushes NOTHING, on purpose.** The ingest is a whole-box upsert that
+**prunes what a push stops listing**, so an inventory missing its restic rows does not read as
+*"we could not look"* — it reads as *"those copies are gone"*. Every failure (missing key file,
+unreadable repo, a tag with no snapshot) therefore aborts the whole push for that tick. The
+box then stops reporting, goes `quiet` after six hours, and the twice-daily alarm mails about
+it by name. Silence that is alarmed beats a confident wrong answer that is not.
+
 ### What the inventory is FOR — the alarm (sofra ADR-014 D5)
 
 Since 2026-08-21 the control plane does not merely render the inventory, it **sweeps

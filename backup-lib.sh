@@ -228,6 +228,114 @@ bk_tar_dir() { # <host-dir> <out.tar.gz>
   mv "${out}.tmp" "$out"
 }
 
+# ── OFF-BOX artifacts, read from a restic repository this box can actually open ──────
+#
+# WHY THIS EXISTS. `bk_inventory_json` above walks the box FILESYSTEM, so everything it
+# finds is by definition on the box, and it says so: `location: "local"`, hard-coded.
+# Meanwhile backup-offsite.sh ships that whole dump directory into an encrypted restic
+# repository every night. The control plane therefore had no way to learn that an
+# off-box copy exists, and its "every copy sits on the box that runs this tenant"
+# signal was permanently true for every tenant while the off-box copies demonstrably
+# existed (ADR-014 D5 removed it from the alarm for exactly that reason). This function
+# is the missing half: it reads what the repository actually holds.
+#
+# MEASURED, and it decides the shape (2026-08-21): only the PROD box has restic and the
+# repository key at all — staging has neither binary nor password, and the repo dir it
+# hosts is prod's, encrypted and opaque to it. Prod holds `restic-staging`, which is
+# where the per-tenant dumps of the STAGING box's tenants land. So the box that reports
+# a tenant's off-box copy is NOT the box that runs the tenant, and that is fine: the
+# ingest's natural key is (box, location, ref) and the page groups by slug.
+#
+# Only the LATEST snapshot per tag is read. An older snapshot holds older copies of the
+# same files; enumerating all eleven would multiply every row by eleven and answer a
+# question nobody asked — "is there an off-box copy of this tenant's dump" is answered
+# by the newest one.
+#
+# FAILS LOUDLY AND EMITS NOTHING on any error. A partial listing is the one output that
+# must never reach the control plane: the push PRUNES what it stops listing, so half an
+# answer would delete the other half's rows. Callers must treat a non-zero return as
+# "do not push at all" rather than "push what we have".
+bk_restic_artifacts_json() { # <repo> <tag> [tag...]
+  local repo="${1:?usage: bk_restic_artifacts_json <repo> <tag> [tag...]}"
+  shift
+  [[ $# -gt 0 ]] || bk_die "bk_restic_artifacts_json needs at least one tag"
+  command -v restic >/dev/null || bk_die "restic not installed — cannot enumerate $repo"
+  : "${RESTIC_PASSWORD:?RESTIC_PASSWORD not set (see /root/.rumi-backup-env)}"
+
+  local tag listing="" chunk
+  for tag in "$@"; do
+    # `latest` + --tag is one snapshot per tag. A tag with no snapshot is an ERROR here,
+    # not an empty list: a repository that has stopped receiving a series is precisely
+    # the thing this feature exists to make visible, and silently reporting "no off-box
+    # copies" would prune the rows that say otherwise.
+    chunk="$(restic -r "$repo" ls --json --tag "$tag" latest 2>&1)" \
+      || bk_die "restic ls failed for tag '$tag' in $repo: $(printf '%s' "$chunk" | tail -1)"
+    listing+="$chunk"$'\n'
+  done
+
+  BK_REPO_LABEL="$(basename "$repo")" python3 -c '
+import json, os, re, sys
+
+# The snapshot header line carries short_id; every following node line belongs to it.
+TS = re.compile(r"(\d{8}T\d{6}Z)")
+DUMP = re.compile(r"/tenants/([a-z0-9][a-z0-9-]*)/\1-(scheduled|manual)-(\d{8}T\d{6}Z)\.sql\.gz$")
+ARCHIVE = re.compile(r"/archive/([a-z0-9][a-z0-9-]*)/(\d{8}T\d{6}Z)/[^/]+$")
+label = os.environ["BK_REPO_LABEL"]
+
+
+def iso(ts):
+    return "%s-%s-%sT%s:%s:%sZ" % (ts[0:4], ts[4:6], ts[6:8], ts[9:11], ts[11:13], ts[13:15])
+
+
+snap = None
+artifacts = {}
+archives = {}
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    node = json.loads(line)
+    if node.get("struct_type") == "snapshot" or node.get("message_type") == "snapshot":
+        snap = node.get("short_id") or node.get("id", "")[:8]
+        continue
+    if node.get("type") != "file" or not snap:
+        continue
+    path = node.get("path", "")
+
+    m = DUMP.search(path)
+    if m:
+        slug, kind, ts = m.group(1), m.group(2), m.group(3)
+        ref = "%s@%s:%s" % (label, snap, path)
+        artifacts[ref] = {
+            "tenantSlug": slug, "kind": kind, "takenAt": iso(ts),
+            "sizeBytes": node.get("size", 0), "location": "restic",
+            # No sha256: restic checksums its own contents, and the sidecar file is a
+            # separate node in this listing rather than a property of this one.
+            "ref": ref, "sha256": None,
+        }
+        continue
+
+    m = ARCHIVE.search(path)
+    if m:
+        # ONE artifact per archive directory, as the local walk does — the manifest is
+        # what makes it a restorable unit, so its parts must not be listed separately.
+        # `kind` is `archive` rather than `deprovision`: the reason lives inside
+        # manifest.json, and reading a file out of a snapshot to learn it would cost a
+        # `restic dump` per archive per tick for a distinction the LOCAL row already
+        # carries.
+        slug, ts = m.group(1), m.group(2)
+        ref = "%s@%s:%s" % (label, snap, path.rsplit("/", 1)[0])
+        a = archives.setdefault(ref, {
+            "tenantSlug": slug, "kind": "archive", "takenAt": iso(ts),
+            "sizeBytes": 0, "location": "restic", "ref": ref, "sha256": None,
+        })
+        a["sizeBytes"] += node.get("size", 0)
+
+artifacts.update(archives)
+json.dump([artifacts[r] for r in sorted(artifacts)], sys.stdout, separators=(",", ":"))
+' <<< "$listing"
+}
+
 # The whole-box inventory, as the control-plane contract defines it. Walks the two
 # artifact trees; emits nothing that is not on disk right now, so a deleted artifact
 # disappears from the next push (the endpoint is an idempotent whole-box upsert).
