@@ -1237,6 +1237,28 @@ openssl rand -hex 32                       # the same value on both sides
 crontab -e   # */5 * * * * /opt/rumi/deploy/backup-agent.sh >> /opt/rumi/backups/backup.log 2>&1
 ```
 
+### What the inventory is FOR — the alarm (sofra ADR-014 D5)
+
+Since 2026-08-21 the control plane does not merely render the inventory, it **sweeps
+it twice a day and mails the founder** when a tenant is not protected
+(`backup-alert-cron.yml` → `POST /api/cron/backup-alerts` → `WAITLIST_TO`). Nothing
+new is needed on a box — it reads what this agent already pushed — but two box-side
+facts now have a consequence they did not have before:
+
+- **`SOFRA_CRON_SECRET` is what makes the alarm able to speak.** It is shared by all
+  four sweeps (retention, go-live, trial-warnings, backup-alerts). Clearing it to
+  "turn off the retention purge" also silences the backup alarm; `RETENTION_ENABLED`
+  is the switch for that, not this bearer.
+- **A box that stops pushing is now an alert, not a gap.** `backup-agent.sh` missing
+  six hourly pushes makes its box `quiet`, which the control plane reports as
+  UNKNOWN — not protected — for every tenant on it. So an agent left un-cronned after
+  a box rebuild will now mail, which is the intended behaviour.
+
+When the `backup-alert-cron` workflow itself goes **red**, that is the alarm for the
+alarm: the sweep ran and could not do its job (registry unreadable inside the
+container, `WAITLIST_TO` unset, or the send failed). It is never a backup failure by
+itself — read the job's JSON body, which names which of the three it was.
+
 
 ## Error tracking (Sentry — DEV-PHASES W3)
 
