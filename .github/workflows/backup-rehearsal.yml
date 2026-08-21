@@ -1,0 +1,169 @@
+# ============================================================================
+# BACKUP REHEARSAL — weekly, against the real staging box.
+# ----------------------------------------------------------------------------
+# A backup that has never been restored is a hope, not a backup. Everything else
+# about backups on these boxes is already proven by observation — cron ran, the
+# file exists, restic reports a snapshot — and NONE of that answers the only
+# question that matters when it is needed: does the artifact load?
+#
+# So this job takes each managed tenant's newest artifact on staging (where every
+# managed tenant lives), loads it into a THROWAWAY database, checks that postgres
+# accepted every table the dump declares, and drops the scratch database again.
+# restore-tenant.sh does the work and defaults to exactly this rehearsal mode; the
+# dangerous mode is the one that has to be asked for by name.
+#
+# Precedent: provisioning-smoke.yml — weekly, unmocked, against a real box. That
+# workflow proves a tenant can be CREATED; this one proves one can be BROUGHT BACK.
+# The pair is the whole lifecycle.
+#
+# Cost: one gunzip + one psql load per tenant per week on the staging box, in a
+# scratch database that is dropped on a trap even when the run fails. It touches no
+# tenant's real database and no production box.
+# ============================================================================
+name: backup-rehearsal
+
+on:
+  schedule:
+    # Tuesdays 05:23 UTC. Off the hour, and a different day from provisioning-smoke,
+    # so the two never contend for the same box. NOTE: a `schedule:` trigger always
+    # runs on the DEFAULT branch (develop here) — this file has to be merged before
+    # it ever fires.
+    - cron: "23 5 * * 2"
+  workflow_dispatch:
+    inputs:
+      slug:
+        description: "Rehearse ONE tenant (blank = every managed tenant on staging)"
+        required: false
+        default: ""
+
+concurrency:
+  group: backup-rehearsal
+  cancel-in-progress: false
+
+jobs:
+  rehearse:
+    name: restore every tenant into a throwaway database
+    runs-on: ubuntu-latest
+    # The SSH-bearing job, so it gets nothing else. Issue filing is a separate job.
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    outputs:
+      failed: ${{ steps.rehearse.outputs.failed }}
+    steps:
+      - name: Configure SSH (pinned host key)
+        env:
+          STAGING_SSH_KEY: ${{ secrets.STAGING_SSH_KEY }}
+          STAGING_KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$STAGING_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$STAGING_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Rehearse
+        id: rehearse
+        env:
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          ONLY_SLUG: ${{ inputs.slug }}
+        run: |
+          set -euo pipefail
+          ssh_box() {
+            ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes \
+              -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes \
+              -o ConnectTimeout=15 "${STAGING_USER}@${STAGING_HOST}" "$@"
+          }
+
+          # Which tenants, read off the BOX's registry rather than this checkout: the
+          # box's copy is the one the scripts actually consume. Parsed HERE rather than
+          # over SSH — a python snippet nested in a remote command string is three layers
+          # of quoting deep and its failure mode is silence (provisioning-smoke.yml learnt
+          # this the hard way).
+          ssh_box "cat /opt/rumi/deploy/tenants/registry.yml" > /tmp/registry.yml
+          if [ -n "${ONLY_SLUG}" ]; then
+            slugs="${ONLY_SLUG}"
+          else
+            slugs="$(python3 -c '
+          import yaml
+          reg = yaml.safe_load(open("/tmp/registry.yml")) or {}
+          print(" ".join(sorted(
+              s for s, t in (reg.get("tenants") or {}).items()
+              if isinstance(t, dict) and t.get("managed") == "scripts"
+              and t.get("box") == "staging")))')"
+          fi
+          echo "tenants: ${slugs:-<none>}"
+
+          failed=""
+          for slug in $slugs; do
+            # The `smoke` fixture is destroyed at the end of every provisioning-smoke run,
+            # so between runs it has no database and no artifact — a correct state that
+            # would report here as a failing rehearsal. Skipped by name, and only in the
+            # automatic sweep: `workflow_dispatch` with slug=smoke still runs it, because
+            # if you asked for it by name you want the real answer.
+            if [ "$slug" = "smoke" ] && [ -z "${ONLY_SLUG}" ]; then
+              echo "skip ${slug} (test fixture — no data between smoke runs)"
+              continue
+            fi
+            echo "::group::rehearse ${slug}"
+            # `--list` first: a tenant with no artifact at all is a DIFFERENT failure
+            # from one whose artifact will not load, and the report has to say which.
+            ssh_box "cd /opt/rumi/deploy && ./restore-tenant.sh '${slug}' --list" || true
+            if ssh_box "cd /opt/rumi/deploy && ./restore-tenant.sh '${slug}'"; then
+              echo "  PASS ${slug}"
+            else
+              echo "::error::restore rehearsal FAILED for ${slug}"
+              failed="${failed} ${slug}"
+            fi
+            echo "::endgroup::"
+          done
+
+          failed="$(echo "$failed" | sed 's/^ *//;s/ *$//')"
+          echo "failed=${failed}" >> "$GITHUB_OUTPUT"
+          if [ -n "$failed" ]; then
+            echo "::error::rehearsal failed for:${failed}"
+            exit 1
+          fi
+          echo "every tenant's newest backup restored cleanly"
+
+  report:
+    name: file an issue if a rehearsal failed
+    needs: rehearse
+    if: ${{ always() && needs.rehearse.result == 'failure' && github.event_name == 'schedule' }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    timeout-minutes: 5
+    steps:
+      # Deliberately NOT the SSH-bearing job: nothing here can reach a box. Same split
+      # as provisioning-smoke.yml.
+      - name: Open or comment on the tracking issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FAILED: ${{ needs.rehearse.outputs.failed }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="backup rehearsal failed"
+          body="$(printf '%s\n' \
+            "The weekly restore rehearsal could not load a tenant's newest backup." \
+            "" \
+            "Tenants: \`${FAILED:-see the run log}\`" \
+            "Run: ${RUN_URL}" \
+            "" \
+            "This means the backup for those tenants is NOT known to be restorable. Check by hand:" \
+            "" \
+            '```' \
+            "bash .ssh/staging.sh 'cd /opt/rumi/deploy && ./restore-tenant.sh <slug> --list'" \
+            "bash .ssh/staging.sh 'cd /opt/rumi/deploy && ./restore-tenant.sh <slug>'" \
+            '```' \
+            "" \
+            "See DEPLOYMENT.md §Backups & restore.")"
+          existing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+                        --search "\"$title\" in:title" --json number --jq '.[0].number // empty' || true)"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+          fi

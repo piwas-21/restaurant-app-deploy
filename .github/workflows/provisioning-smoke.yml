@@ -265,7 +265,7 @@ jobs:
           leftovers="$(ssh_box "ls -d /opt/rumi/tenants/${SLUG} 2>/dev/null || true")"
           if [ -n "$leftovers" ]; then
             echo "::error::/opt/rumi/tenants/${SLUG} still exists — a previous run did not tear down."
-            echo "::error::Clear it with: ./deprovision-tenant.sh ${SLUG} --drop-db --purge"
+            echo "::error::Clear it with: ./deprovision-tenant.sh ${SLUG} --drop-db --purge --no-archive"
             exit 1
           fi
 
@@ -458,10 +458,15 @@ jobs:
           # ALWAYS, including on a failed verify: a smoke tenant left running is a
           # half-built instance on a live box and a slug that cannot be re-run. `--purge`
           # removes /opt/rumi/tenants/<slug>, which is what next week's guard checks for.
+          #
+          # `--no-archive` because a teardown now files a long-retention archive of the
+          # tenant it destroys, and this tenant is a robot: 52 archives a year of
+          # synthetic data, sitting for two years in the same place a departed customer's
+          # data does, and reported to the owner as if it were one.
           ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes \
             -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes \
             -o ConnectTimeout=15 "${STAGING_USER}@${STAGING_HOST}" \
-            "cd /opt/rumi/deploy && ./deprovision-tenant.sh '${SLUG}' --drop-db --purge"
+            "cd /opt/rumi/deploy && ./deprovision-tenant.sh '${SLUG}' --drop-db --purge --no-archive"
 
       - name: Confirm nothing was left behind
         if: always()
@@ -517,7 +522,7 @@ jobs:
             "also failed, clear it by hand:" \
             "" \
             '```' \
-            "bash .ssh/staging.sh 'cd /opt/rumi/deploy && ./deprovision-tenant.sh ${SLUG} --drop-db --purge'" \
+            "bash .ssh/staging.sh 'cd /opt/rumi/deploy && ./deprovision-tenant.sh ${SLUG} --drop-db --purge --no-archive'" \
             '```')"
           existing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
                         --search "\"$title\" in:title" --json number --jq '.[0].number // empty' || true)"
