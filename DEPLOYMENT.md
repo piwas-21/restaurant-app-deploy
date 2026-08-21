@@ -1214,13 +1214,32 @@ dispatch `deprovision-tenant.yml --drop-db`. A backup feature must not hand anyo
 tenant-destruction primitive. The cost is latency: a job is picked up on the next poll, ≤5
 minutes. A backup is not interactive.
 
-`BACKUP_AGENT_SECRET` is one shared bearer per environment, same posture as
+`BACKUP_AGENT_SECRET` is the bearer the agent presents, same posture as
 `PRINTER_TELEMETRY_SECRET`/`CRON_SECRET`. **The agent runs on the box HOST from cron**, not in
-a container, so it reads the box `.env` directly. The **sofra container** needs the same
+a container, so it reads the box `.env` directly. The **sofra container** needs the matching
 value to verify the bearer, and for that it is declared in `docker-compose.prod.yml` — a
 `.env` variable does not reach a container unless it is named there. Unset on either side =
 inert (the agent exits silently; the routes stay off), so this ships safely before the secret
 exists.
+
+**ONE CREDENTIAL PER BOX** (sofra ADR-014 D1a). A single shared value is one credential for
+two principals, and the inventory push **PRUNES what it stops listing** — so a compromise of
+the weaker (staging) box yielded a bearer that could erase the control plane's whole record of
+**prod's** backups and lease away its jobs. That is the very privilege-escalation path the
+backup SSH keys are arranged to prevent ("Staging never gets a key to prod"). The control
+plane therefore reads a per-box name:
+
+| Where | Variable | Value |
+|---|---|---|
+| **each box** `.env` (unchanged) | `BACKUP_AGENT_SECRET` | that box's own secret |
+| **sofra box** `.env` | `BACKUP_AGENT_SECRET_PROD` | the prod box's value |
+| **sofra box** `.env` | `BACKUP_AGENT_SECRET_STAGING` | the staging box's value |
+
+The box side changes nothing — per-box secrets are just *different values under the same
+name* there. A bearer that authenticates as one box and claims another gets **403** (**404**
+on a job result: a box may not learn that another box's job exists). The old shared value is
+still accepted, as any box, until both agents have been observed pushing with their own; then
+it is removed.
 
 `BACKUP_AGENT_ALLOW_DELETE` is **false unless it is exactly `true`**, per box. With it false,
 the worst a compromise of the public control plane can do through this channel is ask for
