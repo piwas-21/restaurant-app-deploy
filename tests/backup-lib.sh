@@ -245,6 +245,122 @@ then pass "the inventory matches the contract field for field"
 else bad "inventory shape (details above)"
 fi
 
+# ─────────────────────────────────────────────────────────────────────────────────────
+echo "bk_restic_artifacts_json (the OFF-BOX half of the same contract):"
+# Against a STUB restic, deliberately: CI has no restic, no repository and no key, and
+# the thing worth testing is not restic — it is the mapping from a listing to artifacts,
+# and the refusal to emit a partial one. The stub's output is copied from a real
+# `restic ls --json` run against the live restic-staging repository (2026-08-21).
+STUB="$TMP/bin"
+mkdir -p "$STUB"
+cat > "$STUB/restic" <<'STUBEOF'
+#!/usr/bin/env bash
+tag=""
+for ((i=1;i<=$#;i++)); do [[ "${!i}" == "--tag" ]] && { j=$((i+1)); tag="${!j}"; }; done
+M='/opt/rumi/backups/staging-mirror'
+A='/opt/rumi/backups/staging-archive-mirror'
+case "$tag" in
+  dumps)
+    echo '{"short_id":"28dce7d7","message_type":"snapshot","struct_type":"snapshot"}'
+    echo '{"name":"obresse","type":"dir","path":"'"$M"'/tenants/obresse","message_type":"node","struct_type":"node"}'
+    echo '{"name":"a","type":"file","size":341886,"path":"'"$M"'/tenants/obresse/obresse-scheduled-20260821T003723Z.sql.gz","message_type":"node","struct_type":"node"}'
+    echo '{"name":"b","type":"file","size":100,"path":"'"$M"'/tenants/obresse/obresse-scheduled-20260821T003723Z.sql.gz.sha256","message_type":"node","struct_type":"node"}'
+    echo '{"name":"c","type":"file","size":2048,"path":"'"$M"'/tenants/demo/demo-manual-20260820T003724Z.sql.gz","message_type":"node","struct_type":"node"}'
+    echo '{"name":"d","type":"file","size":99,"path":"'"$M"'/cluster-20260821T001501Z.sql.gz","message_type":"node","struct_type":"node"}'
+    echo '{"name":"e","type":"file","size":7,"path":"'"$M"'/tenants/demo/notadump.txt","message_type":"node","struct_type":"node"}'
+    ;;
+  archives)
+    echo '{"short_id":"b394beb9","message_type":"snapshot","struct_type":"snapshot"}'
+    echo '{"name":"db.sql.gz","type":"file","size":10,"path":"'"$A"'/archive/gone/20260101T000000Z/db.sql.gz","message_type":"node","struct_type":"node"}'
+    echo '{"name":"uploads.tar.gz","type":"file","size":30,"path":"'"$A"'/archive/gone/20260101T000000Z/uploads.tar.gz","message_type":"node","struct_type":"node"}'
+    ;;
+  *) echo "Fatal: no matching snapshot found for tag $tag" >&2; exit 1 ;;
+esac
+STUBEOF
+chmod +x "$STUB/restic"
+
+OFF="$TMP/off.json"
+if PATH="$STUB:$PATH" RESTIC_PASSWORD=stub \
+     bk_restic_artifacts_json /opt/rumi/backups/restic-staging dumps archives > "$OFF" 2>/dev/null; then
+  if python3 - "$OFF" <<'PY'
+import json, sys
+
+arts = json.load(open(sys.argv[1]))
+by = {a["ref"]: a for a in arts}
+errs = []
+
+want_keys = {"tenantSlug", "kind", "takenAt", "sizeBytes", "location", "ref", "sha256"}
+for ref, a in by.items():
+    if set(a) != want_keys:
+        errs.append("keys of %s" % ref)
+    if a["location"] != "restic":
+        errs.append("location of " + ref)
+
+dump = [a for a in arts if a["tenantSlug"] == "obresse"]
+if len(dump) != 1:
+    errs.append("expected exactly one obresse dump, got %d" % len(dump))
+else:
+    d = dump[0]
+    if d["kind"] != "scheduled":
+        errs.append("kind read from the filename")
+    if d["takenAt"] != "2026-08-21T00:37:23Z":
+        errs.append("takenAt is the DUMP's stamp, not the snapshot's: " + d["takenAt"])
+    if d["sizeBytes"] != 341886:
+        errs.append("sizeBytes from the node")
+    if d["sha256"] is not None:
+        errs.append("sha256 must be null: restic checksums its own contents")
+    # The ref is what an operator pastes into `restic restore`, so it must name the
+    # repository, the snapshot and the path — all three, or it identifies nothing.
+    if not d["ref"].startswith("restic-staging@28dce7d7:/"):
+        errs.append("ref must be <repo>@<snapshot>:<path>, got " + d["ref"])
+    if len(d["ref"]) > 300:
+        errs.append("ref longer than the wire contract's 300 chars")
+
+arch = [a for a in arts if a["tenantSlug"] == "gone"]
+if len(arch) != 1:
+    errs.append("an archive DIRECTORY is one artifact, not one per file")
+elif arch[0]["sizeBytes"] != 40 or arch[0]["kind"] != "archive":
+    errs.append("archive size must sum its files; kind is archive")
+
+# The three things that must NOT be reported: a checksum sidecar, the whole-cluster
+# dump (it belongs to no tenant), and any file that is not a dump at all.
+if len(arts) != 3:
+    errs.append("expected 3 artifacts, got %d: %s" % (len(arts), sorted(by)))
+if any("sha256" in a["ref"] for a in arts):
+    errs.append("a .sha256 sidecar was reported as an artifact")
+if any("cluster-" in a["ref"] for a in arts):
+    errs.append("the whole-cluster dump was attributed to a tenant")
+
+if errs:
+    print("   " + "\n   ".join(errs))
+    sys.exit(1)
+PY
+  then pass "maps a real restic listing to artifacts, and ignores what is not one"
+  else bad "restic artifact shape (details above)"
+  fi
+else
+  bad "enumeration failed against the stub"
+fi
+
+# THE PROPERTY THAT PROTECTS THE CONTROL PLANE'S ROWS. The push PRUNES what it stops
+# listing, so a half-read repository must produce NOTHING and a non-zero status — never
+# the half it managed to read, which would delete the other half.
+rc=0
+PART="$(PATH="$STUB:$PATH" RESTIC_PASSWORD=stub \
+  bk_restic_artifacts_json /opt/rumi/backups/restic-staging dumps nosuchtag 2>/dev/null)" || rc=$?
+check "a failing tag fails the whole enumeration" "$rc" 1
+[[ -z "$PART" ]] && pass "and emits NOTHING — a partial listing would prune what it omits" \
+  || bad "emitted a partial listing: $PART"
+
+rc=0; ( PATH="$STUB:$PATH"; unset RESTIC_PASSWORD
+        bk_restic_artifacts_json /opt/rumi/backups/restic-staging dumps ) >/dev/null 2>&1 || rc=$?
+check "refuses to run without the repository password" "$rc" 1
+
+mkdir -p "$TMP/nobin"
+rc=0; ( export PATH="$TMP/nobin"; RESTIC_PASSWORD=stub \
+        bk_restic_artifacts_json /opt/rumi/backups/restic-staging dumps ) >/dev/null 2>&1 || rc=$?
+check "refuses when restic is not installed (every box but the one holding the repo)" "$rc" 1
+
 # An empty box must still produce a valid, EMPTY inventory — the endpoint is a whole-box
 # upsert, so "no artifacts" has to be sayable. A box that skipped the push instead would
 # leave deleted artifacts on the control plane forever.

@@ -65,6 +65,21 @@ BASE_URL="${BASE_URL%/}"
 ALLOW_DELETE="$(env_val BACKUP_AGENT_ALLOW_DELETE)"
 MAX_JOBS="${BACKUP_AGENT_MAX_JOBS:-10}"
 
+# OFF-BOX reporting, opt-in per box because only ONE box can do it. Measured
+# 2026-08-21: staging has no restic binary and no repository password, and the repo
+# directory it hosts is prod's — encrypted and opaque to it. Prod holds
+# `restic-staging`, which is where the STAGING box's per-tenant dumps land, so the box
+# that can see a tenant's off-box copy is not the box that runs the tenant. Set
+# BACKUP_AGENT_RESTIC_REPO on the box that holds the repository; leave it unset
+# everywhere else and this whole path is skipped.
+RESTIC_REPO="$(env_val BACKUP_AGENT_RESTIC_REPO)"
+RESTIC_TAGS="$(env_val BACKUP_AGENT_RESTIC_TAGS)"
+RESTIC_TAGS="${RESTIC_TAGS:-staging-dumps tenant-archive}"
+# The repository password is NOT in the box .env and must not be copied there: it lives
+# in /root/.rumi-backup-env, which backup-offsite.sh already sources, mode 600.
+RESTIC_ENV="$(env_val BACKUP_AGENT_RESTIC_ENV)"
+RESTIC_ENV="${RESTIC_ENV:-/root/.rumi-backup-env}"
+
 command -v curl >/dev/null || bk_die "curl not installed"
 
 # One agent at a time. A `create` job can outrun the 5-minute cron tick, and two
@@ -80,7 +95,8 @@ fi
 CURL_CFG="$(mktemp)"
 BODY="$(mktemp)"
 INV="$(mktemp)"
-trap 'rm -f "$CURL_CFG" "$BODY" "$INV"' EXIT
+OFFBOX="$(mktemp)"
+trap 'rm -f "$CURL_CFG" "$BODY" "$INV" "$OFFBOX"' EXIT
 chmod 600 "$CURL_CFG"
 printf 'header = "Authorization: Bearer %s"\n' "$SECRET" > "$CURL_CFG"
 printf 'header = "Content-Type: application/json"\n' >> "$CURL_CFG"
@@ -98,8 +114,50 @@ api() { # <method> <url> [payload-file]  -> body in $BODY, status in $HTTP_CODE
 }
 
 # ── 1. push the inventory ────────────────────────────────────────────────────────────
+
+# Merge the off-box artifacts into the local walk, or REFUSE TO PUSH.
+#
+# The refusal is the important half. The ingest is a WHOLE-BOX upsert that PRUNES what
+# it stops listing, so an inventory missing its restic rows does not read as "we could
+# not look" — it reads as "those copies are gone", and deletes them from the control
+# plane. Every failure here therefore aborts the push entirely rather than sending the
+# local half: the box then stops reporting, goes `quiet` after six hours, and the
+# twice-daily alarm says so by name. Silence that is alarmed beats a confident wrong
+# answer that is not.
+#
+# Returns 1 when the caller must not push.
+merge_offbox() {
+  [[ -n "$RESTIC_REPO" ]] || return 0
+  if [[ ! -f "$RESTIC_ENV" ]]; then
+    echo "   WARN: ${RESTIC_ENV} missing — NOT pushing (a listing without the off-box rows would prune them)" >&2
+    return 1
+  fi
+  # In a subshell: RESTIC_PASSWORD must not leak into the environment of the job
+  # handlers below, which run pg_dump and tar.
+  if ! (
+    # shellcheck source=/dev/null
+    . "$RESTIC_ENV"
+    export RESTIC_PASSWORD
+    # shellcheck disable=SC2086  # tags are a deliberate word-split list
+    bk_restic_artifacts_json "$RESTIC_REPO" $RESTIC_TAGS
+  ) > "$OFFBOX"; then
+    echo "   WARN: restic enumeration failed for ${RESTIC_REPO} — NOT pushing this tick" >&2
+    return 1
+  fi
+  python3 - "$INV" "$OFFBOX" <<'PY' || return 1
+import json, sys
+
+inv = json.load(open(sys.argv[1]))
+off = json.load(open(sys.argv[2]))
+inv["artifacts"].extend(off)
+json.dump(inv, open(sys.argv[1], "w"), separators=(",", ":"))
+PY
+  return 0
+}
+
 push_inventory() {
   bk_inventory_json "$BOX_ROLE" > "$INV"
+  merge_offbox || return 0
   local n
   n="$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["artifacts"]))' "$INV")"
   if $DRY_RUN; then
