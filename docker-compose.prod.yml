@@ -229,6 +229,16 @@ services:
       # backend's FleetSummaryPushService presents; must MATCH PRINTER_TELEMETRY_SECRET
       # on every tenant-backend box. Empty -> the route 503s (inert).
       PRINTER_TELEMETRY_SECRET: "${PRINTER_TELEMETRY_SECRET:-}"
+      # Backup inventory + job queue (POST /api/telemetry/backups, GET /api/backups/jobs,
+      # POST /api/backups/jobs/<id>/result). The bearer each box's backup-agent.sh
+      # presents; must MATCH BACKUP_AGENT_SECRET in every backup-running box's .env.
+      # Empty -> those routes stay inert.
+      #
+      # DECLARED HERE ON PURPOSE. The agent itself runs on the box HOST from cron and
+      # reads .env directly, but sofra runs in THIS container — and a variable that is
+      # only in .env does not reach a container unless it is named here. That gap cost a
+      # round trip once; it is not repeating.
+      BACKUP_AGENT_SECRET: "${BACKUP_AGENT_SECRET:-}"
       RETENTION_ENABLED: "${SOFRA_RETENTION_ENABLED:-false}"
       # The A record a reseller partner must publish to put a client under their OWN
       # zone (SOFRA-PARTNER-FLEXIBILITY-PLAN D1: a partner zone has no wildcard, so it
@@ -301,6 +311,8 @@ services:
   #                            app logs the mail instead of sending it.
   #   PRINTER_TELEMETRY_SECRET — would ingest real tenant fleet telemetry into staging.
   #   CRON_SECRET            — the retention sweep is DATA-LOSS class; no bearer, no run.
+  #   BACKUP_AGENT_SECRET    — would let a staging control plane hand the REAL boxes
+  #                            backup/delete jobs. The routes stay inert without it.
   # Do not "fix" any of these by copying the prod value across.
   sofra-staging:
     image: ghcr.io/piwas-21/sofra:${SOFRA_STAGING_TAG:-staging}
