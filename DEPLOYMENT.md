@@ -979,8 +979,13 @@ restic. Each box's data ends up **encrypted on the other box**:
 
 | Script | Runs on | Produces |
 |---|---|---|
-| `backup-dump.sh` | both boxes, 02:15 box-local (cron) | `/opt/rumi/backups/dumps/`: `pg_dumpall` of the whole cluster (all DBs + roles), uploads-volume tar, `/opt/rumi/tenants` tar, box-config tar (`.env`, `app-secrets.json`, `dozzle-users.yml`); keeps 7 days locally |
-| `backup-offsite.sh` | **prod only**, 03:00 (cron, root) | restic **repo A** `sftp:rumi@staging:/opt/rumi/backups/restic-prod` ← prod dumps · restic **repo B** `/opt/rumi/backups/restic-staging` (on prod) ← staging dumps (rsync-pulled first) · per repo: `forget --keep-daily 7 --keep-weekly 4 --keep-monthly 6 --prune` + `check --read-data-subset=10%` |
+| `backup-dump.sh` | both boxes, 02:15 box-local (cron) | `/opt/rumi/backups/dumps/`: `pg_dumpall` of the whole cluster (all DBs + roles), uploads-volume tar, `/opt/rumi/tenants` tar, box-config tar (`.env`, `app-secrets.json`, `dozzle-users.yml`); **plus `dumps/tenants/<slug>/<slug>-scheduled-<ts>.sql.gz`, one per managed tenant** (calls `backup-tenant.sh`); keeps 7 days locally, then prunes the archive on its own clock |
+| `backup-tenant.sh <slug>` | both boxes, from the nightly loop or on demand | one tenant's `pg_dump` + a `.sha256` sidecar. **Complements, never replaces, the cluster dump** — see below |
+| `backup-archive-tenant.sh <slug>` | both boxes, from `deprovision-tenant.sh` or by hand | `archive/<slug>/<ts>/{db.sql.gz,uploads.tar.gz,manifest.json}` — the **long-retention** copy of a departed tenant. `--prune` expires archives past the horizon |
+| `restore-tenant.sh <slug>` | both boxes | **rehearses** a restore into a throwaway database (default), or performs a real one with `--into <db> --force` |
+| `backup-erase-tenant.sh <slug>` | both boxes | deletes a tenant's artifacts and (on prod) rewrites them out of both restic repos — the GDPR reach-in |
+| `backup-agent.sh` | both boxes, `*/5` (cron) | pushes the inventory to the sofra control plane and executes the jobs it hands back |
+| `backup-offsite.sh` | **prod only**, 03:00 (cron, root) | restic **repo A** `sftp:rumi@staging:/opt/rumi/backups/restic-prod` ← prod dumps · restic **repo B** `/opt/rumi/backups/restic-staging` (on prod) ← staging dumps (rsync-pulled first) · **each repo now holds two tagged series with different retention** — `--tag prod-dumps`/`staging-dumps` at `--keep-daily 7 --keep-weekly 4 --keep-monthly 6`, and `--tag tenant-archive` at `--keep-within 24m` — then one `prune` + `check --read-data-subset=10%` per repo |
 
 Key direction is deliberately one-way: **prod holds the only cross-box key**
 (`/root/.ssh/rumi_backup_ed25519` → `rumi@staging`, `restrict,from=` pinned in
@@ -1007,7 +1012,8 @@ RESTIC_PASSWORD=<generated once — escrowed>
 1. prod: `apt-get install -y restic` · `ssh-keygen -t ed25519 -f /root/.ssh/rumi_backup_ed25519 -N '' -C rumi-backup-prod` · `ssh-keyscan 159.195.34.105 >> /root/.ssh/known_hosts`
 2. staging: `install -d -m 700 /opt/rumi/backups` · append to `~rumi/.ssh/authorized_keys`: `restrict,from="159.195.137.101" <pubkey>`
 3. prod: write `/root/.rumi-backup-env` (template above, `chmod 600`) · `restic init` on both repos — **repo A needs the same `-o "sftp.command=ssh -i /root/.ssh/rumi_backup_ed25519 -o IdentitiesOnly=yes rumi@159.195.34.105 -s sftp"` as backup-offsite.sh** (non-default key name; plain ssh won't offer it)
-4. crontabs — staging (`crontab -e` as rumi): `15 2 * * * /opt/rumi/deploy/backup-dump.sh >> /opt/rumi/backups/backup.log 2>&1` · prod (root): the same at 02:15 → `/var/log/rumi-backup.log`, plus `0 3 * * * /opt/rumi/deploy/backup-offsite.sh >> /var/log/rumi-backup.log 2>&1`
+4. crontabs — staging (`crontab -e` as rumi): `15 2 * * * /opt/rumi/deploy/backup-dump.sh >> /opt/rumi/backups/backup.log 2>&1` · prod (root): the same at 02:15 → `/var/log/rumi-backup.log`, plus `0 3 * * * /opt/rumi/deploy/backup-offsite.sh >> /var/log/rumi-backup.log 2>&1`. **Since 2026-08-21, both boxes also run the control-plane agent** — `*/5 * * * * /opt/rumi/deploy/backup-agent.sh >> …/backup.log 2>&1` (it is a host cron job, not a container, and it is inert until `BACKUP_AGENT_SECRET` is set).
+5. `restic >= 0.14` on prod — `backup-erase-tenant.sh` uses `restic rewrite --exclude … --forget`, which is what makes a deletion request reachable inside an existing snapshot. `restic version` on the box; `apt-get install -y restic` if it predates that.
 
 **Verify** any time: `restic -r <repo> snapshots` shows last night's pair; the
 nightly `check --read-data-subset=10%` continuously exercises repo integrity.
@@ -1032,6 +1038,205 @@ restore the latest snapshot from the *surviving* box's repo, load the cluster
 dump into the fresh postgres (`gunzip -c cluster-*.sql.gz | docker compose exec -T postgres psql -U <user> -d postgres`),
 untar uploads into the volume and `deploy-config`/`tenants` into place, `up -d`,
 re-point DNS. Drill this quarterly alongside the re-tune.
+
+### Two retention regimes, and why (2026-08-21)
+
+The rolling backups above answer **"the box burned down last night"**. They cannot answer
+the question the owner actually asked — *"keep a tenant's data even if they are in trial,
+in case they want to come back later on"* — because `--keep-monthly 6` tops out at about
+six months, and a trial tenant who returns after eight has **nothing**. Stretching the
+rolling series to two years would multiply the nightly cost of *every* tenant to serve the
+one who left.
+
+So there are two regimes with two clocks, on purpose:
+
+| | Operational (`dumps/`) | Archive (`archive/<slug>/<ts>/`) |
+|---|---|---|
+| Answers | box loss, "yesterday's data" | "the tenant is back, months later" |
+| Written | every night, every tenant | **once**, when a tenant departs |
+| Contents | cluster dump, per-tenant dumps, volume tars, box config | that tenant's DB + uploads + a manifest |
+| Kept | 7 days local · 7d/4w/6m off-box | **24 calendar months** (`ARCHIVE_KEEP_MONTHS`) |
+| Pruned by | `find -mtime` + `restic forget --tag …-dumps` | the timestamp **in the name** + `restic forget --tag tenant-archive` |
+
+**Why 24 months and not "forever".** It is the longest window this business already commits
+to elsewhere — `docs/privacy/retention.md` sets 18 months for audit logs and 24 for
+reservation contact PII — so the archive never outlives the policy that governs what is
+inside it. Two years also covers the realistic return: a restaurant that closes for a
+season, a partner who re-signs a client, an owner who changes their mind. "Forever" is not
+a retention policy, it is the absence of one, and it is the thing a regulator asks about
+first. Change it in one place (`ARCHIVE_KEEP_MONTHS`, box `.env`) and both the local prune
+and the restic policy move together.
+
+⚠️ **The `--tag` arguments in `backup-offsite.sh` are load-bearing.** `restic forget` with
+no tag filter applies its policy to *every* snapshot in the repo — the moment archive
+snapshots share a repo with dump snapshots, an untagged `forget --keep-monthly 6` silently
+deletes the multi-year archive six months in. Every `forget` in that script is tag-scoped.
+
+**Prune is anchored to the timestamp in the name, not to `mtime`.** An rsync, a restore or a
+filesystem move rewrites `mtime`, which would silently reset a two-year retention (or
+expire it early). A `.hold` file inside an archive directory pins it indefinitely — that is
+the legal hold for an open dispute or a pending data-subject request.
+
+### Per-tenant dumps: why they complement `pg_dumpall`, not replace it
+
+`cluster-<ts>.sql.gz` is the **box-loss** path and it is the only artifact that carries the
+**roles**, so a bag of per-database dumps can never replace it. What it cannot do is give
+you *one* tenant without carving a customer out of an all-database file under pressure —
+and it is not a shape any product feature ("back me up", "restore me") can be built on. So
+both exist. The extra cost is bounded and was measured before it was accepted: tenant
+databases are small (the entire staging restic repo is 18 MiB across 11 snapshots), and the
+loop writes one gzip per tenant per night. It deliberately does **not** duplicate uploads —
+those are the big bytes, they change rarely, and `tenants-<ts>.tar.gz` already covers them
+box-wide. A tenant's files get their own copy exactly once: when they leave.
+
+`managed: legacy` (RUMI, tenant 1 — ADR-006) is excluded in exactly one place,
+`bk_registry_tenants` in `backup-lib.sh`, and a unit test asserts it never appears in either
+box's list. RUMI shares the MAIN compose project and its data is in the cluster dump.
+
+### When a tenant leaves
+
+`deprovision-tenant.sh <slug> --drop-db` (or `--purge`) now **archives before it destroys**:
+the single `pg_dump` it always took is the seed of the archive rather than a lone file in
+`/opt/rumi/tenant-backups/`, and the tenant's uploads go with it. It refuses to drop a
+database it did not just archive. `--no-archive` exists for the `smoke` fixture only — a
+robot torn down 52 times a year must not file 52 archives of synthetic data next to real
+customers' (`provisioning-smoke.yml` passes it).
+
+Pre-2026-08-21 teardowns left a bare dump in `/opt/rumi/tenant-backups/`. Those files are
+still there and still valid; nothing deletes them.
+
+```bash
+# archive a lapsed trial WITHOUT tearing anything down (they may still come back)
+./backup-archive-tenant.sh <slug> --reason trial-lapsed
+# what is kept, and until when
+cat /opt/rumi/backups/archive/<slug>/*/manifest.json
+```
+
+### Restore rehearsal — a backup that has never been restored is a hope
+
+Everything else about these backups is proven by observation (cron ran, the file exists,
+restic reports a snapshot) and **none of it answers whether the artifact loads.**
+
+```bash
+# REHEARSE (the default — it never touches the tenant's real database)
+./restore-tenant.sh <slug>
+./restore-tenant.sh <slug> --list                    # what is restorable, newest first
+./restore-tenant.sh <slug> --from archive:latest     # rehearse the departed-tenant archive
+```
+
+The rehearsal loads the artifact into a throwaway database and checks five things: the gzip
+stream is intact; the checksum recorded at write time still matches; postgres raises no
+unexpected `ERROR`; **the number of tables that ended up in the database equals the number
+of `CREATE TABLE` statements in the dump** (a truncated dump fails this even when it loads
+quietly); and the rows are counted and reported. It then drops the scratch database — and
+the placeholder role it may have had to invent, because a departed tenant's role was
+dropped with its database — on a trap, so a failed rehearsal leaves nothing behind either.
+
+**Weekly, unmocked, against the real staging box:** `.github/workflows/backup-rehearsal.yml`
+(Tuesdays 05:23 UTC), the same precedent as `provisioning-smoke.yml`. That workflow proves a
+tenant can be *created*; this one proves one can be *brought back*. A failure opens/updates
+a `backup rehearsal failed` issue.
+
+**Bringing a returning tenant back for real:**
+
+1. `./restore-tenant.sh <slug> --list` → pick the archive ref.
+2. `./restore-tenant.sh <slug> --from <ref>` → rehearse it first. Always.
+3. Put the tenant back in `tenants/registry.yml` (status `provisioning`), sync, then
+   `./provision-tenant.sh <slug>` — this recreates the role, the database, **fresh secrets**
+   and the containers. The archive deliberately holds no `.env`/`app-secrets.json`: a
+   two-year-old JWT signing key and printer API key in cold storage are liability with no
+   restore value.
+4. `./restore-tenant.sh <slug> --from <ref> --into <their db> --force` to load the data over
+   the freshly migrated (empty) schema, then restart that tenant's containers.
+5. Untar `uploads.tar.gz` from the archive into `/opt/rumi/tenants/<slug>/uploads`.
+
+### Privacy — what an archive contains and how a deletion request reaches it
+
+**It contains personal data**: the restaurant's own customers' order and reservation contact
+snapshots, accounts, addresses. The tenant is the controller of that data; we are the
+processor. This is stated in each archive's `manifest.json` so nobody has to guess, and the
+manifest itself deliberately carries **no** personal data (not even `admin_email`) so it can
+be pasted into a ticket when the data beside it cannot.
+
+**Lawful basis / purpose.** Keeping a departed tenant's data is *not* open-ended storage
+"just in case": it is (a) the ability to hand a former customer their data back or to
+restore them if they return, and (b) our own record of what we processed for them. That
+purpose is what bounds the window to **24 months** rather than indefinitely, and it is why
+the window sits inside — not beyond — the windows in `docs/privacy/retention.md`.
+⚠️ **Contractual follow-up, not a code task:** the tenant agreement should state that on
+termination we keep one encrypted archive for up to 24 months and delete it on request. It
+does not say so today.
+
+**How an erasure request reaches it** (`docs/privacy/dsr.md` routes the request; this is the
+mechanical half):
+
+```bash
+# on the box where the tenant lives (staging holds every managed tenant)
+./backup-erase-tenant.sh <slug> --confirm <slug> --dry-run   # see it first
+./backup-erase-tenant.sh <slug> --confirm <slug>
+# then, AFTER the next 03:00 offsite run has rsync --delete'd the mirror, on PROD:
+./backup-erase-tenant.sh <slug> --confirm <slug>             # rewrites both restic repos
+```
+
+What that reaches, honestly: this tenant's per-tenant dumps and their archive, locally; and
+on prod, `restic rewrite --exclude … --forget` + `prune`, which strips those paths out of
+existing snapshots and reclaims the blobs. What it does **not** reach: `cluster-*.sql.gz` and
+`tenants-*.tar.gz`, which are single objects covering the whole box — surgically editing
+every historical dump would mean the backup is no longer the backup that was taken. Those
+residuals age out on the ordinary schedule (**7 days locally, at most ~6 months off-box**)
+and that is the documented, defensible position for backup media: erasure is immediate in
+live systems and in long-term storage, residual copies in time-boxed rolling backups expire
+on a stated schedule, and **an old cluster dump is never restored into production without
+re-applying the erasure afterwards.** Every deletion leaves a tombstone in
+`/opt/rumi/backups/erasures.log` (slug + ref + time — never a name, an email or content).
+
+Individual **end-customer** erasure inside a live tenant remains the backend's job
+(`AccountCleanupService`, `ReservationRetentionService`); this section is about the copies
+we hold *of the tenant*.
+
+### Owner visibility — the box → control plane contract
+
+The owner cannot manage what they cannot see, so each box **pushes an inventory** and
+**pulls jobs**. `backup-agent.sh`, host cron `*/5`:
+
+```
+POST /api/telemetry/backups          the whole-box inventory (idempotent upsert)
+GET  /api/backups/jobs?box=<role>    pending work for this box
+POST /api/backups/jobs/<id>/result   what happened
+```
+
+**Every credential points BOX → SOFRA. The control plane never holds a credential that can
+reach a box.** That preserves ADR-012 invariant 2 (a compromised public sofra container can
+propose a tenant but never provision one) and it is why the obvious alternative is rejected:
+giving sofra a GitHub `Actions: write` token to dispatch a backup workflow would work, but
+**`Actions: write` cannot be narrowed to one workflow** (runbook §0b) — the same token could
+dispatch `deprovision-tenant.yml --drop-db`. A backup feature must not hand anyone a
+tenant-destruction primitive. The cost is latency: a job is picked up on the next poll, ≤5
+minutes. A backup is not interactive.
+
+`BACKUP_AGENT_SECRET` is one shared bearer per environment, same posture as
+`PRINTER_TELEMETRY_SECRET`/`CRON_SECRET`. **The agent runs on the box HOST from cron**, not in
+a container, so it reads the box `.env` directly. The **sofra container** needs the same
+value to verify the bearer, and for that it is declared in `docker-compose.prod.yml` — a
+`.env` variable does not reach a container unless it is named there. Unset on either side =
+inert (the agent exits silently; the routes stay off), so this ships safely before the secret
+exists.
+
+`BACKUP_AGENT_ALLOW_DELETE` is **false unless it is exactly `true`**, per box. With it false,
+the worst a compromise of the public control plane can do through this channel is ask for
+*more* backups. Whole-tenant erasure is never a job at all — it is a deliberate on-box run
+of `backup-erase-tenant.sh`.
+
+**One-time setup for the agent** (per box):
+
+```bash
+openssl rand -hex 32                       # the same value on both sides
+# box .env:   BACKUP_AGENT_SECRET=…        (+ BACKUP_AGENT_URL if not sofrapiwas.com)
+# sofra box:  BACKUP_AGENT_SECRET=…  then  docker compose -f docker-compose.prod.yml up -d sofra
+./backup-agent.sh --dry-run                # prints what it WOULD push; posts nothing
+crontab -e   # */5 * * * * /opt/rumi/deploy/backup-agent.sh >> /opt/rumi/backups/backup.log 2>&1
+```
+
 
 ## Error tracking (Sentry — DEV-PHASES W3)
 
