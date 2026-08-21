@@ -334,6 +334,9 @@ for line in sys.stdin:
 artifacts.update(archives)
 json.dump([artifacts[r] for r in sorted(artifacts)], sys.stdout, separators=(",", ":"))
 ' <<< "$listing"
+  # Explicit, like bk_inventory_json's: the mapper's status IS this function's, and a
+  # caller that must not push a partial listing depends on that being deliberate.
+  return $?
 }
 
 # The whole-box inventory, as the control-plane contract defines it. Walks the two
