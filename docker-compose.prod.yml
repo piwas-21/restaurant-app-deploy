@@ -243,6 +243,18 @@ services:
       # only in .env does not reach a container unless it is named here. That gap cost a
       # round trip once; it is not repeating.
       BACKUP_AGENT_SECRET: "${BACKUP_AGENT_SECRET:-}"
+      # ONE CREDENTIAL PER BOX (sofra ADR-014 D1a). The shared value above is one
+      # credential for TWO principals, and the inventory push PRUNES what it stops
+      # listing — so a compromise of the weaker (staging) box could erase the control
+      # plane's whole record of PROD's backups and lease away its jobs, which is the
+      # exact privilege-escalation path the backup SSH keys are arranged to prevent.
+      #
+      # Only the CONTROL PLANE needs these. Each box keeps its own value under the
+      # plain BACKUP_AGENT_SECRET in its own .env — the box side changes nothing.
+      # Both forms are accepted during the rollout; the shared one is removed once
+      # both boxes have been observed pushing with their own.
+      BACKUP_AGENT_SECRET_PROD: "${BACKUP_AGENT_SECRET_PROD:-}"
+      BACKUP_AGENT_SECRET_STAGING: "${BACKUP_AGENT_SECRET_STAGING:-}"
       RETENTION_ENABLED: "${SOFRA_RETENTION_ENABLED:-false}"
       # The A record a reseller partner must publish to put a client under their OWN
       # zone (SOFRA-PARTNER-FLEXIBILITY-PLAN D1: a partner zone has no wildcard, so it
@@ -317,6 +329,8 @@ services:
   #   CRON_SECRET            — the retention sweep is DATA-LOSS class; no bearer, no run.
   #   BACKUP_AGENT_SECRET    — would let a staging control plane hand the REAL boxes
   #                            backup/delete jobs. The routes stay inert without it.
+  #                            Its per-box successors (BACKUP_AGENT_SECRET_PROD /
+  #                            _STAGING) are withheld here for the same reason.
   # Do not "fix" any of these by copying the prod value across.
   sofra-staging:
     image: ghcr.io/piwas-21/sofra:${SOFRA_STAGING_TAG:-staging}
