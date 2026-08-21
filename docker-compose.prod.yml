@@ -234,25 +234,24 @@ services:
       # on every tenant-backend box. Empty -> the route 503s (inert).
       PRINTER_TELEMETRY_SECRET: "${PRINTER_TELEMETRY_SECRET:-}"
       # Backup inventory + job queue (POST /api/telemetry/backups, GET /api/backups/jobs,
-      # POST /api/backups/jobs/<id>/result). The bearer each box's backup-agent.sh
-      # presents; must MATCH BACKUP_AGENT_SECRET in every backup-running box's .env.
-      # Empty -> those routes stay inert.
+      # POST /api/backups/jobs/<id>/result). ONE CREDENTIAL PER BOX (sofra ADR-014 D1a):
+      # the value here must MATCH the plain BACKUP_AGENT_SECRET in THAT box's own .env,
+      # which is what its backup-agent.sh reads. None set -> those routes stay inert.
+      #
+      # Per box, not per environment, because the inventory push PRUNES what it stops
+      # listing: one shared value meant a compromise of the weaker (staging) box could
+      # erase the control plane's whole record of PROD's backups and lease away its
+      # jobs — the exact privilege-escalation path this repo's backup SSH keys are
+      # arranged to prevent ("Staging never gets a key to prod"). The shared
+      # BACKUP_AGENT_SECRET that used to be declared here was retired 2026-08-21, once
+      # both agents had been observed pushing with their own; sofra now accepts nothing
+      # else, and a box whose value is missing here goes quiet — which the backup alarm
+      # reports.
       #
       # DECLARED HERE ON PURPOSE. The agent itself runs on the box HOST from cron and
       # reads .env directly, but sofra runs in THIS container — and a variable that is
       # only in .env does not reach a container unless it is named here. That gap cost a
       # round trip once; it is not repeating.
-      BACKUP_AGENT_SECRET: "${BACKUP_AGENT_SECRET:-}"
-      # ONE CREDENTIAL PER BOX (sofra ADR-014 D1a). The shared value above is one
-      # credential for TWO principals, and the inventory push PRUNES what it stops
-      # listing — so a compromise of the weaker (staging) box could erase the control
-      # plane's whole record of PROD's backups and lease away its jobs, which is the
-      # exact privilege-escalation path the backup SSH keys are arranged to prevent.
-      #
-      # Only the CONTROL PLANE needs these. Each box keeps its own value under the
-      # plain BACKUP_AGENT_SECRET in its own .env — the box side changes nothing.
-      # Both forms are accepted during the rollout; the shared one is removed once
-      # both boxes have been observed pushing with their own.
       BACKUP_AGENT_SECRET_PROD: "${BACKUP_AGENT_SECRET_PROD:-}"
       BACKUP_AGENT_SECRET_STAGING: "${BACKUP_AGENT_SECRET_STAGING:-}"
       RETENTION_ENABLED: "${SOFRA_RETENTION_ENABLED:-false}"
