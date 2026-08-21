@@ -20,8 +20,8 @@ ARCHIVER="$ROOT/backup-archive-tenant.sh"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 fail=0
-pass() { printf '  ok   %s\n' "$1"; }
-bad()  { printf '  FAIL %s\n' "$1"; fail=1; }
+pass() { local desc="$1"; printf '  ok   %s\n' "$desc"; }
+bad()  { local desc="$1"; printf '  FAIL %s\n' "$desc"; fail=1; }
 
 # ── part 1: the archive retention clock ─────────────────────────────────────────────
 export BACKUP_ROOT="$TMP/backups"
@@ -111,8 +111,10 @@ sed -n "/^# --- BEGIN job filter/,/^# --- END job filter/p" "$AGENT" \
 grep -q 'SLUG.match' "$FILTER" || { echo "extraction failed — did the markers move?"; exit 1; }
 
 run_filter() { # <json>  -> filtered lines on stdout
-  printf '%s' "$1" > "$TMP/jobs.json"
+  local payload="$1"
+  printf '%s' "$payload" > "$TMP/jobs.json"
   python3 "$FILTER" "$TMP/jobs.json" 10
+  return $?
 }
 
 out="$(run_filter '{"jobs":[{"id":"job_1","action":"create","tenantSlug":"obresse","ref":null}]}')"

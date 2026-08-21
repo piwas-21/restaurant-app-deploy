@@ -43,10 +43,11 @@ export ERASURE_LOG="$BACKUP_ROOT/erasures.log"
 . "$LIB"
 
 fail=0
-pass() { printf '  ok   %s\n' "$1"; }
-bad()  { printf '  FAIL %s\n' "$1"; fail=1; }
+pass() { local desc="$1"; printf '  ok   %s\n' "$desc"; }
+bad()  { local desc="$1"; printf '  FAIL %s\n' "$desc"; fail=1; }
 check() { # <desc> <rc> <expected rc>
-  if [[ "$2" == "$3" ]]; then pass "$1"; else bad "$1 (rc=$2, wanted $3)"; fi
+  local desc="$1" got="$2" want="$3"
+  if [[ "$got" == "$want" ]]; then pass "$desc"; else bad "$desc (rc=$got, wanted $want)"; fi
 }
 
 echo "bk_slug_ok:"

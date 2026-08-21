@@ -35,14 +35,17 @@ ARCHIVE_KEEP_MONTHS="${ARCHIVE_KEEP_MONTHS:-24}"
 BK_COMPOSE="${BK_COMPOSE:-docker compose -f docker-compose.prod.yml}"
 BK_REGISTRY="${BK_REGISTRY:-tenants/registry.yml}"
 
-bk_ts()  { date -u +%Y%m%dT%H%M%SZ; }
-bk_now() { date -u +%FT%TZ; }
-bk_log() { printf '==> [%s] %s\n' "$(bk_now)" "$*"; }
+bk_ts()  { date -u +%Y%m%dT%H%M%SZ; return $?; }
+bk_now() { date -u +%FT%TZ; return $?; }
+bk_log() { printf '==> [%s] %s\n' "$(bk_now)" "$*"; return $?; }
+# No `return` here on purpose: this function's job is to END the script. A `return 1`
+# would only unwind one frame, and every caller writes `… || bk_die "…"` expecting the
+# process to stop.
 bk_die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
 # Same slug shape provision-tenant.sh / deprovision-tenant.sh enforce. Every path this
 # family builds interpolates a slug, so this is also the path-traversal guard.
-bk_slug_ok() { [[ "${1:-}" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
+bk_slug_ok() { [[ "${1:-}" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; return $?; }
 
 # A backup ref as the control-plane contract carries it: a path RELATIVE to $BACKUP_ROOT,
 # under dumps/tenants/<slug>/ or archive/<slug>/. Anything else — absolute, traversing,
@@ -58,6 +61,7 @@ bk_ref_ok() { # <ref> <slug>
   [[ "$ref" == "dumps/tenants/${slug}/"* || "$ref" == "archive/${slug}/"* ]] || return 1
   # No shell metacharacters, no spaces: refs are machine-generated names.
   [[ "$ref" =~ ^[A-Za-z0-9._/-]+$ ]]
+  return $?
 }
 
 # --- BEGIN pure helpers (extracted by tests/backup-lib.sh) --------------------------
@@ -94,6 +98,7 @@ day = min(ts.day, [31, 29 if (y % 4 == 0 and (y % 100 or y % 400 == 0)) else 28,
 expiry = ts.replace(year=y, month=m, day=day)
 sys.exit(0 if now >= expiry else 1)
 PY
+  return $?
 }
 
 # The <ts> out of an artifact name or an archive dir, '' if there is none.
@@ -104,6 +109,7 @@ bk_ts_of() { # <path-or-name>
   else
     printf ''
   fi
+  return 0
 }
 # --- END pure helpers ---------------------------------------------------------------
 
@@ -129,6 +135,7 @@ for k in ("name", "status", "managed", "box", "domain", "db", "db_role",
     v = t.get(k, "")
     print("REG_%s=%s" % (k.upper(), shlex.quote(str(v))))
 PY
+  return $?
 }
 
 # Every managed:scripts tenant on THIS box, one slug per line. `managed: legacy` (RUMI,
@@ -155,6 +162,7 @@ for slug, t in sorted((reg.get("tenants") or {}).items()):
         continue
     print(slug)
 PY
+  return $?
 }
 
 # --- postgres access (shared guards) ------------------------------------------------
@@ -165,6 +173,7 @@ bk_pg_user() {
   u="$(grep -E '^POSTGRES_USER=' .env | cut -d= -f2- | tr -d '"'"'"'' || true)"
   [[ -n "$u" ]] || bk_die "POSTGRES_USER not set in the box .env"
   printf '%s' "$u"
+  return 0
 }
 
 # Fail loudly if postgres is down. THE guard of this whole family: a stopped container
@@ -172,27 +181,35 @@ bk_pg_user() {
 # valid-looking empty backup over a good retention slot. Copied from backup-dump.sh /
 # deprovision-tenant.sh, which have carried it since 2026-07-09.
 bk_pg_up() { # <pguser>
-  $BK_COMPOSE exec -T postgres psql -U "$1" -d postgres -c 'SELECT 1' >/dev/null
+  local pguser="$1"
+  $BK_COMPOSE exec -T postgres psql -U "$pguser" -d postgres -c 'SELECT 1' >/dev/null
+  return $?
 }
 
 bk_db_exists() { # <pguser> <db>
-  $BK_COMPOSE exec -T postgres psql -U "$1" -d postgres -tAc \
-    "SELECT 1 FROM pg_database WHERE datname='$2'" | grep -q 1
+  local pguser="$1" db="$2"
+  $BK_COMPOSE exec -T postgres psql -U "$pguser" -d postgres -tAc \
+    "SELECT 1 FROM pg_database WHERE datname='${db}'" | grep -q 1
+  return $?
 }
 
 # --- artifact plumbing ---------------------------------------------------------------
 bk_sha256() { # <file> -> hex, or '' if no tool is available
+  local file="$1"
   if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" | cut -d' ' -f1
+    sha256sum "$file" | cut -d' ' -f1
   elif command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 "$1" | cut -d' ' -f1
+    shasum -a 256 "$file" | cut -d' ' -f1
   else
     printf ''
   fi
+  return 0
 }
 
 bk_size() { # <file> -> bytes
-  python3 -c 'import os,sys; print(os.path.getsize(sys.argv[1]))' "$1"
+  local file="$1"
+  python3 -c 'import os,sys; print(os.path.getsize(sys.argv[1]))' "$file"
+  return $?
 }
 
 # Tar a live, root-owned directory through a throwaway container — tenant uploads belong
@@ -302,4 +319,5 @@ print(json.dumps({
     "artifacts": artifacts,
 }, separators=(",", ":")))
 PY
+  return $?
 }

@@ -124,8 +124,16 @@ fi
 PGUSER="$(bk_pg_user)"
 bk_pg_up "$PGUSER"
 
-psql_q() { $BK_COMPOSE exec -T postgres psql -U "$PGUSER" -d "$1" -tAc "$2"; }
-psql_admin() { $BK_COMPOSE exec -T postgres psql -v ON_ERROR_STOP=1 -U "$PGUSER" -d postgres -c "$1" >/dev/null; }
+psql_q() { # <database> <sql> -> one bare value
+  local db="$1" sql="$2"
+  $BK_COMPOSE exec -T postgres psql -U "$PGUSER" -d "$db" -tAc "$sql"
+  return $?
+}
+psql_admin() { # <sql>, against `postgres`, stopping on the first error
+  local sql="$1"
+  $BK_COMPOSE exec -T postgres psql -v ON_ERROR_STOP=1 -U "$PGUSER" -d postgres -c "$sql" >/dev/null
+  return $?
+}
 
 eval "$(bk_registry_eval "$SLUG")"
 # The owning role: the registry first, then the ARCHIVE'S OWN MANIFEST. That second source
@@ -151,7 +159,7 @@ if [[ -n "$INTO" ]]; then
   TARGET="$INTO"
   $FORCE || bk_die "--into is a REAL restore into '${TARGET}'. Re-run with --force once you have rehearsed (no --into) and stopped the tenant's containers."
   if bk_db_exists "$PGUSER" "$TARGET"; then
-    echo "==> target ${TARGET} exists — restoring INTO it (objects that already exist will error)"
+    echo "==> target ${TARGET} exists — restoring INTO it (psql will complain about every object already present)"
   else
     echo "==> creating ${TARGET}"
     psql_admin "CREATE DATABASE ${TARGET}"
@@ -211,7 +219,7 @@ if [[ -n "$REAL_ERRORS" ]]; then
   rm -f "$ERRLOG"
   bk_die "restore rehearsal FAILED for ${REF}"
 fi
-[[ $LOADRC -eq 0 ]] || echo "   note: psql exited ${LOADRC} but no unexpected ERROR lines were logged"
+[[ $LOADRC -eq 0 ]] || echo "   note: psql exited ${LOADRC} but no unexpected ERROR lines were logged" >&2
 rm -f "$ERRLOG"
 
 # ── 4. it is complete ───────────────────────────────────────────────────────────────
