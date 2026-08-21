@@ -250,8 +250,17 @@ tenants:
     status: active
     managed: scripts
     box: staging
-    domain: obresse.sofrapiwas.com
+    # Moved onto the PARTNER's own zone 2026-08-21 at his request (§D1 — the first
+    # real use of base_domain). His zone has NO wildcard, so obresse.solutioneva.com
+    # lives or dies by ONE A record -> the staging box, published by him.
+    domain: obresse.solutioneva.com
     domain_mode: subdomain
+    base_domain: solutioneva.com
+    # The old home, kept as a 301 alias rather than dropped: the tables' printed QR
+    # codes and every link handed out so far point at it, and a moved restaurant
+    # whose QR codes 404 is worse than one that never moved. Rides our wildcard, so
+    # it needs no record of its own.
+    domain_aliases: [obresse.sofrapiwas.com]
     db: tenant_obresse
     db_role: tenant_obresse
     compose_project: tenant-obresse
@@ -260,6 +269,9 @@ tenants:
     currency: EUR
     languages: [fr, en]
     modules: [core, kitchen-board, cashier, server, reservations, loyalty, printing, extra-languages]
-    template: craft
+    # classic, not craft: the partner reported craft looking broken on his client's
+    # content 2026-08-21. Switched on his say-so — the craft defects themselves are
+    # NOT diagnosed by this change and stay open (demo still ships craft).
+    template: classic
     admin_email: obresse@solutioneva.com
     city: Montréal-la-Cluse
