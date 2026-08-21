@@ -1237,9 +1237,15 @@ plane therefore reads a per-box name:
 
 The box side changes nothing — per-box secrets are just *different values under the same
 name* there. A bearer that authenticates as one box and claims another gets **403** (**404**
-on a job result: a box may not learn that another box's job exists). The old shared value is
-still accepted, as any box, until both agents have been observed pushing with their own; then
-it is removed.
+on a job result: a box may not learn that another box's job exists).
+
+The old shared value was **retired on 2026-08-21**, the same day, on evidence rather than on a
+date: both agents were observed pushing with their own bearer and a cross-box call was refused
+**403 from both directions** against production. It could not be left in place — the retired
+value is the one value BOTH boxes hold, so while it authenticated as any box the hole stayed
+open behind a closed door. **Consequence for a NEW box:** add its
+`BACKUP_AGENT_SECRET_<BOX>` to the sofra box's `.env` and recreate `sofra`, or its agent gets
+401, the box goes quiet, and the backup alarm mails about it.
 
 `BACKUP_AGENT_ALLOW_DELETE` is **false unless it is exactly `true`**, per box. With it false,
 the worst a compromise of the public control plane can do through this channel is ask for
