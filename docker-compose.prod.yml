@@ -218,12 +218,16 @@ services:
       # compromised container can propose a tenant but never provision one
       # (ADR-012 invariant 2). Empty -> /admin/provision shows "not configured".
       PROVISION_GITHUB_TOKEN: "${PROVISION_GITHUB_TOKEN:-}"
-      # Data-retention cron (POST /api/cron/retention, GDPR storage-limitation).
-      # CRON_SECRET must MATCH the CRON_SECRET GitHub Actions secret (the caller
-      # workflow's bearer). DATA-LOSS class: the sweep purges nothing unless
-      # RETENTION_ENABLED=true. Windows are left EMPTY here so the app's own
-      # defaults (30d/18mo/12mo, in lib/retention-policy.ts) stay the single source
-      # of truth — set a SOFRA_RETENTION_* box var only to override one.
+      # ONE bearer for ALL FOUR scheduled sweeps, not just the retention one:
+      # POST /api/cron/{retention,go-live,trial-warnings,backup-alerts}. It must
+      # MATCH the CRON_SECRET GitHub Actions secret (the caller workflows' bearer).
+      # Clearing it does NOT merely stop the purge — it also silences the BACKUP
+      # ALARM, which is the only thing that tells a human a restaurant's data is
+      # unprotected (sofra ADR-014 D5). RETENTION_ENABLED is the switch for the
+      # DATA-LOSS class sweep: it purges nothing unless that is true. Retention
+      # windows are left EMPTY here so the app's own defaults (30d/18mo/12mo, in
+      # lib/retention-policy.ts) stay the single source of truth — set a
+      # SOFRA_RETENTION_* box var only to override one.
       CRON_SECRET: "${SOFRA_CRON_SECRET:-}"
       # Fleet observability ingest (POST /api/telemetry/fleet). The bearer each tenant
       # backend's FleetSummaryPushService presents; must MATCH PRINTER_TELEMETRY_SECRET
