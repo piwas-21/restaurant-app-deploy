@@ -1445,4 +1445,80 @@ e2e00000-0000-0000-0000-000000000003   -- component ("E2E Fries", BackKitchen)
 e2e00000-0000-0000-0000-000000000010   -- the MenuDefinition (also the idempotency sentinel)
 ```
 
+## Sign in with Apple (both boxes) — `Authentication__Apple__ClientIds__0`
 
+The mobile app's Apple button posts an Apple **identity token** to `POST /api/Auth/apple-login`.
+Since backend **#406** that token is **verified** rather than decoded, and one of the checks is its
+`aud`, which must match a **configured client id**. `appsettings.json` ships
+`Authentication:Apple:ClientIds: []`, and the handler **fails CLOSED**: with nothing configured the
+endpoint refuses every call with **`503 AppleLoginUnavailable`** and logs an error. That is
+deliberate — the old code skipped the audience check when configuration was missing, which is how an
+**unsigned** JWT carrying any `email` claim could take over a password account.
+
+So the box has to name the audience, and the audience is the app's **iOS bundle id**:
+
+```
+Authentication__Apple__ClientIds__0 = com.rumirestaurant.app
+```
+
+(`rumi-mobile/app.json` → `expo.ios.bundleIdentifier`; `expo.android.package` is the same string.)
+
+**It is not a secret and it is not in the secret store.** A bundle id is public — it ships inside
+every copy of the app binary and is visible in the App Store listing — so it follows the same rule as
+`FleetPush__SofraIngestUrl` and `FLEET_TENANT_SLUG`: tracked config, wired straight into
+`docker-compose.prod.yml`, **not** `app-secrets.json`. Two consequences worth knowing:
+
+- The compose default **is the working value**, unlike every other optional backend setting in that
+  file, which defaults empty/false. Here "unset" is the broken state, not the neutral one, so
+  **neither box needs a `.env` line** and there is nothing to type on a box by hand.
+- A box `.env` **cannot** blank it by accident. Measured on compose v2: `${APPLE_IOS_BUNDLE_ID:-…}`
+  substitutes the default for an **empty** variable as well as an unset one, so a stray
+  `APPLE_IOS_BUNDLE_ID=` line changes nothing. The realistic way a box ends up with no audience is an
+  **older `docker-compose.prod.yml` on the box** — a release of this repo that was never rsynced.
+  That failure is invisible from outside (the stack is healthy, `/api/health` is 200, only the Apple
+  button is dead), so `deploy.sh`'s preflight reads the **resolved** config back and prints a **WARN**
+  when no client id comes out of it. `tests/apple-client-id.sh` keeps that guard honest in CI.
+
+**Staging and prod take the identical value** — a tester's phone carries one bundle id whichever box
+it is pointed at. `Authentication__Apple__ClientIds__1` is wired to `APPLE_WEB_SERVICE_ID` and left
+empty, reserved for the Apple **web** Service ID for the day Sign in with Apple ships on the website;
+blank entries are dropped by `AppleAuthSettings.AllClientIds()`, so it is inert until someone fills it.
+
+### Operator step
+
+A compose change reaches a box only after a `develop` → `main` release PR (`sync-to-box.yml` /
+`sync-to-staging.yml` rsync the files), and **the rsync restarts nothing** — the running backend keeps
+the environment it was started with. So after the release lands, on **each** box:
+
+```
+# 1. confirm the file actually arrived (skipping this makes step 2 a silent no-op)
+grep Authentication__Apple /opt/rumi/deploy/docker-compose.prod.yml
+
+# 2. recreate the backend so it re-reads the environment
+cd /opt/rumi/deploy && docker compose -f docker-compose.prod.yml up -d backend
+
+# 3. verify what the container actually got
+docker compose -f docker-compose.prod.yml exec backend printenv Authentication__Apple__ClientIds__0
+#   -> com.rumirestaurant.app
+```
+
+From the workspace: `bash .ssh/box.sh '<step>'` for prod, `bash .ssh/staging.sh '<step>'` for staging.
+
+Ordering is free: this env var is **inert on the old backend image**, which reads
+`Authentication:Apple:ClientId` (singular, a different key) into an audience check whose failure
+branch is commented out. So this repo can ship before, with, or after backend #406 — nothing changes
+on a box until the new image is there, and Apple login is only *verified* once both are.
+
+An outside-in check exists and costs a login attempt: a POST with a junk `idToken` answers **400**
+(`InvalidAppleToken`) when the client id is configured and **503** (`AppleLoginUnavailable`) when it is
+not. The `auth` rate-limit policy allows **5 requests / 15 min per IP**, so use it once, not in a loop:
+
+```
+curl -s -o /dev/null -w '%{http_code}\n' -X POST https://www.rumirestaurant.ch/api/Auth/apple-login \
+  -H 'Content-Type: application/json' -d '{"idToken":"not.a.token"}'
+```
+
+**Per-tenant stacks deliberately have no such key.** `docker-compose.tenant.yml.tpl` does not forward
+it, so a provisioned tenant's backend refuses Apple sign-in — correct, because the bundle id is RUMI's
+own app and handing another tenant that `aud` would make its backend accept identity tokens minted for
+a different product. A tenant that ships its own app gets its own client id in its own `.env`.

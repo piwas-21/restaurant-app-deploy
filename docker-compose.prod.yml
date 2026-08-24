@@ -150,6 +150,32 @@ services:
       Stripe__Enabled: "${STRIPE_ENABLED:-false}"
       Stripe__PlatformApiKey: "${STRIPE_PLATFORM_API_KEY:-}"
       Stripe__ConnectedAccountId: "${STRIPE_CONNECTED_ACCOUNT_ID:-}"
+      # Sign in with Apple (backend AppleAuthSettings, "Authentication:Apple"). The accepted
+      # `aud` of the identity token the mobile app sends to POST /api/Auth/apple-login — i.e.
+      # the iOS BUNDLE ID of the RUMI app (rumi-mobile/app.json -> expo.ios.bundleIdentifier).
+      #
+      # UNLIKE every switch above, the DEFAULT here is the working value, not empty, because
+      # the backend fails CLOSED: since backend #406 it VERIFIES the token instead of decoding
+      # it, and with no client id configured EVERY Apple login is refused with
+      # 503 AppleLoginUnavailable. appsettings.json ships `ClientIds: []`, so a box that sets
+      # nothing would have Apple sign-in switched off — which is safe but broken. A bundle id
+      # is PUBLIC (it is in every shipped app binary), so the value belongs in tracked config
+      # and no box .env line is needed on either box.
+      #
+      # Env vars bind LAST in Program.cs (after app-secrets.json), so this also outranks any
+      # Authentication:Apple block someone adds to a box app-secrets.json.
+      #
+      # `:-` and not `-`, deliberately: measured on compose v2, the default is substituted for
+      # an EMPTY variable as well as an unset one, so a stray `APPLE_IOS_BUNDLE_ID=` line in a
+      # box .env cannot blank the audience. The way a box loses Apple login is therefore not a
+      # bad .env but an OLD copy of this file — a release that was never rsynced — which is
+      # what deploy.sh's preflight reads back from the resolved config and warns about.
+      Authentication__Apple__ClientIds__0: "${APPLE_IOS_BUNDLE_ID:-com.rumirestaurant.app}"
+      # Slot 1, wired empty and reserved for the Apple *web* Service ID for the day Sign in
+      # with Apple ships on the website. Blank entries are dropped by
+      # AppleAuthSettings.AllClientIds(), so an unset value accepts the app and nothing else —
+      # and adding the website then costs a box .env line, not a release of this repo.
+      Authentication__Apple__ClientIds__1: "${APPLE_WEB_SERVICE_ID:-}"
     volumes:
       - ./app-secrets.json:/app/app-secrets.json:ro   # all app secrets/config (git-ignored)
       - backend_keys:/app/keys                          # DataProtection keys — persist or every redeploy invalidates tokens/sessions
