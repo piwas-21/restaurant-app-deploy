@@ -35,14 +35,21 @@ push to main ─► sync-to-box.yml (prod) + sync-to-staging.yml (staging) ─�
 
 ## Staging environment (separate box)
 
-A **second, independent Netcup box** (`v2202607374190477434.megasrv.de`,
-`159.195.34.105`) runs the same stack as a staging/rehearsal environment, fully
-isolated from the client's prod box. Purpose: validate fixes and the SaaS
-transition live before promoting to the one production tenant (rumirestaurant.ch).
+A **second, independent Netcup box** (`159.195.34.105`, Netcup hostname
+`v2202607374190477434.megasrv.de` — SSH/DNS only, **never a TLS name**) runs the
+same stack as a staging/rehearsal environment, fully isolated from the client's
+prod box. It is reached on the web as **`https://staging.fooderist.com`**.
+Purpose: validate fixes and the SaaS transition live before promoting to the one
+production tenant (rumirestaurant.ch).
 
 **How staging differs from prod — three files only:**
-- `Caddyfile.staging` — same routing, different site address (the box's own
-  `*.megasrv.de` host, which Let's Encrypt issues for reliably). Selected via
+- `Caddyfile.staging` — same routing, different site address
+  (`{$STAGING_DOMAIN}` = `staging.fooderist.com`, a zone we control and whose A
+  record points at this box, so Caddy can answer the ACME HTTP-01 challenge).
+  **Do not put the box's `*.megasrv.de` hostname here** — that zone is the
+  provider's, no challenge can be served in it, so Caddy holds no certificate for
+  it and every HTTPS handshake for that name is aborted with `tlsv1 alert internal
+  error` (deploy #146). Selected via
   `CADDYFILE=./Caddyfile.staging` in the staging box's `.env` — the compose file
   (`docker-compose.prod.yml`) and `deploy.sh` are **shared, unchanged**.
 - `.env.staging.example` → the box's `.env`: `FRONTEND_TAG=staging`,
@@ -79,11 +86,14 @@ ENV_EXAMPLE=.env.staging.example SECRETS_EXAMPLE=app-secrets.staging.example.jso
 # 4. Dozzle login must exist BEFORE the stack starts, or Docker creates a directory at
 #    the bind-mount path and dozzle fails to start:
 docker run --rm amir20/dozzle:v10.6.6 generate admin --name 'RUMI Staging Ops' --password 'CHOOSE_ONE' > dozzle-users.yml
-# 5. Deploy (DNS already resolves — it's the box's own hostname):
+# 5. Deploy. FIRST make sure STAGING_DOMAIN resolves to this box (A record in a zone
+#    we control, ttl>=7200 — use ./domainio-dns.sh); Caddy needs it for ACME:
 ./deploy.sh
 ```
-Verify: `https://v2202607374190477434.megasrv.de/` (200) and
-`.../api/health` (200), same as the prod checks below.
+Verify: `https://staging.fooderist.com/` (200) and
+`https://staging.fooderist.com/api/health` (200), same as the prod checks below.
+The box's `*.megasrv.de` hostname serves **no** TLS and never will — see the
+site-address note above.
 
 **Auto-sync:** `sync-to-staging.yml` triggers on push to `main` (enabled 2026-07-03
 once the `STAGING_*` repo secrets were set), so staging tracks infra changes
