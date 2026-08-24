@@ -15,16 +15,36 @@ case "${1:-}" in
 esac
 DOMAIN="${HOST#https://}"
 
-code() {
-  local url="$1"
-  curl -sS -o /dev/null -w '%{http_code}' --max-time 12 "$url" 2>/dev/null || echo "000"
-  return 0
+# A bare "HTTP 000" is what got reported in deploy #146 and it says nothing: DNS,
+# TCP and TLS failures all look identical from the outside. curl already knows
+# which one it was, so probe() hands the exit code back with the status code.
+# (It is returned through stdout, not a global — the caller runs this in a command
+# substitution, i.e. a subshell, so a global assigned in here would be lost.)
+probe() {
+  local url="$1" out="" rc=0
+  out=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 12 "$url" 2>/dev/null) || rc=$?
+  [[ -z "$out" ]] && out="000"
+  printf '%s %s' "$out" "$rc"
+}
+
+why() {
+  case "$1" in
+    6)  echo "DNS — '$DOMAIN' does not resolve from here (wrong name, missing A record, or a local resolver cache)" ;;
+    7)  echo "TCP — nothing accepted a connection on :443" ;;
+    28) echo "timed out" ;;
+    35|58|59|60|77|91)
+        echo "TLS — handshake/certificate failure. Caddy aborts an unknown SNI with 'tlsv1 alert internal error': is this host really a site address in the box's Caddyfile, and is its DNS zone one we control (ACME cannot issue for a *.megasrv.de box hostname)?" ;;
+    *)  echo "curl exit $1" ;;
+  esac
 }
 
 echo "==> $HOST"
-FE=$(code "$HOST/"); HE=$(code "$HOST/api/health")
+read -r FE FE_ERR <<<"$(probe "$HOST/")"
+read -r HE HE_ERR <<<"$(probe "$HOST/api/health")"
 echo "   frontend /        : $FE"
+[[ "$FE" == "000" ]] && echo "     why: $(why "$FE_ERR")"
 echo "   backend  /api/health: $HE"
+[[ "$HE" == "000" ]] && echo "     why: $(why "$HE_ERR")"
 
 echo "==> TLS cert"
 echo | openssl s_client -connect "${DOMAIN}:443" -servername "$DOMAIN" 2>/dev/null \

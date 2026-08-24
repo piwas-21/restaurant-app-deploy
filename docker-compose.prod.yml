@@ -35,11 +35,15 @@ services:
       # the box's .env (gitignored), generated via `caddy hash-password`. Never
       # the plaintext password, and never committed.
       DEV_PORTAL_AUTH_HASH: "${DEV_PORTAL_AUTH_HASH}"
-      # Site address for Caddyfile.staging's {$STAGING_DOMAIN}. Defaults to the staging
-      # box's hostname if unset, so a box that forgets to set it still comes up (avoids
-      # an empty site address). Prod's ./Caddyfile never references this var, so the
-      # value passed on the prod box is simply unused — harmless.
-      STAGING_DOMAIN: "${STAGING_DOMAIN:-v2202607374190477434.megasrv.de}"
+      # Site address for Caddyfile.staging's {$STAGING_DOMAIN}. The default is the
+      # real staging name (its zone is ours and its A record points at the staging
+      # box), so a box that forgets to set it still comes up with a site address
+      # Caddy can actually get a certificate for. It used to default to the box's
+      # Netcup hostname — a zone we do NOT control, so ACME can never succeed for it
+      # and every HTTPS handshake for that name is aborted (deploy #146). Prod's
+      # ./Caddyfile never references this var, so the value passed on the prod box is
+      # simply unused — harmless.
+      STAGING_DOMAIN: "${STAGING_DOMAIN:-staging.fooderist.com}"
       # Sofra landing-page site addresses for Caddyfile.staging ({$SOFRA_DOMAIN} /
       # {$SOFRA_WWW_DOMAIN}). Defaults use an http:// scheme on purpose: a box that
       # doesn't set them still parses the Caddyfile and never attempts a Let's
