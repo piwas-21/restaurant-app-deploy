@@ -25,26 +25,32 @@ probe() {
   out=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 12 "$url" 2>/dev/null) || rc=$?
   [[ -z "$out" ]] && out="000"
   printf '%s %s' "$out" "$rc"
+  return 0
 }
 
+# Sets REASON rather than printing it: the caller needs the text inline in its own
+# report line, so writing it here would be output this function does not own.
+REASON=""
 why() {
-  case "$1" in
-    6)  echo "DNS — '$DOMAIN' does not resolve from here (wrong name, missing A record, or a local resolver cache)" ;;
-    7)  echo "TCP — nothing accepted a connection on :443" ;;
-    28) echo "timed out" ;;
+  local rc="$1"
+  case "$rc" in
+    6)  REASON="DNS — '$DOMAIN' does not resolve from here (wrong name, missing A record, or a local resolver cache)" ;;
+    7)  REASON="TCP — nothing accepted a connection on :443" ;;
+    28) REASON="timed out" ;;
     35|58|59|60|77|91)
-        echo "TLS — handshake/certificate failure. Caddy aborts an unknown SNI with 'tlsv1 alert internal error': is this host really a site address in the box's Caddyfile, and is its DNS zone one we control (ACME cannot issue for a *.megasrv.de box hostname)?" ;;
-    *)  echo "curl exit $1" ;;
+        REASON="TLS — handshake/certificate failure. Caddy aborts an unknown SNI with 'tlsv1 alert internal error': is this host really a site address in the box's Caddyfile, and is its DNS zone one we control (ACME cannot issue for a *.megasrv.de box hostname)?" ;;
+    *)  REASON="curl exit $rc" ;;
   esac
+  return 0
 }
 
 echo "==> $HOST"
 read -r FE FE_ERR <<<"$(probe "$HOST/")"
 read -r HE HE_ERR <<<"$(probe "$HOST/api/health")"
 echo "   frontend /        : $FE"
-[[ "$FE" == "000" ]] && echo "     why: $(why "$FE_ERR")"
+if [[ "$FE" == "000" ]]; then why "$FE_ERR"; echo "     why: $REASON"; fi
 echo "   backend  /api/health: $HE"
-[[ "$HE" == "000" ]] && echo "     why: $(why "$HE_ERR")"
+if [[ "$HE" == "000" ]]; then why "$HE_ERR"; echo "     why: $REASON"; fi
 
 echo "==> TLS cert"
 echo | openssl s_client -connect "${DOMAIN}:443" -servername "$DOMAIN" 2>/dev/null \

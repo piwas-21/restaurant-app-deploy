@@ -23,8 +23,8 @@ VERIFY="$ROOT/verify-env.sh"
 [[ -x "$VERIFY" ]] || { echo "cannot find an executable verify-env.sh next to $HERE"; exit 1; }
 
 fail=0
-pass() { printf '  ok   %s\n' "$1"; }
-bad()  { printf '  FAIL %s\n' "$1"; fail=1; }
+pass() { local desc="$1"; printf '  ok   %s\n' "$desc"; }
+bad()  { local desc="$1"; printf '  FAIL %s\n' "$desc"; fail=1; }
 
 # ── 1. No box hostname is ever offered as an https:// endpoint ──────────────────
 echo "staging site address:"
