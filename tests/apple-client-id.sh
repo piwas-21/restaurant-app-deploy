@@ -37,8 +37,8 @@ done
 BUNDLE_ID="com.rumirestaurant.app"
 
 fail=0
-pass() { printf '  ok   %s\n' "$1"; }
-bad()  { printf '  FAIL %s\n' "$1"; fail=1; }
+pass() { local desc="$1"; printf '  ok   %s\n' "$desc"; }
+bad()  { local desc="$1"; printf '  FAIL %s\n' "$desc"; fail=1; }
 
 # ── The compose wiring ───────────────────────────────────────────────────────────
 echo "docker-compose.prod.yml (both boxes run this file):"
