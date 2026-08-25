@@ -4,10 +4,14 @@
 # is a faithful rehearsal of prod — the ONLY difference is the site address.
 #
 # Host: {$STAGING_DOMAIN} is injected from the staging box's .env via the caddy
-# service in docker-compose.prod.yml (default = the box's Netcup reverse-DNS name,
-# a real per-box hostname Let's Encrypt issues for reliably — unlike nip.io/sslip.io
-# shared domains). To move to a SaaS brand domain later, just set STAGING_DOMAIN in
-# the box's .env — no edit to this file.
+# service in docker-compose.prod.yml (default = staging.fooderist.com). It must be a
+# name in a zone WE control, A-record'd to this box, because Caddy answers a Let's
+# Encrypt HTTP-01 challenge for it. The box's Netcup reverse-DNS name
+# (*.megasrv.de) is NOT such a name — we cannot serve a challenge in the provider's
+# zone, so Caddy holds no certificate, that host never becomes a site address here,
+# and any HTTPS request for it dies with `tlsv1 alert internal error` (deploy #146).
+# To move to a SaaS brand domain later, just set STAGING_DOMAIN in the box's .env —
+# no edit to this file.
 
 {$STAGING_DOMAIN} {
 	encode zstd gzip

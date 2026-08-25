@@ -35,11 +35,15 @@ services:
       # the box's .env (gitignored), generated via `caddy hash-password`. Never
       # the plaintext password, and never committed.
       DEV_PORTAL_AUTH_HASH: "${DEV_PORTAL_AUTH_HASH}"
-      # Site address for Caddyfile.staging's {$STAGING_DOMAIN}. Defaults to the staging
-      # box's hostname if unset, so a box that forgets to set it still comes up (avoids
-      # an empty site address). Prod's ./Caddyfile never references this var, so the
-      # value passed on the prod box is simply unused — harmless.
-      STAGING_DOMAIN: "${STAGING_DOMAIN:-v2202607374190477434.megasrv.de}"
+      # Site address for Caddyfile.staging's {$STAGING_DOMAIN}. The default is the
+      # real staging name (its zone is ours and its A record points at the staging
+      # box), so a box that forgets to set it still comes up with a site address
+      # Caddy can actually get a certificate for. It used to default to the box's
+      # Netcup hostname — a zone we do NOT control, so ACME can never succeed for it
+      # and every HTTPS handshake for that name is aborted (deploy #146). Prod's
+      # ./Caddyfile never references this var, so the value passed on the prod box is
+      # simply unused — harmless.
+      STAGING_DOMAIN: "${STAGING_DOMAIN:-staging.fooderist.com}"
       # Sofra landing-page site addresses for Caddyfile.staging ({$SOFRA_DOMAIN} /
       # {$SOFRA_WWW_DOMAIN}). Defaults use an http:// scheme on purpose: a box that
       # doesn't set them still parses the Caddyfile and never attempts a Let's
@@ -176,6 +180,52 @@ services:
       # AppleAuthSettings.AllClientIds(), so an unset value accepts the app and nothing else —
       # and adding the website then costs a box .env line, not a release of this repo.
       Authentication__Apple__ClientIds__1: "${APPLE_WEB_SERVICE_ID:-}"
+      # Reservation quick-action mail links (backend ReservationQuickActionSettings,
+      # "ReservationQuickActions"). Backend #410 signs the approve / reject buttons in the
+      # restaurant's new-booking alert mail, because before it the bare reservation id WAS the
+      # authorisation and POST /api/Reservations hands that id to the anonymous guest who made
+      # the booking — so a guest could approve their own table (backend #402).
+      #
+      # To keep the mails already sitting in the restaurant's inbox usable, a token-LESS link is
+      # still honoured while its OWN booking is younger than LegacyLinkGraceDays (14). That
+      # window is anchored per booking, so on its own it ALSO covers bookings made after the
+      # release — i.e. it keeps #402 reachable for two more weeks. This cutoff closes that on
+      # day one: no reservation created at or after the instant below may ever take the
+      # token-less path.
+      #
+      # THE VALUE IS A MEASUREMENT, not a round number, and it is wrong in both directions:
+      #   * LATER  -> bookings made in the gap still accept an id-only link — #402, still open.
+      #   * EARLIER -> the last mails the OLD image sent carry no token, and their buttons would
+      #                be dead in a real restaurant's inbox.
+      # It is the instant the release image began serving on prod: `docker inspect
+      # deploy-backend-1` StartedAt 2026-08-25T00:52:22.197507985Z, first request accepted at
+      # "Now listening on: http://[::]:8080" 2026-08-25T00:52:24.772025841Z (backend PR #412,
+      # comment 5403547658). Truncated DOWN to the whole second, so it can only ever sit at or
+      # before the first served request, never after it.
+      #
+      # FORMAT — measured against the binder on 2026-08-25, not assumed. `DateTime?` is
+      # converted with the invariant DateTime converter, so a trailing `Z` yields Kind=Local and
+      # ReservationQuickActionLinks.AsUtc() converts it back: the instant is correct whatever
+      # TZ the container runs in. Dropping the `Z` binds Unspecified, which AsUtc() reads AS
+      # UTC — also correct, but only because this string happens to be UTC. Keep the `Z`.
+      # A malformed value is NOT a startup failure: Program.cs binds this section with a plain
+      # Configure<T>(section), so the throw lands on the first quick-action link a person opens.
+      # An empty value binds NULL (window only), a whitespace-only one binds DateTime.MinValue,
+      # which refuses EVERY legacy link. deploy.sh's preflight warns on all three.
+      ReservationQuickActions__LegacyLinkCutoffUtc: "${RESERVATION_QUICK_ACTIONS_LEGACY_CUTOFF_UTC:-2026-08-25T00:52:24Z}"
+      # The grace window itself, wired at the BACKEND'S OWN DEFAULT (appsettings.json ships
+      # LegacyLinkGraceDays: 14) so that today this line changes nothing. It exists for the one
+      # follow-up this cutoff leaves: once the old alert mails are drained — roughly two weeks
+      # after the release, when no `Accepted a LEGACY unsigned quick-…` warning has appeared in
+      # the box logs for a while — setting RESERVATION_QUICK_ACTIONS_LEGACY_GRACE_DAYS=0 in the
+      # box .env retires the token-less path entirely, with a `up -d backend` and no release of
+      # this repo. See DEPLOYMENT.md §Reservation quick-action links.
+      #
+      # `:-` earns its keep here more than anywhere else in this file: an EMPTY value would not
+      # fall back to the C# default, it would THROW ("Failed to convert configuration value ''
+      # … to type 'System.Int32'") and take the quick-action links down with it. `:-` substitutes
+      # on empty as well as on unset, so `RESERVATION_QUICK_ACTIONS_LEGACY_GRACE_DAYS=` is inert.
+      ReservationQuickActions__LegacyLinkGraceDays: "${RESERVATION_QUICK_ACTIONS_LEGACY_GRACE_DAYS:-14}"
     volumes:
       - ./app-secrets.json:/app/app-secrets.json:ro   # all app secrets/config (git-ignored)
       - backend_keys:/app/keys                          # DataProtection keys — persist or every redeploy invalidates tokens/sessions
