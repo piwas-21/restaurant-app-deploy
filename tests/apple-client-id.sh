@@ -53,7 +53,17 @@ else
 fi
 
 # It has to be on the BACKEND service; anywhere else it is inert and invisible.
-if awk '/^  backend:/{b=1;next} /^  [a-z]/{b=0} b' "$COMPOSE" | grep -q 'Authentication__Apple__ClientIds__0'; then
+#
+# The awk output is captured into a variable rather than piped straight into `grep -q`, and
+# that is a bug fix, not a style preference. `grep -q` exits the instant it matches; if awk
+# still has lines to write it takes SIGPIPE, and under `set -o pipefail` the pipeline then
+# reports 141 — so a PRESENT key reads as ABSENT and this assertion INVERTS. It stayed hidden
+# only because the key used to be the last thing in the backend block: measured on
+# ubuntu:24.04 (mawk 1.3.4) the moment 46 lines were appended after it, this failed 3/3, while
+# macOS awk buffers its output and passed 5/5. A test that flips to red when an unrelated key
+# is added below it is worse than no test.
+backend_block="$(awk '/^  backend:/{b=1;next} /^  [a-z]/{b=0} b' "$COMPOSE")"
+if grep -q 'Authentication__Apple__ClientIds__0' <<<"$backend_block"; then
   pass "the key sits in the backend service block"
 else
   bad "the key is not inside the backend service — it would never reach the app"
