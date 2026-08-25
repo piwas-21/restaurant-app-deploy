@@ -49,10 +49,69 @@ apple_client_id_warning() { # $1 = a file holding `docker compose config` output
   printf '      it — check `grep Authentication__Apple docker-compose.prod.yml`.\n'
 }
 # --- END apple client id guard ---
+
+# --- BEGIN quick-action cutoff guard (extracted by tests/reservation-quick-action-cutoff.sh) ---
+# The reservation alert mail's approve / reject links are signed since backend #410, but a
+# token-LESS link is still honoured for a booking younger than LegacyLinkGraceDays. The cutoff
+# is what stops that window from also covering bookings made AFTER the release — i.e. from
+# keeping backend #402 (a guest approving their own table) reachable for two more weeks.
+#
+# Nothing about a wrong value is visible from outside: the stack is up, /api/health is 200, and
+# Program.cs binds this section with a plain Configure<T>(section) — no ValidateOnStart — so a
+# malformed value does not even fail the START. It throws the first time a person opens a link
+# from the restaurant's inbox. Hence a preflight that reads the RESOLVED config, exactly like
+# the Apple guard above and for the same reason: the reachable failure is a box whose
+# docker-compose.prod.yml predates the release, not a bad .env, because `:-` substitutes the
+# default on an empty override too.
+#
+# The three bad shapes below are MEASURED against the .NET binder (2026-08-25), not guessed:
+#   absent / ""      -> binds NULL   -> window only; #402 stays reachable for new bookings.
+#   "   " (blank)    -> binds DateTime.MinValue -> EVERY legacy link refused, so the last mails
+#                       the old image sent have dead buttons.
+#   "not-a-date"     -> InvalidOperationException on first use of a link.
+# A warning, never a failure: none of this is a reason to refuse a deploy that may be fixing
+# something else.
+quick_action_cutoff_warning() { # $1 = a file holding `docker compose config` output
+  local resolved="$1" raw
+  [[ -f "$resolved" ]] || return 0
+  # `|| true`: under `set -o pipefail` a grep that matches nothing would abort the DEPLOY.
+  raw="$(grep -E '^[[:space:]]*ReservationQuickActions__LegacyLinkCutoffUtc:' "$resolved" \
+         | head -n1 | sed -E 's/^[^:]*:[[:space:]]*//; s/^"(.*)"$/\1/' || true)"
+
+  if [[ -z "$raw" ]]; then
+    printf 'WARN: this stack resolves NO reservation quick-action cutoff\n'
+    printf '      (ReservationQuickActions__LegacyLinkCutoffUtc). A token-less approve/reject\n'
+    printf '      link then works for ANY booking younger than the grace window, including ones\n'
+    printf '      made today — backend #402, still reachable.\n'
+    printf '      Usual cause: docker-compose.prod.yml here is older than the release that wired\n'
+    printf '      it — check `grep ReservationQuickActions docker-compose.prod.yml`.\n'
+    return 0
+  fi
+
+  if [[ -z "${raw// /}" ]]; then
+    printf 'WARN: the reservation quick-action cutoff is WHITESPACE (%s).\n' "'$raw'"
+    printf '      The .NET binder turns that into DateTime.MinValue, which refuses EVERY\n'
+    printf '      token-less link — dead approve/reject buttons in mails already sent.\n'
+    return 0
+  fi
+
+  # Deliberately permissive: it matches every shape the invariant DateTime converter accepts
+  # (date + time, `T` or space, optional seconds/fraction, optional Z or offset), so it warns
+  # about what the BACKEND would reject rather than about what this repo happens to ship.
+  if [[ ! "$raw" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}[T\ ][0-9]{2}:[0-9]{2}(:[0-9]{2})?(\.[0-9]+)?(Z|[+-][0-9]{2}:?[0-9]{2})?$ ]]; then
+    printf 'WARN: the reservation quick-action cutoff is not a parseable instant (%s).\n' "'$raw'"
+    printf '      The backend binds it lazily, so this does NOT fail the start: it throws the\n'
+    printf '      first time somebody opens an approve/reject link from the alert mail.\n'
+    printf '      Expected shape: 2026-08-25T00:52:24Z (UTC, keep the Z).\n'
+  fi
+}
+# --- END quick-action cutoff guard ---
+
 RESOLVED_CONFIG="$(mktemp)"
 trap 'rm -f "$RESOLVED_CONFIG"' EXIT
 if $COMPOSE config > "$RESOLVED_CONFIG" 2>/dev/null; then
   apple_client_id_warning "$RESOLVED_CONFIG" >&2
+  quick_action_cutoff_warning "$RESOLVED_CONFIG" >&2
 fi
 
 # Upsert KEY=VALUE in .env (replace in place, or append if absent).

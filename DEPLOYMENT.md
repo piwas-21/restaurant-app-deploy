@@ -756,8 +756,25 @@ workflow with `image_tag = latest` to clear the pin.
 >    `./refresh-tenant-images.sh backend latest` — which now genuinely repairs the
 >    tenants, because `:latest` is good again.
 >
-> Today no tenant is affected — every one is on `:staging`, retired, or legacy RUMI —
-> but that changes with the first paying customer.
+> **One tenant IS affected today — measured 2026-08-25, not assumed.** `obresse`
+> (`status: active`, `managed: scripts`, `box: staging`, `backend_tag: latest`) rides the
+> same moving tag prod does. `refresh-tenants.yml` run `32795328126` recreated
+> `tenant-obresse-backend-obresse-1` from `ghcr.io/piwas-21/restaurant-app-backend:latest`
+> at `2026-08-25T00:52:24Z`, on the **same digest** prod's `deploy-backend-1` runs
+> (`sha256:2ebfa476…`). The other three registry entries are not: `demo` is on
+> `:staging`, `smoke` is `retired`, and RUMI itself is `managed: legacy` on prod, i.e.
+> the prod stack the dispatch already rolls.
+>
+> So a prod-only image rollback leaves **obresse on the newer build** — a tenant on a
+> different box running a build prod has just rejected, with whatever migrations that
+> build applied to the tenant's own database. Repairing it is step 4 above, and note
+> **which box**: obresse lives on **staging**, so the `./refresh-tenant-images.sh backend
+> latest` line runs there even though the tag being repaired is the one prod moves. Check
+> what it is actually on before and after:
+>
+> ```bash
+> bash .ssh/staging.sh 'docker inspect tenant-obresse-backend-obresse-1 --format "{{.Config.Image}} {{.Image}} {{.State.StartedAt}}"'
+> ```
 
 ---
 
@@ -1532,3 +1549,126 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST https://www.rumirestaurant.ch/a
 it, so a provisioned tenant's backend refuses Apple sign-in — correct, because the bundle id is RUMI's
 own app and handing another tenant that `aud` would make its backend accept identity tokens minted for
 a different product. A tenant that ships its own app gets its own client id in its own `.env`.
+
+## Reservation quick-action links (both boxes) — `ReservationQuickActions__LegacyLinkCutoffUtc`
+
+The restaurant's new-booking alert mail carries two buttons, `GET /api/reservations/{id}/quick-approve`
+and `.../quick-reject`. They are opened from an inbox, so they carry no session and stay
+`[AllowAnonymous]`. Until backend **#410** the bare reservation id **was** the whole authorisation — and
+`POST /api/Reservations` is anonymous and hands that id back to whoever made the booking, so **a guest
+could approve their own table** (backend **#402**). Since #410 the link must carry a signed, expiring
+`?token=`.
+
+Breaking every mail already in the restaurant's inbox on release day would strand whatever bookings
+were still undecided, so a **token-less** link is still honoured while its own booking is younger than
+`ReservationQuickActions:LegacyLinkGraceDays` (**14** days, measured from that reservation's
+`CreatedAt`). That window is anchored per booking, which is what lets it close by itself — but on its
+own it also covers bookings made **after** the release, i.e. it leaves #402 reachable for two more
+weeks. The cutoff closes that on day one:
+
+```
+ReservationQuickActions__LegacyLinkCutoffUtc = 2026-08-25T00:52:24Z
+ReservationQuickActions__LegacyLinkGraceDays = 14      # the backend's own default; see the follow-up
+```
+
+No reservation created **at or after** that instant may ever take the token-less path. Mails sent
+before it keep working for their own 14 days.
+
+### Why that exact second
+
+It is a **measurement, not a round number**, and it is wrong in both directions:
+
+- **later** — every booking made in the gap can still be approved with the id alone: #402, still open;
+- **earlier** — the last alert mails the **old** image sent carry no token, and their buttons would be
+  dead in a real restaurant's inbox.
+
+The instant is when the release image began serving on prod: `docker inspect deploy-backend-1` →
+`StartedAt 2026-08-25T00:52:22.197507985Z`, first request accepted at *"Now listening on:
+http://[::]:8080"* `2026-08-25T00:52:24.772025841Z` (backend PR **#412**, comment `5403547658`),
+truncated **down** to the whole second so it can only sit at or before the first served request.
+
+### It is not a secret, and the shape matters
+
+A release timestamp is public — the git log says the same thing — so it follows
+`Authentication__Apple__ClientIds__0` and `FleetPush__SofraIngestUrl`: **tracked config**, wired
+straight into `docker-compose.prod.yml`, **not** `app-secrets.json`, and **no `.env` line on either
+box**. Env vars bind last, so this also outranks a `ReservationQuickActions` block in a box
+`app-secrets.json`.
+
+Measured against the .NET binder on 2026-08-25 (`Configure<ReservationQuickActionSettings>`), because
+none of it is guessable from the outside:
+
+| Value | Binds to | Consequence |
+|---|---|---|
+| `2026-08-25T00:52:24Z` | `Kind=Local`, converted back by `AsUtc()` | correct **whatever TZ the container runs in** — keep the `Z` |
+| `2026-08-25T00:52:24` (no `Z`) | `Kind=Unspecified`, read **as** UTC | correct, but only because the string happens to be UTC |
+| absent or `""` | `null` | window only — #402 reachable for a booking made today |
+| `"   "` (whitespace) | `DateTime.MinValue` | **every** token-less link refused — dead buttons in mails already sent |
+| `not-a-date` | throws | **not** a startup failure: `Configure<T>(section)` binds lazily, so it throws the first time a person opens a link |
+
+Because the last three are invisible from outside (stack up, `/api/health` 200), `deploy.sh`'s
+preflight reads the **resolved** config back and prints a **WARN** for each of them.
+`tests/reservation-quick-action-cutoff.sh` keeps that guard honest in CI, freezes the value, and
+asserts it stays in the past.
+
+### The one follow-up — retire the legacy path, ~2 weeks after the release
+
+The cutoff closes the hole for **new** bookings; the pre-release mails still work for their own 14
+days. Once they are drained — no `Accepted a LEGACY unsigned quick-…` **warning** in the backend log
+for a few days — close the path entirely. Check first, then set it, **per box**:
+
+```
+# has anybody still used a token-less link?
+bash .ssh/box.sh 'cd /opt/rumi/deploy && docker compose -f docker-compose.prod.yml logs --since 168h backend | grep -c "Accepted a LEGACY unsigned quick-"'
+
+# 0 for several days -> retire it (box .env, no release of this repo)
+echo 'RESERVATION_QUICK_ACTIONS_LEGACY_GRACE_DAYS=0' >> /opt/rumi/deploy/.env
+cd /opt/rumi/deploy && docker compose -f docker-compose.prod.yml up -d backend
+docker compose -f docker-compose.prod.yml exec -T backend printenv ReservationQuickActions__LegacyLinkGraceDays   # -> 0
+```
+
+Every token-less link then lands on the *"This link can no longer be used"* page, which links to the
+reservations dashboard. That is why the day count is wired to a variable at all: without it, closing
+the window would cost a release of this repo. **Do not "unset" either variable by leaving an empty
+line** — compose's `:-` substitutes the default on an empty value as well as an unset one, so the line
+is simply inert (and for the day count that is a mercy: an empty integer does **not** fall back to the
+C# default, it throws and takes the links down).
+
+### Operator step
+
+A compose change reaches a box only after a `develop` → `main` release PR (`sync-to-box.yml` /
+`sync-to-staging.yml` rsync the files), and **the rsync restarts nothing** — the running backend keeps
+the environment it was started with. So after the release lands, on **each** box:
+
+```
+# 1. confirm the file actually arrived (skipping this makes step 2 a silent no-op)
+grep ReservationQuickActions /opt/rumi/deploy/docker-compose.prod.yml
+
+# 2. recreate the backend so it re-reads the environment  (pull_policy: always — it PULLS)
+cd /opt/rumi/deploy && docker compose -f docker-compose.prod.yml up -d backend
+
+# 3. verify what the container actually got
+docker compose -f docker-compose.prod.yml exec -T backend printenv ReservationQuickActions__LegacyLinkCutoffUtc
+#   -> 2026-08-25T00:52:24Z
+```
+
+From the workspace: `bash .ssh/box.sh '<step>'` for prod, `bash .ssh/staging.sh '<step>'` for staging.
+
+An outside-in check that creates no data: a **random** GUID with no token must render the refusal page
+— **HTTP 200, no stack trace** — byte-identical to the same call with a junk token, because the route
+is not an existence oracle:
+
+```
+curl -s -o /dev/null -w '%{http_code}
+' 'https://www.rumirestaurant.ch/api/reservations/<random-guid>/quick-approve'
+```
+
+Never use a real reservation id for this: on a **Pending** booking still inside the grace window, a
+token-less call would **approve** it.
+
+**Per-tenant stacks deliberately have no cutoff.** `docker-compose.tenant.yml.tpl` forwards none of
+these keys, and that is correct: a tenant's backend is refreshed on its **own** schedule
+(`refresh-tenant-images.sh`), so RUMI's release instant is the wrong cutoff there — it would refuse
+token-less links for bookings whose mail that tenant's *old* image sent after this instant. A tenant
+keeps the per-booking window, which still closes by itself; give it a cutoff only by measuring the
+instant **its** container started the signed build.
