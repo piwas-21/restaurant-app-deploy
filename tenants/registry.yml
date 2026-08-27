@@ -275,3 +275,30 @@ tenants:
     template: classic
     admin_email: obresse@solutioneva.com
     city: Montréal-la-Cluse
+
+  # Reseller tenant #2 — partner Mustafa Vural (Solution Eva). Kebab d'Ilhan,
+  # a kebab/tacos snack in Cluses (FR), trading since 2000. Full-service bundle
+  # + extra-languages; `online-payments` deliberately absent (needs the restaurant's
+  # own Stripe connected account + KYC first — runbook §2b/§2b.5).
+  kebabdilhan:
+    name: Kebab d'Ilhan
+    status: active
+    managed: scripts
+    box: staging
+    # OUR zone, not the partner's: this one rides the *.sofrapiwas.com wildcard,
+    # so it needs no DNS record of its own (contrast obresse, on solutioneva.com).
+    domain: kebabdilhan.sofrapiwas.com
+    domain_mode: subdomain
+    db: tenant_kebabdilhan
+    db_role: tenant_kebabdilhan
+    compose_project: tenant-kebabdilhan
+    backend_tag: latest
+    frontend_tag: tenant-kebabdilhan
+    currency: EUR
+    languages: [fr, en]
+    modules: [core, kitchen-board, cashier, server, reservations, loyalty, printing, extra-languages]
+    # classic on the partner's standing preference — he reported craft looking
+    # broken on his client content 2026-08-21 and obresse was switched for it.
+    template: classic
+    admin_email: kebabdilhan@solutioneva.com
+    city: Cluses
