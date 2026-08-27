@@ -37,6 +37,11 @@ OI_A=11111111-1111-4111-8111-111111111111   # a fully repairable historic line
 OI_B=22222222-2222-4222-8222-222222222222   # a PARTLY repairable line: 3 ids, 2 recovered
 OI_C=33333333-3333-4333-8333-333333333333   # a line the checkout path ALREADY froze
 OI_GONE=99999999-9999-4999-8999-999999999999 # in the payload, not in the database
+OI_NEW=44444444-4444-4444-8444-444444444444  # a MODERN line: placed after the snapshot
+                                             # table existed, by a guest who customised
+                                             # nothing, so it has no snapshot rows either
+O_OLD=aaaa0000-0000-4000-8000-000000000001
+O_NEW=aaaa0000-0000-4000-8000-000000000002
 
 seed_schema() {
   docker exec -i "$CN" psql -U postgres -v ON_ERROR_STOP=1 -q -c 'DROP DATABASE IF EXISTS repairtest' >/dev/null
@@ -44,7 +49,8 @@ seed_schema() {
   # The two columns of the real schema this script depends on, and nothing else. Copied
   # from migration 20260827202652_AddOrderItemIngredientSnapshot.
   P -q <<'SQL' >/dev/null
-CREATE TABLE "OrderItems" (id uuid PRIMARY KEY, product_name text NOT NULL);
+CREATE TABLE orders (id uuid PRIMARY KEY, created_at timestamptz NOT NULL);
+CREATE TABLE "OrderItems" (id uuid PRIMARY KEY, order_id uuid NOT NULL REFERENCES orders(id), product_name text NOT NULL);
 CREATE TABLE "OrderItemIngredients" (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   order_item_id uuid NOT NULL REFERENCES "OrderItems"(id) ON DELETE CASCADE,
@@ -58,8 +64,12 @@ CREATE TABLE "OrderItemIngredients" (
   created_by text NOT NULL,
   updated_by text);
 SQL
+  P -q -c "INSERT INTO orders VALUES
+    ('$O_OLD', TIMESTAMPTZ '2026-07-19 10:10:52+00'),
+    ('$O_NEW', TIMESTAMPTZ '2026-09-01 12:00:00+00')" >/dev/null
   P -q -c "INSERT INTO \"OrderItems\" VALUES
-    ('$OI_A','Chicken Salad'),('$OI_B','Etli Ekmek'),('$OI_C','Adana Grill')" >/dev/null
+    ('$OI_A','$O_OLD','Chicken Salad'),('$OI_B','$O_OLD','Etli Ekmek'),
+    ('$OI_C','$O_OLD','Adana Grill'),('$OI_NEW','$O_NEW','Crème Brûlée')" >/dev/null
   # OI_C is what a line frozen by the live checkout path looks like. It must come out of
   # every run of this script byte for byte unchanged.
   P -q -c "INSERT INTO \"OrderItemIngredients\"
@@ -74,9 +84,11 @@ write_payload() {
 $OI_A	aaaaaaaa-0000-4000-8000-00000000000a	Chicken	1	false	0
 $OI_A	aaaaaaaa-0000-4000-8000-00000000000b	Tomatoes	0	true	1
 $OI_B	bbbbbbbb-0000-4000-8000-00000000000a	Ground beef	1	false	0
-$OI_B	bbbbbbbb-0000-4000-8000-00000000000b	Onions	1	false	1
+$OI_B	bbbbbbbb-0000-4000-8000-00000000000b	Crème fraîche	1	false	1
+$OI_B	bbbbbbbb-0000-4000-8000-00000000000c	Kırmızı biber	1	false	2
 $OI_C	cccccccc-0000-4000-8000-00000000000a	Lamb	1	false	0
 $OI_GONE	dddddddd-0000-4000-8000-00000000000a	Rice	1	false	0
+$OI_NEW	eeeeeeee-0000-4000-8000-00000000000a	Vanilla	1	false	0
 EOF
 }
 
@@ -90,7 +102,7 @@ echo "refuses to run before the backend migration:"
 seed_schema
 P -q -c 'DROP TABLE "OrderItemIngredients"' >/dev/null
 write_payload
-if out="$(run --data "$TMP/payload.tsv" --apply 2>&1)"; then
+if out="$(run --data "$TMP/payload.tsv" --apply --confirm 2>&1)"; then
   bad "ran against a database with no OrderItemIngredients table"
 else
   grep -q '20260827202652_AddOrderItemIngredientSnapshot' <<<"$out" \
@@ -111,22 +123,37 @@ grep -q "$OI_GONE" <<<"$out" && pass "names the payload line whose order item is
   || bad "did not report the missing order item"
 grep -q "$OI_C" <<<"$out" && pass "names the line it skips for already having a snapshot" \
   || bad "did not report the already-frozen line"
+grep -q "$OI_NEW" <<<"$out" && pass "names the line it skips as too new" \
+  || bad "did not report the too-new line"
 
 # ── 3. apply ────────────────────────────────────────────────────────────────────────
 echo
 echo "apply:"
 C_BEFORE="$(snap_c)"
-run --data "$TMP/payload.tsv" --apply >/dev/null || bad "apply exited non-zero"
-[[ "$(count_repair)" == "4" ]] && pass "inserts exactly the 4 rows of the 2 repairable lines" \
-  || bad "expected 4 repair rows, got $(count_repair)"
+run --data "$TMP/payload.tsv" --apply --confirm >/dev/null || bad "apply exited non-zero"
+[[ "$(count_repair)" == "5" ]] && pass "inserts exactly the 5 rows of the 2 repairable lines" \
+  || bad "expected 5 repair rows, got $(count_repair)"
 got="$(P -c "SELECT ingredient_name||'|'||quantity||'|'||is_removed||'|'||sort_order
              FROM \"OrderItemIngredients\" WHERE order_item_id='$OI_A' ORDER BY sort_order")"
 [[ "$got" == "Chicken|1|false|0
 Tomatoes|0|true|1" ]] && pass "name, quantity, removal flag and order survive the round trip" \
   || bad "row content is wrong: $got"
-[[ "$(P -c "SELECT count(*) FROM \"OrderItemIngredients\" WHERE order_item_id='$OI_B'")" == "2" ]] \
+[[ "$(P -c "SELECT count(*) FROM \"OrderItemIngredients\" WHERE order_item_id='$OI_B'")" == "3" ]] \
   && pass "a PARTLY repairable line gets exactly the rows that were recovered" \
-  || bad "the partly repairable line did not get its 2 rows"
+  || bad "the partly repairable line did not get its 3 rows"
+got="$(P -c "SELECT string_agg(ingredient_name, '|' ORDER BY sort_order)
+             FROM \"OrderItemIngredients\" WHERE order_item_id='$OI_B'")"
+[[ "$got" == "Ground beef|Crème fraîche|Kırmızı biber" ]] \
+  && pass "accented and Turkish names survive the COPY round trip unchanged" \
+  || bad "a non-ASCII name was mangled: $got"
+[[ "$(P -c "SELECT count(*) FROM \"OrderItemIngredients\"
+            WHERE created_by='order-ingredient-text-repair'
+              AND (updated_at IS NOT NULL OR updated_by IS NOT NULL)")" == "0" ]] \
+  && pass "leaves updated_at / updated_by NULL — these rows are written once, never touched" \
+  || bad "the repair set an updated_* column"
+[[ "$(P -c "SELECT count(*) FROM \"OrderItemIngredients\" WHERE order_item_id='$OI_NEW'")" == "0" ]] \
+  && pass "a MODERN line with no snapshot is skipped by the age bound, not fabricated onto" \
+  || bad "the repair wrote onto an order placed after the snapshot table existed"
 [[ "$(P -c "SELECT count(*) FROM \"OrderItemIngredients\" WHERE order_item_id='$OI_GONE'")" == "0" ]] \
   && pass "a payload line with no order item is skipped, and does not abort the rest" \
   || bad "wrote a row for a non-existent order item"
@@ -143,7 +170,7 @@ echo "a line that already has a snapshot:"
 echo
 echo "second run:"
 total="$(count)"
-run --data "$TMP/payload.tsv" --apply >/dev/null || bad "second apply exited non-zero"
+run --data "$TMP/payload.tsv" --apply --confirm >/dev/null || bad "second apply exited non-zero"
 [[ "$(count)" == "$total" ]] && pass "inserts nothing the second time" \
   || bad "a second apply wrote more rows ($total -> $(count))"
 run --data "$TMP/payload.tsv" >/dev/null || bad "dry run after apply exited non-zero"
@@ -153,7 +180,7 @@ run --data "$TMP/payload.tsv" >/dev/null || bad "dry run after apply exited non-
 echo
 echo "rollback:"
 out="$(run --rollback)" || bad "rollback without --confirm exited non-zero"
-[[ "$(count_repair)" == "4" ]] && pass "does nothing without --confirm" || bad "deleted without --confirm"
+[[ "$(count_repair)" == "5" ]] && pass "does nothing without --confirm" || bad "deleted without --confirm"
 run --rollback --confirm >/dev/null || bad "rollback --confirm exited non-zero"
 [[ "$(count_repair)" == "0" ]] && pass "removes every row this repair wrote" \
   || bad "rollback left $(count_repair) repair rows"
@@ -166,31 +193,48 @@ echo "malformed payloads are refused before postgres sees them:"
 seed_schema
 before="$(count)"
 printf '%s\t%s\tCheese\t1\tfalse\n' "$OI_A" 'aaaaaaaa-0000-4000-8000-00000000000a' > "$TMP/bad.tsv"
-run --data "$TMP/bad.tsv" --apply >/dev/null 2>&1 && bad "accepted a 5-field row" \
+run --data "$TMP/bad.tsv" --apply --confirm >/dev/null 2>&1 && bad "accepted a 5-field row" \
   || pass "a row with the wrong field count is refused"
 printf '%s\t%s\tCre\\Nme\t1\tfalse\t0\n' "$OI_A" 'aaaaaaaa-0000-4000-8000-00000000000a' > "$TMP/bad2.tsv"
-run --data "$TMP/bad2.tsv" --apply >/dev/null 2>&1 && bad "accepted a backslash in a name" \
+run --data "$TMP/bad2.tsv" --apply --confirm >/dev/null 2>&1 && bad "accepted a backslash in a name" \
   || pass "a backslash — which COPY would read as an escape — is refused"
 printf '%s\tnot-a-uuid\tCheese\t1\tfalse\t0\n' "$OI_A" > "$TMP/bad3.tsv"
-run --data "$TMP/bad3.tsv" --apply >/dev/null 2>&1 && bad "accepted a non-uuid ingredient id" \
+run --data "$TMP/bad3.tsv" --apply --confirm >/dev/null 2>&1 && bad "accepted a non-uuid ingredient id" \
   || pass "a non-uuid id is refused"
 # A duplicate is the one malformed payload that would NOT fail loudly: the NOT EXISTS is
 # evaluated against the table as it stood before the statement, so two identical rows do not
 # see each other, and there is no unique constraint to catch them.
 ID_D=aaaaaaaa-0000-4000-8000-00000000000a
 printf '%s\t%s\tCheese\t1\tfalse\t0\n%s\t%s\tCheese\t1\tfalse\t0\n' "$OI_A" "$ID_D" "$OI_A" "$ID_D" > "$TMP/dup.tsv"
-run --data "$TMP/dup.tsv" --apply >/dev/null 2>&1 && bad "accepted a duplicated row" \
+run --data "$TMP/dup.tsv" --apply --confirm >/dev/null 2>&1 && bad "accepted a duplicated row" \
   || pass "a duplicated row — which would be inserted twice — is refused"
 printf '%s\t%s\tCheese\t1\tfalse\t0\n%s\t%s\tOnions\t1\tfalse\t0\n' \
   "$OI_A" "$ID_D" "$OI_A" 'aaaaaaaa-0000-4000-8000-00000000000b' > "$TMP/dupsort.tsv"
-run --data "$TMP/dupsort.tsv" --apply >/dev/null 2>&1 && bad "accepted two rows at one sort_order" \
+run --data "$TMP/dupsort.tsv" --apply --confirm >/dev/null 2>&1 && bad "accepted two rows at one sort_order" \
   || pass "two rows of one line sharing a sort_order are refused"
 printf '%s\t%s\t%s\t1\tfalse\t0\n' "$OI_A" "$ID_D" "$(printf 'x%.0s' $(seq 1 201))" > "$TMP/long.tsv"
-run --data "$TMP/long.tsv" --apply >/dev/null 2>&1 && bad "accepted a name longer than the column" \
+run --data "$TMP/long.tsv" --apply --confirm >/dev/null 2>&1 && bad "accepted a name longer than the column" \
   || pass "a name too long for varchar(200) is refused on the desk, not mid-transaction"
 printf '%s\t%s\tCheese\t1\tfalse\t0\r\n' "$OI_A" "$ID_D" > "$TMP/crlf.tsv"
-run --data "$TMP/crlf.tsv" --apply >/dev/null 2>&1 && bad "accepted DOS line endings" \
+run --data "$TMP/crlf.tsv" --apply --confirm >/dev/null 2>&1 && bad "accepted DOS line endings" \
   || pass "a CRLF payload is refused (the CR would land inside sort_order)"
+printf '%s\t%s\t   \t1\tfalse\t0\n' "$OI_A" "$ID_D" > "$TMP/blank.tsv"
+run --data "$TMP/blank.tsv" --apply --confirm >/dev/null 2>&1 && bad "accepted a whitespace-only name" \
+  || pass "a whitespace-only name is refused (it would render as an empty line on a ticket)"
+printf '%s\t%s\tCheese \t1\tfalse\t0\n' "$OI_A" "$ID_D" > "$TMP/pad.tsv"
+run --data "$TMP/pad.tsv" --apply --confirm >/dev/null 2>&1 && bad "accepted a padded name" \
+  || pass "a name with a trailing space is refused, not silently frozen with the padding"
+# Four duplicate groups: with a `head -3` in the check this exits through pipefail with no
+# message at all, which is the failure mode that teaches an operator nothing.
+: > "$TMP/dup4.tsv"
+for n in a b c d; do
+  printf '%s\taaaaaaaa-0000-4000-8000-00000000000%s\tX\t1\tfalse\t0\n' "$OI_A" "$n" >> "$TMP/dup4.tsv"
+  printf '%s\taaaaaaaa-0000-4000-8000-00000000000%s\tX\t1\tfalse\t0\n' "$OI_A" "$n" >> "$TMP/dup4.tsv"
+done
+out="$(run --data "$TMP/dup4.tsv" --apply --confirm 2>&1)" && bad "accepted 4 duplicate groups" || true
+grep -q 'duplicate rows' <<<"$out" \
+  && pass "four duplicate groups still SAY they are duplicates, instead of exiting silently" \
+  || bad "a 4-group duplicate payload failed without a message: $out"
 [[ "$(count)" == "$before" ]] && pass "and none of them wrote a row" || bad "a refused payload still wrote"
 
 # ── 8. contradictory flags ──────────────────────────────────────────────────────────
@@ -199,6 +243,40 @@ echo "flags:"
 run --data "$TMP/payload.tsv" --apply --rollback --confirm >/dev/null 2>&1 \
   && bad "--apply --rollback ran instead of refusing" \
   || pass "--apply and --rollback together are refused, not silently resolved to a DELETE"
+
+# ── 9. --apply is gated too, and the dry run really is the writing statement ─────────
+echo
+echo "the two gates:"
+seed_schema
+write_payload
+before="$(count)"
+run --data "$TMP/payload.tsv" --apply >/dev/null 2>&1 && bad "--apply ran without --confirm" \
+  || pass "--apply refuses without --confirm, exactly as --rollback does"
+[[ "$(count)" == "$before" ]] && pass "and wrote nothing" || bad "an ungated --apply wrote"
+
+# The claim "the dry run IS the real INSERT" is only worth making if a payload that fails at
+# the DATABASE fails the same way in both modes. A quantity past int range gets through the
+# awk gate (it is all digits) and dies inside COPY, which is exactly the probe needed.
+printf '%s\t%s\tCheese\t99999999999\tfalse\t0\n' "$OI_A" 'aaaaaaaa-0000-4000-8000-00000000000a' \
+  > "$TMP/overflow.tsv"
+run --data "$TMP/overflow.tsv" >/dev/null 2>&1                 && dry_rc=0 || dry_rc=$?
+run --data "$TMP/overflow.tsv" --apply --confirm >/dev/null 2>&1 && app_rc=0 || app_rc=$?
+[[ "$dry_rc" -ne 0 && "$app_rc" -ne 0 ]] \
+  && pass "a payload postgres rejects fails in BOTH modes — the dry run is the real statement" \
+  || bad "dry run and apply disagreed on a database-level failure (dry=$dry_rc apply=$app_rc)"
+[[ "$(count)" == "$before" ]] && pass "and the aborted transaction committed nothing" \
+  || bad "a failed apply left rows behind"
+
+# ── 10. paths ───────────────────────────────────────────────────────────────────────
+echo
+echo "paths:"
+cp "$TMP/payload.tsv" "$TMP/relative.tsv"
+out="$( cd "$TMP" && REPAIR_DB=repairtest "$SCRIPT" --data relative.tsv 2>&1 )" \
+  && pass "a RELATIVE --data resolves against the operator's directory, not the script's" \
+  || bad "a relative --data was not found: $out"
+out="$( cd "$TMP" && "$SCRIPT" --help 2>&1 )"
+grep -q 'DRY RUN (default)' <<<"$out" && pass "--help works from any directory" \
+  || bad "--help broke outside the script's own directory: $out"
 
 echo
 [[ $fail -eq 0 ]] && echo "all good" || echo "FAILURES above"
