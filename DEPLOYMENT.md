@@ -1177,6 +1177,47 @@ a `backup rehearsal failed` issue.
    the freshly migrated (empty) schema, then restart that tenant's containers.
 5. Untar `uploads.tar.gz` from the archive into `/opt/rumi/tenants/<slug>/uploads`.
 
+### Reading a backup to repair data, not to restore a box (`repair-order-ingredients.sh`)
+
+The other use of these dumps: an **old** snapshot is the only remaining copy of something the live
+database has already overwritten. That is a different job from "bring the box back", and it has a
+different shape — read one table out of one old generation, and write a **narrow, reversible**
+correction into the live database.
+
+`repair-order-ingredients.sh` is the first instance, and the pattern is worth copying. Historic
+order lines lost their ingredient text because every product save re-created the
+`ProductIngredients` rows their id map points at (fixed in backend #422; the text is frozen at
+checkout since #423). The names were recovered from the cluster dumps and the script backfills
+them into `OrderItemIngredients`:
+
+```bash
+scp <payload>.tsv root@<box>:/opt/rumi/order-ingredient-repair.tsv     # payload is NOT in this repo
+./repair-order-ingredients.sh --data /opt/rumi/order-ingredient-repair.tsv           # DRY RUN (default)
+./repair-order-ingredients.sh --data /opt/rumi/order-ingredient-repair.tsv --apply
+./repair-order-ingredients.sh --rollback --confirm                                   # exact undo
+```
+
+Four properties make it safe to run against a live client database, and each is pinned by
+`tests/repair-order-ingredients.sh` against a throwaway postgres:
+
+* **Insert only.** No `UPDATE`, no `DELETE` in the apply path. It cannot rewrite a receipt.
+* **Per-line gate.** A line that already carries a snapshot is skipped, so a row written by the
+  live checkout path is unreachable — which is also what makes a second run insert nothing.
+* **The dry run is the real statement**, executed inside a transaction it then rolls back. A dry
+  run that only counts rows is a different query from the one that writes.
+* **Stamped, therefore reversible.** Every inserted row carries
+  `created_by = order-ingredient-text-repair`, so `--rollback` is exact rather than a guess.
+
+**The payload lives outside this repo on purpose** — this repository is public and the payload is
+one restaurant's order contents. It sits with its dry-run report in the private workspace repo
+(`docs/plans/_research/s0r-repair-dry-run.md`), which also holds the recovery measurement, the
+coverage table and the exact rows.
+
+Reading one table out of an old generation needs **no restore at all**: `restic dump <snap>
+<abs-path> | zcat` streams a single dump file, and its `COPY` block can be read directly. Do the
+verification restore in a **throwaway `postgres:16` container** (`docker run --rm --network none`),
+never in the box's own postgres — the one in `docker-compose.prod.yml` is the client's.
+
 ### Privacy — what an archive contains and how a deletion request reaches it
 
 **It contains personal data**: the restaurant's own customers' order and reservation contact
