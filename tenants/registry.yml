@@ -282,7 +282,7 @@ tenants:
   # own Stripe connected account + KYC first — runbook §2b/§2b.5).
   kebabdilhan:
     name: Kebab d'Ilhan
-    status: provisioning
+    status: active
     managed: scripts
     box: staging
     # OUR zone, not the partner's: this one rides the *.sofrapiwas.com wildcard,
