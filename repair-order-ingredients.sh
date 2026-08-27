@@ -108,7 +108,7 @@ else
   psql_run() { $COMPOSE exec -T postgres psql -U "$PGUSER_BOX" -d "$DB" -v ON_ERROR_STOP=1 "$@"; }
 fi
 
-q() { psql_run -tAq -c "$1"; }
+q() { local sql="$1"; psql_run -tAq -c "$sql"; }
 
 # ── preconditions ───────────────────────────────────────────────────────────────────
 have_table="$(q "SELECT to_regclass('public.\"OrderItemIngredients\"') IS NOT NULL")" \

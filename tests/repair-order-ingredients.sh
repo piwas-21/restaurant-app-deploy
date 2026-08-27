@@ -21,14 +21,14 @@ TMP="$(mktemp -d)"
 cleanup() { docker rm -f "$CN" >/dev/null 2>&1 || true; rm -rf "$TMP"; }
 trap cleanup EXIT
 fail=0
-pass() { printf '  ok   %s\n' "$1"; }
-bad()  { printf '  FAIL %s\n' "$1"; fail=1; }
+pass() { local desc="$1"; printf '  ok   %s\n' "$desc"; }
+bad()  { local desc="$1"; printf '  FAIL %s\n' "$desc"; fail=1; }
 
 docker run --rm -d --name "$CN" -e POSTGRES_PASSWORD=test --network none postgres:16 >/dev/null
 for _ in $(seq 1 60); do docker exec "$CN" pg_isready -U postgres >/dev/null 2>&1 && break; sleep 1; done
 docker exec "$CN" pg_isready -U postgres >/dev/null 2>&1 || { echo "scratch postgres never became ready"; exit 1; }
 
-P() { docker exec -i "$CN" psql -U postgres -d repairtest -v ON_ERROR_STOP=1 -tAq "$@"; }
+db_q() { docker exec -i "$CN" psql -U postgres -d repairtest -v ON_ERROR_STOP=1 -tAq "$@"; }
 export PSQL_CMD="docker exec -i $CN psql -U postgres -d repairtest"
 run() { ( cd "$ROOT" && REPAIR_DB=repairtest "$SCRIPT" "$@" ); }
 
@@ -48,7 +48,7 @@ seed_schema() {
   docker exec -i "$CN" psql -U postgres -v ON_ERROR_STOP=1 -q -c 'CREATE DATABASE repairtest' >/dev/null
   # The two columns of the real schema this script depends on, and nothing else. Copied
   # from migration 20260827202652_AddOrderItemIngredientSnapshot.
-  P -q <<'SQL' >/dev/null
+  db_q -q <<'SQL' >/dev/null
 CREATE TABLE orders (id uuid PRIMARY KEY, created_at timestamptz NOT NULL);
 CREATE TABLE "OrderItems" (id uuid PRIMARY KEY, order_id uuid NOT NULL REFERENCES orders(id), product_name text NOT NULL);
 CREATE TABLE "OrderItemIngredients" (
@@ -64,15 +64,15 @@ CREATE TABLE "OrderItemIngredients" (
   created_by text NOT NULL,
   updated_by text);
 SQL
-  P -q -c "INSERT INTO orders VALUES
+  db_q -q -c "INSERT INTO orders VALUES
     ('$O_OLD', TIMESTAMPTZ '2026-07-19 10:10:52+00'),
     ('$O_NEW', TIMESTAMPTZ '2026-09-01 12:00:00+00')" >/dev/null
-  P -q -c "INSERT INTO \"OrderItems\" VALUES
+  db_q -q -c "INSERT INTO \"OrderItems\" VALUES
     ('$OI_A','$O_OLD','Chicken Salad'),('$OI_B','$O_OLD','Etli Ekmek'),
     ('$OI_C','$O_OLD','Adana Grill'),('$OI_NEW','$O_NEW','Crème Brûlée')" >/dev/null
   # OI_C is what a line frozen by the live checkout path looks like. It must come out of
   # every run of this script byte for byte unchanged.
-  P -q -c "INSERT INTO \"OrderItemIngredients\"
+  db_q -q -c "INSERT INTO \"OrderItemIngredients\"
       (order_item_id, ingredient_id, ingredient_name, quantity, is_removed, sort_order, created_by)
     VALUES ('$OI_C','aaaaaaaa-0000-4000-8000-000000000001','Lamb',1,false,0,'checkout')" >/dev/null
 }
@@ -92,15 +92,15 @@ $OI_NEW	eeeeeeee-0000-4000-8000-00000000000a	Vanilla	1	false	0
 EOF
 }
 
-count()      { P -c "SELECT count(*) FROM \"OrderItemIngredients\""; }
-count_repair(){ P -c "SELECT count(*) FROM \"OrderItemIngredients\" WHERE created_by='order-ingredient-text-repair'"; }
-snap_c()     { P -c "SELECT ingredient_name||'|'||quantity||'|'||is_removed||'|'||sort_order||'|'||created_by
+count()      { db_q -c "SELECT count(*) FROM \"OrderItemIngredients\""; }
+count_repair(){ db_q -c "SELECT count(*) FROM \"OrderItemIngredients\" WHERE created_by='order-ingredient-text-repair'"; }
+snap_c()     { db_q -c "SELECT ingredient_name||'|'||quantity||'|'||is_removed||'|'||sort_order||'|'||created_by
                      FROM \"OrderItemIngredients\" WHERE order_item_id='$OI_C' ORDER BY sort_order"; }
 
 # ── 1. the table has to exist first ─────────────────────────────────────────────────
 echo "refuses to run before the backend migration:"
 seed_schema
-P -q -c 'DROP TABLE "OrderItemIngredients"' >/dev/null
+db_q -q -c 'DROP TABLE "OrderItemIngredients"' >/dev/null
 write_payload
 if out="$(run --data "$TMP/payload.tsv" --apply --confirm 2>&1)"; then
   bad "ran against a database with no OrderItemIngredients table"
@@ -133,28 +133,28 @@ C_BEFORE="$(snap_c)"
 run --data "$TMP/payload.tsv" --apply --confirm >/dev/null || bad "apply exited non-zero"
 [[ "$(count_repair)" == "5" ]] && pass "inserts exactly the 5 rows of the 2 repairable lines" \
   || bad "expected 5 repair rows, got $(count_repair)"
-got="$(P -c "SELECT ingredient_name||'|'||quantity||'|'||is_removed||'|'||sort_order
+got="$(db_q -c "SELECT ingredient_name||'|'||quantity||'|'||is_removed||'|'||sort_order
              FROM \"OrderItemIngredients\" WHERE order_item_id='$OI_A' ORDER BY sort_order")"
 [[ "$got" == "Chicken|1|false|0
 Tomatoes|0|true|1" ]] && pass "name, quantity, removal flag and order survive the round trip" \
   || bad "row content is wrong: $got"
-[[ "$(P -c "SELECT count(*) FROM \"OrderItemIngredients\" WHERE order_item_id='$OI_B'")" == "3" ]] \
+[[ "$(db_q -c "SELECT count(*) FROM \"OrderItemIngredients\" WHERE order_item_id='$OI_B'")" == "3" ]] \
   && pass "a PARTLY repairable line gets exactly the rows that were recovered" \
   || bad "the partly repairable line did not get its 3 rows"
-got="$(P -c "SELECT string_agg(ingredient_name, '|' ORDER BY sort_order)
+got="$(db_q -c "SELECT string_agg(ingredient_name, '|' ORDER BY sort_order)
              FROM \"OrderItemIngredients\" WHERE order_item_id='$OI_B'")"
 [[ "$got" == "Ground beef|Crème fraîche|Kırmızı biber" ]] \
   && pass "accented and Turkish names survive the COPY round trip unchanged" \
   || bad "a non-ASCII name was mangled: $got"
-[[ "$(P -c "SELECT count(*) FROM \"OrderItemIngredients\"
+[[ "$(db_q -c "SELECT count(*) FROM \"OrderItemIngredients\"
             WHERE created_by='order-ingredient-text-repair'
               AND (updated_at IS NOT NULL OR updated_by IS NOT NULL)")" == "0" ]] \
   && pass "leaves updated_at / updated_by NULL — these rows are written once, never touched" \
   || bad "the repair set an updated_* column"
-[[ "$(P -c "SELECT count(*) FROM \"OrderItemIngredients\" WHERE order_item_id='$OI_NEW'")" == "0" ]] \
+[[ "$(db_q -c "SELECT count(*) FROM \"OrderItemIngredients\" WHERE order_item_id='$OI_NEW'")" == "0" ]] \
   && pass "a MODERN line with no snapshot is skipped by the age bound, not fabricated onto" \
   || bad "the repair wrote onto an order placed after the snapshot table existed"
-[[ "$(P -c "SELECT count(*) FROM \"OrderItemIngredients\" WHERE order_item_id='$OI_GONE'")" == "0" ]] \
+[[ "$(db_q -c "SELECT count(*) FROM \"OrderItemIngredients\" WHERE order_item_id='$OI_GONE'")" == "0" ]] \
   && pass "a payload line with no order item is skipped, and does not abort the rest" \
   || bad "wrote a row for a non-existent order item"
 
@@ -163,7 +163,7 @@ echo
 echo "a line that already has a snapshot:"
 [[ "$(snap_c)" == "$C_BEFORE" ]] && pass "is byte-identical after the repair ran" \
   || bad "the already-frozen line changed: $(snap_c)"
-[[ "$(P -c "SELECT count(*) FROM \"OrderItemIngredients\" WHERE order_item_id='$OI_C'")" == "1" ]] \
+[[ "$(db_q -c "SELECT count(*) FROM \"OrderItemIngredients\" WHERE order_item_id='$OI_C'")" == "1" ]] \
   && pass "gains no extra row from the payload" || bad "the payload added a row to a frozen line"
 
 # ── 5. idempotence ──────────────────────────────────────────────────────────────────
@@ -272,7 +272,7 @@ out="$(run --data "$TMP/payload.tsv" --before "2026-08-28'; DROP TABLE \"OrderIt
 grep -q 'must be a plain date' <<<"$out" \
   && pass "--before is validated, not interpolated into the SQL on trust" \
   || bad "a non-date --before was not refused clearly: $out"
-[[ "$(P -c "SELECT to_regclass('public.\"OrderItems\"') IS NOT NULL")" == "t" ]] \
+[[ "$(db_q -c "SELECT to_regclass('public.\"OrderItems\"') IS NOT NULL")" == "t" ]] \
   && pass "and the table it tried to drop is still there" || bad "the OrderItems table is gone"
 
 # ── 10. paths ───────────────────────────────────────────────────────────────────────
