@@ -267,6 +267,14 @@ run --data "$TMP/overflow.tsv" --apply --confirm >/dev/null 2>&1 && app_rc=0 || 
 [[ "$(count)" == "$before" ]] && pass "and the aborted transaction committed nothing" \
   || bad "a failed apply left rows behind"
 
+out="$(run --data "$TMP/payload.tsv" --before "2026-08-28'; DROP TABLE \"OrderItems\"; --" --apply --confirm 2>&1)" \
+  && bad "accepted a --before that is not a date" || true
+grep -q 'must be a plain date' <<<"$out" \
+  && pass "--before is validated, not interpolated into the SQL on trust" \
+  || bad "a non-date --before was not refused clearly: $out"
+[[ "$(P -c "SELECT to_regclass('public.\"OrderItems\"') IS NOT NULL")" == "t" ]] \
+  && pass "and the table it tried to drop is still there" || bad "the OrderItems table is gone"
+
 # ── 10. paths ───────────────────────────────────────────────────────────────────────
 echo
 echo "paths:"

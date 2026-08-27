@@ -71,6 +71,12 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# CUTOFF is interpolated into the SQL below, so it is validated rather than trusted. It comes
+# from an operator, not a request, but a stray quote here would be a syntax error inside a
+# transaction that is about to write to a live database — an ugly place to learn about it.
+[[ "$CUTOFF" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}([\ T][0-9]{2}:[0-9]{2}(:[0-9]{2})?([+-][0-9]{2}(:?[0-9]{2})?|Z)?)?$ ]] \
+  || die "--before must be a plain date or timestamp, e.g. 2026-08-28 or '2026-08-28 00:00:00+00'"
+
 # --rollback is handled before --apply below, so the pair would silently DELETE when the
 # operator asked to write. Refuse instead of picking one.
 if $ROLLBACK && $APPLY; then
