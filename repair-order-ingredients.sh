@@ -58,6 +58,12 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# --rollback is handled before --apply below, so the pair would silently DELETE when the
+# operator asked to write. Refuse instead of picking one.
+if $ROLLBACK && $APPLY; then
+  die "--apply and --rollback are opposites; pass one"
+fi
+
 # psql, either through the box's compose project or through whatever PSQL_CMD names.
 # The override is what lets tests/repair-order-ingredients.sh run this very file against a
 # throwaway postgres, instead of asserting on its source text — the failure this repair can
@@ -109,10 +115,15 @@ rows="$(wc -l < "$CLEAN" | tr -d ' ')"
 [[ "$rows" -gt 0 ]] || die "data file '$DATA' has no rows"
 
 # Shape check before anything reaches postgres: 6 tab-separated fields, sane quantity and
-# sort_order, and NO BACKSLASH anywhere — COPY ... FORMAT text reads a backslash as an
+# sort_order, no CR, a name that fits the column, and NO BACKSLASH anywhere — COPY ... FORMAT text reads a backslash as an
 # escape, so an ingredient name containing one would arrive as a different word, or as
 # NULL if it happened to be '\N'. A malformed payload should fail on the desk, not
 # half-way through a transaction.
+#
+# The length test counts BYTES while varchar(200) counts CHARACTERS, so it is conservative
+# for a non-ASCII name and never permissive — which is the direction that cannot lose data.
+# It exists so an over-long name is refused before the transaction opens; postgres would
+# also reject it, but mid-COPY and with a far less useful message.
 awk -F'\t' '
   NF!=6                  { printf("line %d has %d fields, expected 6\n", NR, NF); bad=1 }
   $1 !~ /^[0-9a-fA-F-]{36}$/ { printf("line %d: %s is not a uuid\n", NR, $1); bad=1 }
@@ -122,7 +133,21 @@ awk -F'\t' '
   $5 !~ /^(true|false)$/ { printf("line %d: is_removed %s is not true/false\n", NR, $5); bad=1 }
   $6 !~ /^[0-9]+$/       { printf("line %d: sort_order %s is not a number\n", NR, $6); bad=1 }
   /\\/                   { printf("line %d contains a backslash\n", NR); bad=1 }
+  /\r/                   { printf("line %d has a CR — the file has DOS line endings\n", NR); bad=1 }
+  length($3) > 200       { printf("line %d: ingredient name is %d bytes; the column is varchar(200)\n", NR, length($3)); bad=1 }
   END { exit bad?1:0 }' "$CLEAN" || die "malformed data file"
+
+# A duplicate would be inserted TWICE. The NOT EXISTS below is evaluated against the table
+# as it stood before the statement, so two identical payload rows do not see each other,
+# and the table has no unique constraint to catch them (it cannot: a recipe may legitimately
+# list the same ingredient id twice). The payload is generated, so a duplicate means the
+# generator ran twice — refuse it rather than write it.
+dupes="$(sort "$CLEAN" | uniq -d | head -3)"
+[[ -z "$dupes" ]] || die "data file has duplicate rows, which would be inserted twice:
+$dupes"
+dupes="$(cut -f1,6 "$CLEAN" | sort | uniq -d | head -3)"
+[[ -z "$dupes" ]] || die "data file gives one order line two rows at the same sort_order:
+$dupes"
 
 lines="$(cut -f1 "$CLEAN" | sort -u | wc -l | tr -d ' ')"
 echo "payload: $rows row(s) across $lines order line(s), from $DATA"

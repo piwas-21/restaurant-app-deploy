@@ -174,7 +174,31 @@ run --data "$TMP/bad2.tsv" --apply >/dev/null 2>&1 && bad "accepted a backslash 
 printf '%s\tnot-a-uuid\tCheese\t1\tfalse\t0\n' "$OI_A" > "$TMP/bad3.tsv"
 run --data "$TMP/bad3.tsv" --apply >/dev/null 2>&1 && bad "accepted a non-uuid ingredient id" \
   || pass "a non-uuid id is refused"
+# A duplicate is the one malformed payload that would NOT fail loudly: the NOT EXISTS is
+# evaluated against the table as it stood before the statement, so two identical rows do not
+# see each other, and there is no unique constraint to catch them.
+ID_D=aaaaaaaa-0000-4000-8000-00000000000a
+printf '%s\t%s\tCheese\t1\tfalse\t0\n%s\t%s\tCheese\t1\tfalse\t0\n' "$OI_A" "$ID_D" "$OI_A" "$ID_D" > "$TMP/dup.tsv"
+run --data "$TMP/dup.tsv" --apply >/dev/null 2>&1 && bad "accepted a duplicated row" \
+  || pass "a duplicated row — which would be inserted twice — is refused"
+printf '%s\t%s\tCheese\t1\tfalse\t0\n%s\t%s\tOnions\t1\tfalse\t0\n' \
+  "$OI_A" "$ID_D" "$OI_A" 'aaaaaaaa-0000-4000-8000-00000000000b' > "$TMP/dupsort.tsv"
+run --data "$TMP/dupsort.tsv" --apply >/dev/null 2>&1 && bad "accepted two rows at one sort_order" \
+  || pass "two rows of one line sharing a sort_order are refused"
+printf '%s\t%s\t%s\t1\tfalse\t0\n' "$OI_A" "$ID_D" "$(printf 'x%.0s' $(seq 1 201))" > "$TMP/long.tsv"
+run --data "$TMP/long.tsv" --apply >/dev/null 2>&1 && bad "accepted a name longer than the column" \
+  || pass "a name too long for varchar(200) is refused on the desk, not mid-transaction"
+printf '%s\t%s\tCheese\t1\tfalse\t0\r\n' "$OI_A" "$ID_D" > "$TMP/crlf.tsv"
+run --data "$TMP/crlf.tsv" --apply >/dev/null 2>&1 && bad "accepted DOS line endings" \
+  || pass "a CRLF payload is refused (the CR would land inside sort_order)"
 [[ "$(count)" == "$before" ]] && pass "and none of them wrote a row" || bad "a refused payload still wrote"
+
+# ── 8. contradictory flags ──────────────────────────────────────────────────────────
+echo
+echo "flags:"
+run --data "$TMP/payload.tsv" --apply --rollback --confirm >/dev/null 2>&1 \
+  && bad "--apply --rollback ran instead of refusing" \
+  || pass "--apply and --rollback together are refused, not silently resolved to a DELETE"
 
 echo
 [[ $fail -eq 0 ]] && echo "all good" || echo "FAILURES above"
