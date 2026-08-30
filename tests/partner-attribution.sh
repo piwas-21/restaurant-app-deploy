@@ -280,6 +280,26 @@ for k in TENANT_PARTNER_NAME TENANT_PARTNER_URL; do
     || bad "set_env_line ${k} is absent or nested — a withdrawn credit would survive a re-provision"
 done
 
+# ── The carriage from .env to the container ──────────────────────────────────────
+# The two compose lines are the whole of the link between the tenant .env and the
+# running backend, and their absence is SILENT: the registry, the .env and the endpoint
+# can all be correct and the footer simply never appears. So they are asserted, with
+# their `:-` defaults — an unset variable must become an empty string (display nothing),
+# never an unresolved reference, and never a compose warning on a tenant provisioned
+# before these keys existed.
+echo "the .env reaches the container:"
+COMPOSE_TPL="$HERE/../tenants/templates/docker-compose.tenant.yml.tpl"
+while read -r key var; do
+  if grep -qF "${key}: \"\${${var}:-}\"" "$COMPOSE_TPL"; then
+    pass "${key} is mapped from ${var} with an empty default"
+  else
+    bad "${key} is not mapped from \${${var}:-} in docker-compose.tenant.yml.tpl — the value would never reach the backend, silently"
+  fi
+done <<'MAP'
+Partner__Name TENANT_PARTNER_NAME
+Partner__Url TENANT_PARTNER_URL
+MAP
+
 # ── No live tenant is credited by this change ────────────────────────────────────
 # The keys are documented in the registry's field notes and set on NOBODY. A future
 # edit that credits a live tenant is a decision someone should make on purpose.
