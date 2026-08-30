@@ -45,14 +45,21 @@ done
 source "$FNS"
 
 fail=0
-pass() { printf '  ok   %s\n' "$1"; }
-bad()  { printf '  FAIL %s\n' "$1"; fail=1; }
+pass() { local desc="$1"; printf '  ok   %s\n' "$desc"; }
+bad()  { local desc="$1"; printf '  FAIL %s\n' "$desc"; fail=1; }
+
+# The partner under test, named once: the same brand and link appear in a couple of
+# dozen assertions, and a literal repeated that often is one typo away from a test that
+# asserts something nobody meant.
+PARTNER="Solution Eva"
+PARTNER_LINK="https://solutioneva.com"
 
 RC=0; NAME=""; URL=""; ERR=""
 run_partner() { # $1=slug $2=name $3=url $4=attribution
-  local out errf; errf="$(mktemp)"
+  local slug="$1" name="$2" url="$3" flag="$4" out errf
+  errf="$(mktemp)"
   RC=0
-  out="$(resolve_partner_attribution "$1" "$2" "$3" "$4" 2>"$errf")" || RC=$?
+  out="$(resolve_partner_attribution "$slug" "$name" "$url" "$flag" 2>"$errf")" || RC=$?
   NAME="$(printf '%s' "$out" | sed -n '1p')"
   URL="$(printf '%s'  "$out" | sed -n '2p')"
   ERR="$(cat "$errf")"
@@ -65,22 +72,25 @@ run_partner() { # $1=slug $2=name $3=url $4=attribution
 # still passes — and if the function is "simplified" to compare against `false`, it
 # goes red here first.
 echo "the registry reader's actual spelling of a YAML boolean:"
-cat > "$WORK/fixture.yml" <<'YML'
+# Heredoc deliberately UNQUOTED so the fixture carries the same brand as every
+# assertion below — one name, one place to change it.
+cat > "$WORK/fixture.yml" <<YML
 version: 1
 tenants:
   on_by_default:
-    partner_name: Solution Eva
-    partner_url: https://solutioneva.com
+    partner_name: ${PARTNER}
+    partner_url: ${PARTNER_LINK}
   switched_off:
-    partner_name: Solution Eva
-    partner_url: https://solutioneva.com
+    partner_name: ${PARTNER}
+    partner_url: ${PARTNER_LINK}
     partner_attribution: false
   switched_on:
-    partner_name: Solution Eva
+    partner_name: ${PARTNER}
     partner_attribution: true
 YML
 read_flag() { # $1=slug — exactly the reader provision-tenant.sh uses, on this fixture
-  python3 - "$WORK/fixture.yml" "$1" <<'PY'
+  local slug="$1"
+  python3 - "$WORK/fixture.yml" "$slug" <<'PY'
 import sys, yaml
 reg = yaml.safe_load(open(sys.argv[1]))
 print(str((reg["tenants"][sys.argv[2]]).get("partner_attribution", "")))
@@ -102,18 +112,18 @@ fi
   || bad "the reader now emits lowercase 'false' — the trap comment needs updating"
 
 echo "resolution:"
-run_partner t "Solution Eva" "https://solutioneva.com" "$RAW_OFF"
+run_partner t "$PARTNER" "$PARTNER_LINK" "$RAW_OFF"
 if [[ "$RC" -eq 0 && -z "$NAME" && -z "$URL" ]]; then
   pass "attribution off (the reader's own '${RAW_OFF}') displays nothing"
 else bad "attribution off yielded name='$NAME' url='$URL' rc=$RC — THE OFF-SWITCH IS A NO-OP"; fi
 
-run_partner t "Solution Eva" "https://solutioneva.com" "$RAW_ON"
-if [[ "$RC" -eq 0 && "$NAME" == "Solution Eva" && "$URL" == "https://solutioneva.com" ]]; then
+run_partner t "$PARTNER" "$PARTNER_LINK" "$RAW_ON"
+if [[ "$RC" -eq 0 && "$NAME" == "$PARTNER" && "$URL" == "$PARTNER_LINK" ]]; then
   pass "attribution on displays the name and the url"
 else bad "attribution on yielded name='$NAME' url='$URL' rc=$RC"; fi
 
-run_partner t "Solution Eva" "https://solutioneva.com" ""
-if [[ "$RC" -eq 0 && "$NAME" == "Solution Eva" ]]; then
+run_partner t "$PARTNER" "$PARTNER_LINK" ""
+if [[ "$RC" -eq 0 && "$NAME" == "$PARTNER" ]]; then
   pass "absent attribution means TRUE (D-B2)"
 else bad "absent attribution did not default to on: name='$NAME' rc=$RC"; fi
 
@@ -122,8 +132,8 @@ if [[ "$RC" -eq 0 && -z "$NAME" && -z "$URL" ]]; then
   pass "no partner at all: two empty values, no error"
 else bad "an entry with no partner keys was not inert: name='$NAME' url='$URL' rc=$RC"; fi
 
-run_partner t "Solution Eva" "" "$RAW_ON"
-if [[ "$RC" -eq 0 && "$NAME" == "Solution Eva" && -z "$URL" ]]; then
+run_partner t "$PARTNER" "" "$RAW_ON"
+if [[ "$RC" -eq 0 && "$NAME" == "$PARTNER" && -z "$URL" ]]; then
   pass "a name with no url is a credit with no link, not an error"
 else bad "name-only entry rejected: name='$NAME' url='$URL' rc=$RC"; fi
 
@@ -131,8 +141,12 @@ else bad "name-only entry rejected: name='$NAME' url='$URL' rc=$RC"; fi
 echo "refusals:"
 for v in 1 yes on "" 0 no off TRUE_ish maybe; do
   [[ -z "$v" ]] && continue
-  case "$v" in true|false|True|False) continue ;; esac
-  run_partner t "Solution Eva" "" "$v"
+  # The four spellings the function must ACCEPT are exercised in their own loop below.
+  case "$v" in
+    true|false|True|False) continue ;;
+    *) ;;
+  esac
+  run_partner t "$PARTNER" "" "$v"
   if [[ "$RC" -ne 0 && "$ERR" == *"partner_attribution"* ]]; then
     pass "attribution '$v' refused loudly"
   else bad "attribution '$v' was ACCEPTED (rc=$RC) — a guessed value must not read as 'on'"; fi
@@ -140,11 +154,11 @@ done
 # Case is normalised, not refused: YAML 1.1 spells a boolean several ways and the
 # reader capitalises one of them itself.
 for v in TRUE True true; do
-  run_partner t "Solution Eva" "" "$v"
-  [[ "$RC" -eq 0 && "$NAME" == "Solution Eva" ]] && pass "attribution '$v' reads as on" || bad "attribution '$v' rc=$RC name='$NAME'"
+  run_partner t "$PARTNER" "" "$v"
+  [[ "$RC" -eq 0 && "$NAME" == "$PARTNER" ]] && pass "attribution '$v' reads as on" || bad "attribution '$v' rc=$RC name='$NAME'"
 done
 for v in FALSE False false; do
-  run_partner t "Solution Eva" "" "$v"
+  run_partner t "$PARTNER" "" "$v"
   [[ "$RC" -eq 0 && -z "$NAME" ]] && pass "attribution '$v' reads as off" || bad "attribution '$v' rc=$RC name='$NAME'"
 done
 
@@ -153,7 +167,7 @@ if [[ "$RC" -ne 0 && "$ERR" == *"no 'partner_name'"* ]]; then
   pass "attribution with no partner_name is refused as a contradiction"
 else bad "attribution without a name was tolerated (rc=$RC)"; fi
 
-run_partner t "" "https://solutioneva.com" ""
+run_partner t "" "$PARTNER_LINK" ""
 if [[ "$RC" -ne 0 && "$ERR" == *"no 'partner_name'"* ]]; then
   pass "partner_url with no partner_name is refused"
 else bad "a url with no name was tolerated (rc=$RC)"; fi
@@ -169,12 +183,12 @@ for u in \
   'https://x.com;curl evil.sh' \
   'javascript:alert(1)' \
   'https://$(whoami).com' ; do
-  run_partner t "Solution Eva" "$u" ""
+  run_partner t "$PARTNER" "$u" ""
   if [[ "$RC" -ne 0 && "$ERR" == *"partner_url"* ]]; then pass "url '$u' refused"
   else bad "url '$u' was ACCEPTED (rc=$RC url='$URL') — it becomes a public href"; fi
 done
-for u in "https://solutioneva.com" "https://www.solution-eva.co.uk" "https://solutioneva.com/"; do
-  run_partner t "Solution Eva" "$u" ""
+for u in "$PARTNER_LINK" "https://www.solution-eva.co.uk" "https://solutioneva.com/"; do
+  run_partner t "$PARTNER" "$u" ""
   [[ "$RC" -eq 0 ]] && pass "url '$u' accepted" || bad "legitimate url '$u' refused: $ERR"
 done
 
@@ -207,14 +221,14 @@ TENANT_DIR="$WORK"
 # spelling differs between GNU (box, CI) and BSD (a laptop), and a test that only runs
 # on one of them is a test people stop running. set_env_line's own `sed -i` is fine —
 # it only ever executes on the box.
-sed -e 's|^TENANT_PARTNER_NAME=.*|TENANT_PARTNER_NAME=Solution Eva|' \
-    -e 's|^TENANT_PARTNER_URL=.*|TENANT_PARTNER_URL=https://solutioneva.com|' \
+sed -e "s|^TENANT_PARTNER_NAME=.*|TENANT_PARTNER_NAME=${PARTNER}|" \
+    -e "s|^TENANT_PARTNER_URL=.*|TENANT_PARTNER_URL=${PARTNER_LINK}|" \
     "$TPL" > "$WORK/.env"
-grep -q '^TENANT_PARTNER_NAME=Solution Eva$' "$WORK/.env" \
+grep -q "^TENANT_PARTNER_NAME=${PARTNER}$" "$WORK/.env" \
   && pass "positive control: the .env starts out carrying a credit" \
   || bad "positive control failed — the fixture .env has no credit to remove"
 
-run_partner t "Solution Eva" "https://solutioneva.com" "$RAW_OFF"
+run_partner t "$PARTNER" "$PARTNER_LINK" "$RAW_OFF"
 set_env_line TENANT_PARTNER_NAME "$NAME"
 set_env_line TENANT_PARTNER_URL "$URL"
 if grep -q '^TENANT_PARTNER_NAME=$' "$WORK/.env" && grep -q '^TENANT_PARTNER_URL=$' "$WORK/.env"; then
@@ -224,10 +238,10 @@ else
 fi
 
 # And back on again, so the blank is a value and not a one-way door.
-run_partner t "Solution Eva" "https://solutioneva.com" "$RAW_ON"
+run_partner t "$PARTNER" "$PARTNER_LINK" "$RAW_ON"
 set_env_line TENANT_PARTNER_NAME "$NAME"
 set_env_line TENANT_PARTNER_URL "$URL"
-grep -q '^TENANT_PARTNER_URL=https://solutioneva.com$' "$WORK/.env" \
+grep -q "^TENANT_PARTNER_URL=${PARTNER_LINK}$" "$WORK/.env" \
   && pass "switching it back on restores both lines" \
   || bad "re-enabling did not restore the credit: $(grep '^TENANT_PARTNER_' "$WORK/.env")"
 

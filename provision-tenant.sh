@@ -660,14 +660,17 @@ set_env_line() { # $1=key $2=value (free text)
 # Free-text values landing in the tenant .env are interpolated by docker
 # compose — a literal $ must be doubled or compose silently mangles it (same
 # trap as DEV_PORTAL_AUTH_HASH; see DEPLOYMENT.md §Developer Portal).
-ENV_NAME="$(printf '%s' "$REG_NAME" | sed -e 's/\$/$$/g')"
-ENV_CITY="$(printf '%s' "$REG_CITY" | sed -e 's/\$/$$/g')"
+# One function rather than the same sed script written out per value: it is now
+# applied to four fields, and a rule that is copied is a rule that drifts.
+compose_escape() { printf '%s' "$1" | sed -e 's/\$/$$/g'; }
+ENV_NAME="$(compose_escape "$REG_NAME")"
+ENV_CITY="$(compose_escape "$REG_CITY")"
 # Same treatment for the partner credit: `partner_name` is free text from the registry
 # and lands in the same interpolated file. (The URL is already shape-checked to a bare
-# https host, so it cannot contain a `$` — it is doubled anyway rather than relying on
+# https host, so it cannot contain a `$` — it is escaped anyway rather than relying on
 # a rule enforced two hundred lines away.)
-ENV_PARTNER_NAME="$(printf '%s' "$PARTNER_NAME" | sed -e 's/\$/$$/g')"
-ENV_PARTNER_URL="$(printf '%s' "$PARTNER_URL" | sed -e 's/\$/$$/g')"
+ENV_PARTNER_NAME="$(compose_escape "$PARTNER_NAME")"
+ENV_PARTNER_URL="$(compose_escape "$PARTNER_URL")"
 
 echo "==> Tenant .env"
 FRESH_ENV=0
