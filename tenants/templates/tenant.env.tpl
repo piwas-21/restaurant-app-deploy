@@ -90,3 +90,23 @@ NEXT_PUBLIC_TEMPLATE=__TEMPLATE__
 STRIPE_ENABLED=false
 STRIPE_PLATFORM_API_KEY=
 STRIPE_CONNECTED_ACCOUNT_ID=
+
+# --- Partner attribution (SOFRA-PARTNER-PLAN §11d, channel C) ----------------------------
+# "Site by <name>", linked, in the tenant footer — the reseller who built and provisioned
+# this site. Both lines are written by provision-tenant.sh on EVERY run from the registry's
+# `partner_name` / `partner_url` / `partner_attribution`, so editing them by hand is
+# overwritten on the next re-provision.
+#
+# The registry's BOOLEAN does not appear here, deliberately: provision-tenant.sh resolves it
+# and writes EMPTY values when attribution is off, so this file — and the backend that reads
+# it — carries exactly one meaning, WHAT TO DISPLAY. Empty = display nothing, which is also
+# the state of every tenant with no partner. That is what makes switching attribution off
+# REMOVE the credit on the next re-provision instead of merely not adding it.
+#
+# Literal empties rather than __PLACEHOLDER__ substitutions, for the same reason the three
+# STRIPE_ lines above are: set_env_line rewrites both on every run, so a placeholder would
+# only ever be visible if that rewrite failed — and it would then render as the literal
+# string `__PARTNER_NAME__` in a diner's footer. Safe by default: a half-finished provision
+# credits nobody rather than crediting a placeholder.
+TENANT_PARTNER_NAME=
+TENANT_PARTNER_URL=

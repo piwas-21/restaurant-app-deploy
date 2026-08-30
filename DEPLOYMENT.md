@@ -352,6 +352,39 @@ per-account TWINT flip until Stripe approves the platform's own `twint_payments`
 refusal is deliberate. Full walk-through, including what the founder and the buyer should see
 afterwards: workspace `docs/runbooks/signup-to-live-tenant.md` §2b.5.
 
+### Crediting a partner in a tenant footer (`partner_name` / `partner_url` / `partner_attribution`)
+
+A reseller who built a tenant's site can be credited in its footer as *"Site by &lt;name&gt;"*,
+linked (SOFRA-PARTNER-PLAN §11d). Three optional registry keys, flat on the tenant entry:
+
+```yaml
+    partner_name: Solution Eva
+    partner_url: https://solutioneva.com
+    partner_attribution: true      # optional; ABSENT MEANS TRUE
+```
+
+`provision-tenant.sh` resolves them into **two** tenant `.env` values —
+`TENANT_PARTNER_NAME` and `TENANT_PARTNER_URL` — and the boolean does **not** travel: the
+`.env`, and therefore the backend and the footer, carry one meaning only, *what to display*.
+
+Three things to know before editing them:
+
+- **`partner_attribution` is the RESTAURANT's off-switch**, not the partner's. Absent = true
+  (the partner built the site). It is only consulted when `partner_name` is set, and setting
+  it without one is refused as a contradiction.
+- **Off REMOVES the credit**, it does not merely stop adding it: both `.env` lines are
+  rewritten on every run, and off writes them EMPTY — byte-for-byte the state of a tenant
+  with no partner. So the way to take a partner's name off a live tenant is
+  `partner_attribution: false` **plus a re-provision** (the container recreate is what applies
+  it, exactly as with `modules` — `docker compose restart` re-reads nothing).
+- It must be a **YAML boolean**. `yes` / `on` / `1` are refused loudly. The reason is in
+  `provision-tenant.sh`'s own comment: the registry reader is `yaml.safe_load` + `str(v)`, so
+  a YAML boolean reaches the shell CAPITALISED (`False`), and a comparison against `"false"`
+  would never match — the off-switch would be a silent no-op that reads as ON.
+
+`partner_url` is `https://` plus a bare host or the provision refuses it: it becomes an
+`href` on the restaurant's public page. Covered by `tests/partner-attribution.sh`.
+
 ### Tenant sending identity (`PLATFORM_MAIL_DOMAIN` — EMAIL-IDENTITY-PLAN)
 
 A tenant's `FromEmail` is resolved at provision time, in precedence order:

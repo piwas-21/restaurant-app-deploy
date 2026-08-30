@@ -138,6 +138,39 @@
 #             ⚠️ Changing this on an ALREADY-provisioned tenant does not take effect by
 #             re-running provisioning — app-secrets.json is kept so JWT/printer secrets
 #             survive. The script detects the mismatch and prints the exact hand-fix.
+#   partner_name / partner_url / partner_attribution: OPTIONAL. The reseller partner who
+#             built this site, credited as "Site by <name>" (linked) in the tenant FOOTER
+#             (SOFRA-PARTNER-PLAN §11d). Flat keys, never a nested `partner:` map:
+#             provision-tenant.sh reads the entry with a fixed key list and flattens every
+#             value with `str(v)`, so a nested map would arrive in the shell as a
+#             stringified Python dict.
+#
+#                 obresse:
+#                   partner_name: Solution Eva
+#                   partner_url: https://solutioneva.com
+#                   partner_attribution: true      # optional; ABSENT MEANS TRUE
+#
+#             ABSENT `partner_attribution` = TRUE, and it is only ever consulted when
+#             `partner_name` is set. It is the RESTAURANT's off-switch, not the partner's:
+#             the partner's own publish flag lives in the control plane and covers all of
+#             their clients at once, so this is the one place a single restaurant that does
+#             not want a reseller's name on its page can say so. Write it out only to turn
+#             the credit OFF.
+#             ⚠️ It must be a YAML boolean — exactly `true` or `false`. `yes`/`on`/`1` are
+#             REFUSED loudly, the same way TENANT_MODULES_ENFORCE refuses them, because the
+#             failure of a guessed value here is silent: the credit stays up on a page whose
+#             owner asked for it to come down. `partner_attribution` with no `partner_name`
+#             is a contradiction and is refused too — the switch would be switching nothing.
+#             `partner_url` must be `https://` plus a bare host (no path, no port, no
+#             http://): it becomes an href on the restaurant's PUBLIC page.
+#             Attribution OFF renders the tenant .env's TENANT_PARTNER_NAME/URL EMPTY —
+#             identical to a tenant with no partner — so turning it off REMOVES the credit
+#             rather than merely not adding it. The boolean is resolved by
+#             provision-tenant.sh and never reaches the tenant, which therefore carries one
+#             meaning only: what to display.
+#             Editing any of the three changes nothing until you RE-PROVISION that tenant
+#             (the container recreate is the part that applies it), exactly as `modules`
+#             above. No image rebuild: the footer reads it from the backend at runtime.
 #   status:   provisioning -> active -> retired (descriptive; keep honest)
 
 version: 1
