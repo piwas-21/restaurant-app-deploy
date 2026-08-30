@@ -300,6 +300,34 @@ Partner__Name TENANT_PARTNER_NAME
 Partner__Url TENANT_PARTNER_URL
 MAP
 
+# ── The same seam, generalised, so the NEXT variable is protected too ────────────
+# The specific assertion above would not have existed before the mapping was forgotten.
+# This one is the general rule it is an instance of: EVERY TENANT_* key rendered into a
+# tenant .env must be referenced by the tenant compose template, or be named here as a
+# deliberate exception with its reason. The seam is invisible from either side — the
+# .env is correct, the backend is correct, and nothing carries one to the other — and no
+# test in any of the four repos looks across it.
+#
+# It is a REFERENCE check, not a `Xxx__Yyy:` shape check: a value legitimately reaches
+# the container as a raw env var (TENANT_MODULES), as a config key (Modules__Enabled),
+# or as both. Asserting the shape would be asserting a convention this repo does not
+# actually hold. What it does hold is that an unreferenced key reaches nothing.
+echo "every TENANT_* key is carried into the container (or exempted on purpose):"
+# Baked by sed at render time (__SLUG__/__DOMAIN__ tokens), so they reach the container
+# as literals rather than through ${...}. Anything ADDED to this list is a decision
+# someone has to write a reason for.
+CARRIED_BY_SED="TENANT_SLUG TENANT_DOMAIN"
+while read -r key; do
+  [[ -z "$key" ]] && continue
+  if grep -qF "\${${key}" "$COMPOSE_TPL"; then
+    pass "${key} is referenced by the compose template"
+  elif [[ " $CARRIED_BY_SED " == *" $key "* ]]; then
+    pass "${key} is exempt: rendered as a literal by sed, not interpolated"
+  else
+    bad "${key} is rendered into the tenant .env and referenced NOWHERE in docker-compose.tenant.yml.tpl — it reaches no container, silently"
+  fi
+done < <(grep -oE '^#?[[:space:]]*TENANT_[A-Z0-9_]+=' "$TPL" | tr -d '# ' | tr -d '=' | sort -u)
+
 # ── No live tenant is credited by this change ────────────────────────────────────
 # The keys are documented in the registry's field notes and set on NOBODY. A future
 # edit that credits a live tenant is a decision someone should make on purpose.
