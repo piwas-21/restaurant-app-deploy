@@ -216,7 +216,8 @@ jobs:
 
       - name: Read provisioning intent from the registry
         # A pure read of the entry that was just reviewed and merged: everything the
-        # build needs (domain, name, template, currency, image tag) comes from there, so
+        # build needs (domain, name, template, currency, PWA palette, image tag) comes
+        # from there, so
         # the chain cannot disagree with what the founder approved.
         #
         # Every value is grammar-gated here, at the one seam where registry text becomes
@@ -282,6 +283,14 @@ jobs:
               domain = str(t.get("domain") or f"{slug}.{base_domain}")
               template = str(t.get("template") or "classic")
               currency = str(t.get("currency") or "CHF")
+              # PWA manifest palette (frontend #644). ABSENT IS MEANINGFUL, not a gap to
+              # fill: empty forwards nothing, the frontend keeps its own default, and the
+              # image is byte-identical to a build made before this field existed. That
+              # default is the CLASSIC TEMPLATE's palette — RUMI RED #c00000 and white — so
+              # a tenant with another brand colour that leaves these unset is framed in
+              # another restaurant's red on their customers' home screens.
+              pwa_theme_color = str(t.get("pwa_theme_color") or "")
+              pwa_background_color = str(t.get("pwa_background_color") or "")
               image_tag = str(t.get("frontend_tag") or f"tenant-{slug}")
               if CTRL.search(name) or len(name) > 200:
                   reject(slug, "name holds a control character or is over 200 chars")
@@ -301,12 +310,28 @@ jobs:
               if not ok(r"[A-Z]{3}", currency):
                   reject(slug, f"currency '{currency}' is not a 3-letter ISO 4217 code")
                   continue
+              # Refused here as well as by the frontend workflow, for the reason
+              # `base_domain` gives above: everything between the two is a ~20-minute
+              # tenant image build, and a rejected dispatch input surfaces as a failed
+              # build rather than as a bad registry entry.
+              bad_colour = next(
+                  (f"{k} '{v}' is not #rrggbb"
+                   for k, v in (("pwa_theme_color", pwa_theme_color),
+                                ("pwa_background_color", pwa_background_color))
+                   if v and not ok(r"#[0-9a-fA-F]{6}", v)),
+                  None,
+              )
+              if bad_colour:
+                  reject(slug, bad_colour)
+                  continue
               if not ok(TAG, image_tag):
                   reject(slug, f"frontend_tag '{image_tag}' is not a usable image tag")
                   continue
               candidates.append({
                   "slug": slug, "domain": domain, "name": name,
                   "template": template, "currency": currency, "image_tag": image_tag,
+                  "pwa_theme_color": pwa_theme_color,
+                  "pwa_background_color": pwa_background_color,
               })
 
           with open(sys.argv[1], "w") as f:
@@ -499,6 +524,10 @@ jobs:
             NAME="$(jq -r ".todo[$i].name" "$STATE/plan.json")"
             TEMPLATE="$(jq -r ".todo[$i].template" "$STATE/plan.json")"
             CURRENCY="$(jq -r ".todo[$i].currency" "$STATE/plan.json")"
+            # // "" so a plan.json written before the palette existed (a re-run against an
+            # older artifact) yields the empty default rather than the string "null".
+            PWA_THEME_COLOR="$(jq -r ".todo[$i].pwa_theme_color // \"\"" "$STATE/plan.json")"
+            PWA_BACKGROUND_COLOR="$(jq -r ".todo[$i].pwa_background_color // \"\"" "$STATE/plan.json")"
             IMAGE_TAG="$(jq -r ".todo[$i].image_tag" "$STATE/plan.json")"
             BOX_STATE="$(jq -r ".todo[$i].boxState" "$STATE/plan.json")"
 
@@ -529,7 +558,9 @@ jobs:
               -f image_tag="$IMAGE_TAG" \
               -f restaurant_name="$NAME" \
               -f template="$TEMPLATE" \
-              -f currency="$CURRENCY"
+              -f currency="$CURRENCY" \
+              -f pwa_theme_color="$PWA_THEME_COLOR" \
+              -f pwa_background_color="$PWA_BACKGROUND_COLOR"
             wait_for_build "$IMAGE_TAG" "$since"
 
             echo "==> provisioning $SLUG on the box"

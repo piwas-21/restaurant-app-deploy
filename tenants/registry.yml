@@ -120,6 +120,28 @@
 #             .env as NEXT_PUBLIC_TEMPLATE; consumed at frontend image build —
 #             INERT until the frontend T2 template-alias PR lands. Any other
 #             value makes provision-tenant.sh fail loudly (no silent default).
+#   pwa_theme_color / pwa_background_color: OPTIONAL, quoted "#rrggbb" (upper or lower case).
+#             The installed-app palette: `theme_color` is the browser/OS chrome around the
+#             app on a phone home screen, `background_color` the splash while it boots
+#             (frontend src/app/manifest.ts). Forwarded by provision-on-registry-merge.yml
+#             to build-tenant-image.yml as `pwa_theme_color` / `pwa_background_color`.
+#             ⚠️ ABSENT DEFAULTS TO **RUMI RED #c00000** AND WHITE — the classic template's
+#             palette (frontend src/lib/config.ts). That default is not neutral: a tenant
+#             whose brand is not red and who leaves these unset ships another restaurant's
+#             red around their own app. Set BOTH for any tenant with its own palette.
+#             Absent is still the byte-identical no-op it always was, which is why RUMI and
+#             `demo` carry neither: an empty value forwards nothing and the frontend keeps
+#             its own default. Quote the value so YAML does not read `#...` as a comment.
+#             A malformed value is REFUSED by the provisioning chain before it spends ~20
+#             minutes building an image (and again by the frontend workflow).
+#             These are BAKED at frontend build time, so changing them on a LIVE tenant is
+#             an image rebuild plus a re-provision, exactly like `domain` and `template` —
+#             not a registry edit that takes effect on its own.
+#             The ICONS are a separate mechanism and are NOT registry fields: they are the
+#             six files in the branding archive/dir passed to build-tenant-image.yml, and
+#             since frontend #644 an archive carrying icon.svg without all three manifest
+#             PNGs FAILS the build rather than mixing a tenant's favicon with the platform
+#             icon on their customers' phones.
 #   live_since: optional go-live date, quoted "YYYY-MM-DD". Read ONLY by the sofra
 #             control plane (tenant-registry.ts) to pre-fill the /admin/onboard
 #             "Live since" field; provision-tenant.sh never reads it. Absent = the
