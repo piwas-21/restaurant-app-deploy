@@ -146,12 +146,22 @@ tenants:
 YML
 
 FIX="$(run good.example "$WORK/fixture.yml")"
-sel() { printf '%s' "$FIX" | jq -r "$1"; }
+
+# The three jq filters below are asked over and over, so they are named once rather than
+# retyped (Sonar shelldre:S1192) — which also makes each assertion read as a sentence
+# instead of as jq.
+Q_ELIGIBLE='[.eligible[].slug] | join(",")'
+Q_UNACK='[.refused_unacknowledged[].slug] | join(",")'
+Q_ACK='[.refused_acknowledged[].slug] | join(",")'
+
+# `local` for every positional, here and everywhere below (Sonar shelldre:S7679).
+sel()   { local query="$1"; printf '%s' "$FIX" | jq -r "$query"; }
+slugs() { local json="$1" query="$2"; printf '%s' "$json" | jq -r "$query"; }
 
 echo "3. selection rules"
-[[ "$(sel '[.eligible[].slug] | join(",")')" == "goodone" ]] \
+[[ "$(sel "$Q_ELIGIBLE")" == "goodone" ]] \
   && pass "exactly the active, script-managed, release-tracking tenant is eligible" \
-  || bad "eligible was '$(sel '[.eligible[].slug] | join(",")')', expected 'goodone'"
+  || bad "eligible was '$(sel "$Q_ELIGIBLE")', expected 'goodone'"
 
 for pair in "legacyone:managed" "retiredone:status" "provisioningone:status" "developone:backend_tag"; do
   slug="${pair%%:*}"; want="${pair##*:}"
@@ -168,8 +178,8 @@ done
 # BAKES the domain as the bundle's origin, so this must refuse rather than proceed.
 echo "4. the DNS guard"
 NODNS="$(run "some.other.host" "$WORK/fixture.yml")"
-if [[ "$(printf '%s' "$NODNS" | jq -r '[.eligible[].slug] | join(",")')" == "" ]] \
-   && [[ "$(printf '%s' "$NODNS" | jq -r '[.refused_unacknowledged[].slug] | join(",")')" == "goodone" ]]; then
+if [[ "$(slugs "$NODNS" "$Q_ELIGIBLE")" == "" ]] \
+   && [[ "$(slugs "$NODNS" "$Q_UNACK")" == "goodone" ]]; then
   pass "an unresolvable domain refuses the tenant instead of rebuilding it"
 else
   bad "unresolvable domain: eligible='$(printf '%s' "$NODNS" | jq -c '[.eligible[].slug]')' refused='$(printf '%s' "$NODNS" | jq -c '[.refused_unacknowledged[].slug]')'"
@@ -188,14 +198,14 @@ sed 's/^    currency: EUR$/    currency: EUR\n    frontend_refresh_blocked: "202
   "$WORK/fixture.yml" > "$WORK/fixture-ack.yml"
 grep -q frontend_refresh_blocked "$WORK/fixture-ack.yml" || { echo "fixture edit failed"; exit 1; }
 ACK="$(run "some.other.host" "$WORK/fixture-ack.yml")"
-if [[ "$(printf '%s' "$ACK" | jq -r '[.refused_unacknowledged[].slug] | join(",")')" == "" ]] \
-   && [[ "$(printf '%s' "$ACK" | jq -r '[.refused_acknowledged[].slug] | join(",")')" == "goodone" ]]; then
+if [[ "$(slugs "$ACK" "$Q_UNACK")" == "" ]] \
+   && [[ "$(slugs "$ACK" "$Q_ACK")" == "goodone" ]]; then
   pass "an acknowledged block is reported but does not fail the run"
 else
   bad "acknowledged block: unack='$(printf '%s' "$ACK" | jq -c '[.refused_unacknowledged[].slug]')' ack='$(printf '%s' "$ACK" | jq -c '[.refused_acknowledged[].slug]')'"
 fi
 # It must still not be BUILT — acknowledged is not permission.
-[[ "$(printf '%s' "$ACK" | jq -r '[.eligible[].slug] | join(",")')" == "" ]] \
+[[ "$(slugs "$ACK" "$Q_ELIGIBLE")" == "" ]] \
   && pass "acknowledged still means NOT rebuilt (an acknowledgement is not permission)" \
   || bad "an acknowledged block became eligible — that is the tenant-killing rebuild this guard exists to stop"
 
