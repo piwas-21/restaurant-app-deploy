@@ -662,7 +662,7 @@ set_env_line() { # $1=key $2=value (free text)
 # trap as DEV_PORTAL_AUTH_HASH; see DEPLOYMENT.md §Developer Portal).
 # One function rather than the same sed script written out per value: it is now
 # applied to four fields, and a rule that is copied is a rule that drifts.
-compose_escape() { printf '%s' "$1" | sed -e 's/\$/$$/g'; }
+compose_escape() { local text="$1"; printf '%s' "$text" | sed -e 's/\$/$$/g'; }
 ENV_NAME="$(compose_escape "$REG_NAME")"
 ENV_CITY="$(compose_escape "$REG_CITY")"
 # Same treatment for the partner credit: `partner_name` is free text from the registry
