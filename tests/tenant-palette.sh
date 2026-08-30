@@ -32,8 +32,9 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 fail=0
-pass() { printf '  ok   %s\n' "$1"; }
-bad()  { printf '  FAIL %s\n' "$1"; fail=1; }
+# `local desc="$1"` rather than "$1" inline, matching tests/partner-attribution.sh.
+pass() { local desc="$1"; printf '  ok   %s\n' "$desc"; }
+bad()  { local desc="$1"; printf '  FAIL %s\n' "$desc"; fail=1; }
 
 # ── Extract the registry reader out of the workflow's heredoc ────────────────────────
 # Between `<<'PY'` and the closing `PY`, dedented by the 10 spaces of YAML indentation.
@@ -77,14 +78,15 @@ done
 
 # ── 2. The reader carries a registry palette into the candidate record ───────────────
 run_reader() { # $1 = registry yaml body; prints candidates.json
-  local dir="$WORK/run"
+  local body="$1" dir="$WORK/run"
   rm -rf "$dir"; mkdir -p "$dir/tenants"
-  printf '%s\n' "$1" > "$dir/tenants/registry.yml"
+  printf '%s\n' "$body" > "$dir/tenants/registry.yml"
   ( cd "$dir" && python3 - candidates.json < "$WORK/reader.py" ) >/dev/null
   cat "$dir/candidates.json"
 }
 
 base_entry() { # $1 = extra keys, indented 4
+  local extra="$1"
   cat <<YAML
 tenants:
   demo:
@@ -93,7 +95,7 @@ tenants:
     box: staging
     name: Demo Restaurant
     domain: demo.sofrapiwas.com
-$1
+$extra
 YAML
 }
 
