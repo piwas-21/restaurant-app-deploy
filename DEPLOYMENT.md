@@ -255,6 +255,20 @@ plane later calls the same scripts (ADR-003 — no parallel mechanism).
    frontend **image build** via the `build-tenant-image.yml` `template` input +
    Dockerfile ARG (shipped 2026-07-10, frontend #165; `craft` is buildable
    since frontend #166 — its full T3 DoD is still in progress).
+
+   **`pwa_theme_color` / `pwa_background_color`** (optional, quoted `"#rrggbb"`,
+   frontend #644): the installed-app palette — the browser/OS chrome around the app
+   on a phone home screen, and the splash colour while it boots. **Absent defaults to
+   RUMI red `#c00000` and white**, the classic template's palette, so a tenant whose
+   brand is not red and who leaves these unset ships another restaurant's red around
+   their own app. Set **both** for any tenant with its own palette. They are baked at
+   frontend **build** time like `template`, so changing them on a live tenant is a
+   rebuild plus a re-provision, not a registry edit that applies itself. Quote the
+   value or YAML reads `#...` as a comment. Their sibling — the home-screen **icons**
+   — is not a registry field: it is the six-file branding archive/dir given to
+   `build-tenant-image.yml`, and since frontend #644 an archive with `icon.svg` but
+   without all three manifest PNGs **fails the build** instead of putting the platform
+   icon on a tenant's customers' phones.
 2. **DNS**: subdomain tenants under **our** base domain ride the
    `*.sofrapiwas.com` wildcard A record (already points at the staging box, added
    2026-07-06 via `./domainio-dns.sh add-a sofrapiwas.com '*' 159.195.34.105`).
@@ -275,14 +289,20 @@ plane later calls the same scripts (ADR-003 — no parallel mechanism).
    built, running, and answers every visit with a TLS error.
 3. **Frontend image**: `NEXT_PUBLIC_*` are baked per domain, so build the
    tenant's image first (frontend repo):
-   `gh workflow run build-tenant-image.yml -f tenant_domain=<domain> -f image_tag=tenant-<slug> -f restaurant_name="<registry name>" -f template=<registry template> -f currency=<registry currency>`
+   `gh workflow run build-tenant-image.yml -f tenant_domain=<domain> -f image_tag=tenant-<slug> -f restaurant_name="<registry name>" -f template=<registry template> -f currency=<registry currency> -f pwa_theme_color=<registry pwa_theme_color> -f pwa_background_color=<registry pwa_background_color>`
    — `restaurant_name` bakes the page-metadata `<title>` (frontend #125 part 1);
    `template` bakes the UI template (ADR-006, default `classic`); `currency`
    bakes `NEXT_PUBLIC_TENANT_CURRENCY` for all displayed prices (frontend #169,
    default `CHF` — pair it with the registry `currency:` field, whose backend
    half `TENANT_CURRENCY` → `Localization__Currency` ships via the tenant
-   compose template since #33). All three are optional (defaults preserve old
-   dispatches) but every real tenant should pass the registry values.
+   compose template since #33); the two `pwa_*` colours bake the web-app manifest
+   palette, whose default is **RUMI red** (see the registry field above). All of them
+   are optional (defaults preserve old dispatches) but every real tenant should pass
+   the registry values — and a non-red tenant that omits the palette gets no error,
+   just RUMI's colour on its customers' phones. The ADR-012 chain
+   (`provision-on-registry-merge.yml`) forwards all of these from the registry for
+   you; `tests/tenant-palette.sh` is what stops the palette being dropped there
+   silently.
 3b. **Languages** — the registry `languages:` list is not only the UI switcher: since
    GAP-2 S9 it also ships as `Localization__SupportedLanguages`, the set of languages
    this tenant's **email** may be written in (backend translates `en`, `fr`, `de`;
