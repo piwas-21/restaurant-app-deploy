@@ -745,6 +745,71 @@ control plane runs:
 
 Both share `/tmp/rumi-deploy.lock` with the RUMI rolls.
 
+### A FRONTEND release: rebuild, then roll (`list-release-tenants.sh`)
+
+The table above is the whole story for the **backend**, whose image is domain-agnostic,
+so a release is a `pull` + `up -d`. It is **not** the story for the frontend, and the
+difference cost two live tenants a release each.
+
+`NEXT_PUBLIC_*` are baked into the Next.js bundle at **build** time, so a tenant frontend
+image cannot be re-pulled — there is nothing new under that tag to pull. Each tenant needs
+its **own rebuild** of the released source (`build-tenant-image.yml`), and until 2026-08-30
+the only thing that ever dispatched that build was `provision-on-registry-merge.yml`, which
+does *first provisioning only* by its own header. So a self-serve tenant was built on the
+day it was created and never again.
+
+Measured that day with each host's own `GET /api/frontend/version`, against frontend `main`
+= `fa978f99`:
+
+| host | served | |
+|---|---|---|
+| `www.rumirestaurant.ch` | `fa978f9` | current — the prod stack, rolled by frontend `deploy.yml` |
+| `demo.sofrapiwas.com` | develop tip | current — rebuilt by `build-demo-tenant.yml` on every develop push |
+| `kebabdilhan.sofrapiwas.com` | `9de1f87` | **one release behind** |
+| `obresse.sofrapiwas.com` | `cd395d7` | **eleven days behind** |
+
+The two real reseller tenants were the only two with no builder at all. The registry was
+correct throughout; the trigger was absent — the same sentence `refresh-tenant-images.sh`
+writes about the backend side of this.
+
+The chain that closes it:
+
+```
+frontend build-image (main)  ->  frontend release-tenant-images.yml
+      -> list-release-tenants.sh (THIS repo, checked out)   # who, and with what
+      -> build-tenant-image.yml per tenant                  # REBUILD
+      -> ./refresh-tenant-images.sh frontend <tag>          # roll, on that tenant's box
+```
+
+Selection is registry-driven — `managed: scripts` + `status: active` + `backend_tag: latest`
+— so a tenant created tomorrow is included on the day it exists, and `demo` (a develop
+showcase) and RUMI (legacy) stay out. Run it by hand any time:
+
+```bash
+./list-release-tenants.sh          # JSON plan on stdout, reasons on stderr; reads only
+```
+
+> ⚠ **A frontend refresh is NOT a safe no-op, and this is the part to remember.** It
+> re-BAKES the registry's `domain` as the bundle's origin. If that hostname does not
+> resolve, the refresh does not leave the tenant where it was — it replaces a working
+> bundle with one whose every API call, image and fetch dies, on a host ACME can never
+> certify either. So the plan **refuses** a tenant whose `domain` does not resolve.
+>
+> That is not hypothetical: `obresse` was moved to the partner's own zone on 2026-08-21,
+> the partner has never published the A record, and the box still serves it on the pre-move
+> alias `obresse.sofrapiwas.com` (proven by the running bundle's own baked CSP). Stale, and
+> **working**. An automation that "helpfully" refreshed it would have killed it. A known,
+> owner-accepted block is acknowledged with `frontend_refresh_blocked:` on the registry
+> entry, which makes the refusal loud instead of fatal — and deleting that key re-arms it.
+
+**Verifying a tenant is on the release** — build identity plus one independent
+user-visible artifact of the same release, and never by mutating that restaurant's data:
+
+```bash
+curl -s https://<tenant-domain>/api/frontend/version   # commit must equal frontend main
+curl -s -o /dev/null -w '%{http_code}\n' https://<tenant-domain>/manifest.webmanifest
+```
+
 **Which tag a tenant should carry.** `:latest` (released code) for a paying
 customer; `:staging` (the develop build) only for a showcase like `demo`. The
 sofra control plane emits `latest` for every generated entry — a showcase is a
