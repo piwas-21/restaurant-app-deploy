@@ -71,7 +71,8 @@ if not t:
 for k in ("name", "status", "managed", "box", "domain", "domain_mode",
           "base_domain", "domain_aliases", "db", "db_role", "compose_project",
           "backend_tag", "frontend_tag", "currency", "languages", "modules",
-          "admin_email", "city", "template", "stripe_account", "mail_from"):
+          "admin_email", "city", "template", "stripe_account", "mail_from",
+          "partner_name", "partner_url", "partner_attribution"):
     v = t.get(k, "")
     if isinstance(v, list):
         v = ",".join(map(str, v))
@@ -437,6 +438,101 @@ dns_record_advice() { # $1=host $2=the tenant's base domain $3=this box's IP
 }
 # --- END domain helpers ---
 
+# --- BEGIN partner attribution helpers (extracted verbatim by tests/partner-attribution.sh) ---
+# Resolve the registry's THREE partner keys into the TWO values the tenant .env carries
+# (SOFRA-PARTNER-PLAN §11d/§11d2, D-B2). The boolean is resolved HERE, on purpose: the
+# .env — and therefore the backend, and therefore a diner's footer — then carries exactly
+# one meaning, WHAT TO DISPLAY. Nothing downstream gets a second flag it could interpret
+# differently. Attribution off == the same state as no partner at all: two empty values.
+#
+# Echoes two lines, name then url (either or both may be empty). Prints the reason and
+# returns 1 on any inconsistency. Pure — no I/O, no globals but is_plausible_host — so
+# tests/partner-attribution.sh can drive every branch without a box.
+#
+# ⚠️ MEASURED 2026-08-28, and it is the SILENT direction. The registry reader above is
+# `yaml.safe_load` + `str(v)`, and Python renders a YAML boolean CAPITALISED: an entry
+# written `partner_attribution: false` arrives in this shell as the string `False`, and
+# `true` arrives as `True`. Proven against a fixture before this was written:
+#     partner_attribution False -> str(): 'False'
+#     partner_attribution True  -> str(): 'True'
+# So the obvious `[[ "$REG_PARTNER_ATTRIBUTION" == "false" ]]` NEVER MATCHES, and the
+# restaurant's off-switch becomes a no-op that reads as ON — the partner's name stays on
+# the restaurant's public page after the restaurant asked for it to come off, and nothing
+# says so. The spelling is normalised below, and anything that is not exactly
+# true/false/absent is REFUSED rather than defaulted — the same posture
+# TENANT_MODULES_ENFORCE takes when it rejects `1`/`yes`/`on`.
+resolve_partner_attribution() { # $1=slug $2=partner_name $3=partner_url $4=partner_attribution
+  local slug="$1" name="$2" url="$3" raw_flag="$4" flag host
+
+  flag="$(printf '%s' "$raw_flag" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+  if [[ -n "$flag" && "$flag" != "true" && "$flag" != "false" ]]; then
+    echo "ERROR: registry entry '$slug' has partner_attribution '$raw_flag' — must be exactly true or false (a YAML boolean), or the key omitted entirely (= true)" >&2
+    echo "       It is the RESTAURANT's off-switch for the partner credit in its footer;" >&2
+    echo "       a value nobody can interpret must not silently read as 'on'." >&2
+    return 1
+  fi
+
+  # A contradiction, refused rather than quietly ignored — the posture the
+  # domain_mode/base_domain cross-check already takes. Both of the other keys are
+  # meaningless without a name to display: `partner_attribution: false` with no
+  # `partner_name` reads as "the switch is doing something" when it is doing nothing,
+  # and a `partner_url` with no name is a link with no text.
+  if [[ -z "$name" ]]; then
+    if [[ -n "$flag" ]]; then
+      echo "ERROR: registry entry '$slug' sets partner_attribution '$raw_flag' but has no 'partner_name'" >&2
+      echo "       The flag is only ever consulted when a partner name exists, so this entry" >&2
+      echo "       claims to switch something that was never on. Add 'partner_name:', or drop" >&2
+      echo "       'partner_attribution:' — an absent partner already displays nothing." >&2
+      return 1
+    fi
+    if [[ -n "$url" ]]; then
+      echo "ERROR: registry entry '$slug' sets partner_url '$url' but has no 'partner_name'" >&2
+      echo "       The footer renders a LINKED NAME; a URL with no name has nothing to be." >&2
+      return 1
+    fi
+    printf '\n'
+    return 0
+  fi
+
+  # The name becomes visible text on a public page and, above, a sed REPLACEMENT and a
+  # two-line protocol. A newline in it would silently truncate one of those, so it is
+  # refused here rather than half-rendered.
+  if [[ "$name" == *$'\n'* ]]; then
+    echo "ERROR: registry entry '$slug' has a multi-line partner_name — it is one line of footer text; use a plain YAML scalar" >&2
+    return 1
+  fi
+
+  # It becomes an href on a page belonging to a THIRD PARTY (the restaurant), so it is
+  # https-only and a BARE HOST — no path, no query, no port, no credentials, and nothing
+  # a shell or a sed replacement could reinterpret. http:// is refused rather than
+  # upgraded: silently rewriting a partner's own URL is a decision, not a fix.
+  if [[ -n "$url" ]]; then
+    if [[ "$url" != https://* ]]; then
+      echo "ERROR: registry entry '$slug' has partner_url '$url' — must start with 'https://' (http:// is refused, not upgraded)" >&2
+      return 1
+    fi
+    host="${url#https://}"
+    host="${host%/}"   # one trailing slash is idiomatic and harmless; anything else is a path
+    if ! is_plausible_host "$host"; then
+      echo "ERROR: registry entry '$slug' has partner_url '$url' — expected 'https://' plus a bare dotted hostname like 'https://solutioneva.com': lowercase labels, at least one dot, no path, no query, no port, no spaces." >&2
+      echo "       This value becomes an href on the RESTAURANT's public page; it is not the" >&2
+      echo "       place to accept something nobody has read." >&2
+      return 1
+    fi
+  fi
+
+  # Absent means TRUE (D-B2): the partner built and provisioned the site, so the credit
+  # is the default and the restaurant opts OUT. Off yields two empty values, which is
+  # byte-for-byte the state of a tenant with no partner — so switching it off and
+  # re-provisioning REMOVES the credit, it does not merely stop adding it.
+  if [[ "$flag" == "false" ]]; then
+    printf '\n'
+    return 0
+  fi
+  printf '%s\n%s\n' "$name" "$url"
+}
+# --- END partner attribution helpers ---
+
 # Domain mode (ADR-002) + the zone this tenant lives under
 # (SOFRA-PARTNER-FLEXIBILITY-PLAN §D1). Absent `domain_mode` is inferred from the
 # domain, so pre-S10 entries keep working; absent `base_domain` is ours, so every
@@ -448,6 +544,17 @@ if [[ -n "$REG_BASE_DOMAIN" && "$REG_BASE_DOMAIN" != "$PLATFORM_BASE_DOMAIN" ]];
   echo "      That zone has no wildcard: this tenant needs its own A record, published by" >&2
   echo "      the partner, before any certificate can issue. The DNS check below says so" >&2
   echo "      precisely if it is missing." >&2
+fi
+
+# Partner attribution (SOFRA-PARTNER-PLAN §11d, channel C). Resolved BEFORE the
+# database, the containers and Caddy, so a malformed value costs a message rather
+# than a half-built tenant — the same placement as the online-payments refusal.
+_PARTNER_RESOLVED="$(resolve_partner_attribution "$SLUG" "$REG_PARTNER_NAME" "$REG_PARTNER_URL" "$REG_PARTNER_ATTRIBUTION")" || exit 1
+PARTNER_NAME="$(printf '%s' "$_PARTNER_RESOLVED" | sed -n '1p')"
+PARTNER_URL="$(printf '%s' "$_PARTNER_RESOLVED" | sed -n '2p')"
+if [[ -n "$REG_PARTNER_NAME" && -z "$PARTNER_NAME" ]]; then
+  echo "NOTE: tenant '$SLUG' has partner '$REG_PARTNER_NAME' but partner_attribution is off —" >&2
+  echo "      no credit is displayed, and any credit this tenant carried is REMOVED by this run." >&2
 fi
 
 # Optional extra hostnames that should reach this tenant (typically the `www.`
@@ -553,8 +660,17 @@ set_env_line() { # $1=key $2=value (free text)
 # Free-text values landing in the tenant .env are interpolated by docker
 # compose — a literal $ must be doubled or compose silently mangles it (same
 # trap as DEV_PORTAL_AUTH_HASH; see DEPLOYMENT.md §Developer Portal).
-ENV_NAME="$(printf '%s' "$REG_NAME" | sed -e 's/\$/$$/g')"
-ENV_CITY="$(printf '%s' "$REG_CITY" | sed -e 's/\$/$$/g')"
+# One function rather than the same sed script written out per value: it is now
+# applied to four fields, and a rule that is copied is a rule that drifts.
+compose_escape() { local text="$1"; printf '%s' "$text" | sed -e 's/\$/$$/g'; }
+ENV_NAME="$(compose_escape "$REG_NAME")"
+ENV_CITY="$(compose_escape "$REG_CITY")"
+# Same treatment for the partner credit: `partner_name` is free text from the registry
+# and lands in the same interpolated file. (The URL is already shape-checked to a bare
+# https host, so it cannot contain a `$` — it is escaped anyway rather than relying on
+# a rule enforced two hundred lines away.)
+ENV_PARTNER_NAME="$(compose_escape "$PARTNER_NAME")"
+ENV_PARTNER_URL="$(compose_escape "$PARTNER_URL")"
 
 echo "==> Tenant .env"
 FRESH_ENV=0
@@ -654,6 +770,17 @@ if [[ " ${REG_MODULES//,/ } " == *" online-payments "* ]]; then
 else
   set_env_line STRIPE_ENABLED "false"
 fi
+
+# Partner attribution, written on EVERY run (fresh AND existing) for the reason the
+# Stripe lines are: it legitimately drifts, and the direction that matters is REMOVAL.
+# A tenant that asks for its partner's credit to come off gets `partner_attribution:
+# false` in the registry and a re-provision — and an implementation that only wrote
+# these lines when a partner was present would leave the old values sitting in the .env
+# and the credit on the page, with a green provision saying it had been applied.
+# Both values are already resolved (§11d2): they are empty together or set together, and
+# empty means display nothing.
+set_env_line TENANT_PARTNER_NAME "$ENV_PARTNER_NAME"
+set_env_line TENANT_PARTNER_URL "$ENV_PARTNER_URL"
 
 echo "==> Tenant app-secrets.json"
 if [[ -f "$TENANT_DIR/app-secrets.json" ]]; then

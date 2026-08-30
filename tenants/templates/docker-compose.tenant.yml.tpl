@@ -133,6 +133,26 @@ services:
       # are served to the frontend from the backend rather than baked as NEXT_PUBLIC_*.
       Modules__Enabled: "${TENANT_MODULES:-}"
       Modules__Enforce: "${TENANT_MODULES_ENFORCE:-false}"
+      # Partner attribution (SOFRA-PARTNER-PLAN §11d, channel C) — the same shape as
+      # Modules__Enabled above, and for the same reason: the footer credit is
+      # operator-controlled per-tenant data, so it rides a re-provision plus a container
+      # recreate rather than a per-tenant frontend image rebuild. The backend serves it
+      # from GET /api/tenant/partner.
+      #
+      # These two lines are the whole of the carriage between the .env and the running
+      # container, and their absence is SILENT: provision-tenant.sh can write
+      # TENANT_PARTNER_NAME perfectly, the endpoint can be correct, and the footer simply
+      # never appears because nothing bound the value.
+      #
+      # EMPTY IS THE MEANINGFUL VALUE here, unlike Modules__Enabled. provision-tenant.sh
+      # resolves `partner_attribution` and writes both .env lines EMPTY when the credit is
+      # off, so empty means DISPLAY NOTHING — identical to a tenant with no partner. The
+      # `:-` defaults therefore also cover a tenant provisioned before these keys existed,
+      # whose .env has no such lines: it displays nothing, which is what it displays today.
+      # (Empty and absent are the same thing to the .NET binder, which is what makes
+      # switching attribution off actually remove the credit.)
+      Partner__Name: "${TENANT_PARTNER_NAME:-}"
+      Partner__Url: "${TENANT_PARTNER_URL:-}"
       # Fleet observability (Track S) — this tenant's backend pushes its device roster +
       # missed-order/error counts to sofra's /admin/fleet. The shared secret + Sentry DSN
       # are flowed from the box .env into the tenant .env by provision-tenant.sh; the slug
