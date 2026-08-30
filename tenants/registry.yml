@@ -193,7 +193,32 @@
 #             Editing any of the three changes nothing until you RE-PROVISION that tenant
 #             (the container recreate is the part that applies it), exactly as `modules`
 #             above. No image rebuild: the footer reads it from the backend at runtime.
+#   frontend_refresh_blocked: OPTIONAL free-text reason. PRESENCE acknowledges that this
+#             tenant CANNOT currently be refreshed by the frontend release chain
+#             (frontend repo release-tenant-images.yml -> list-release-tenants.sh), which
+#             downgrades its refusal from a failed run to a loud, listed warning. The
+#             VALUE is the reason and what unblocks it — there is no boolean, because an
+#             entry that cannot say why it is blocked is not acknowledged, it is ignored.
+#             DELETE THE KEY to re-arm the alarm; forgetting to delete it is the only way
+#             to stay quiet, which is the right direction for that mistake to point.
+#             Only reason it exists: an alarm that is red for weeks because a third party
+#             has not acted stops being an alarm. See obresse below, the case it was
+#             written for.
 #   status:   provisioning -> active -> retired (descriptive; keep honest)
+#
+#   ── Which tenants a FRONTEND release reaches (2026-08-30) ─────────────────────────
+#   A frontend tenant image is NOT re-pullable: NEXT_PUBLIC_* are baked at BUILD time, so
+#   every tenant needs its own rebuild of the released source. Until 2026-08-30 nothing
+#   did that after provisioning, and two real reseller tenants sat a release and eleven
+#   days behind while their registry entries were perfectly correct. `list-release-tenants.sh`
+#   now derives the set from THIS FILE on every frontend release to main; a tenant is
+#   included when it is `managed: scripts`, `status: active` and `backend_tag: latest`
+#   (riding released backend = wanting released code; a develop showcase like `demo` is
+#   rebuilt by the frontend's build-demo-tenant.yml instead).
+#
+#   AND ITS `domain` MUST RESOLVE. A refresh re-BAKES that hostname as the bundle's
+#   origin, so it is not a safe no-op: pointing it at a name that does not exist replaces
+#   a working tenant with a dead one. An unresolvable domain refuses the tenant loudly.
 
 version: 1
 
@@ -316,6 +341,24 @@ tenants:
     # whose QR codes 404 is worse than one that never moved. Rides our wildcard, so
     # it needs no record of its own.
     domain_aliases: [obresse.sofrapiwas.com]
+    # ⚠ THE MOVE ABOVE HAS NEVER BEEN APPLIED TO THE BOX, and that is deliberate as of
+    # 2026-08-30. `obresse.solutioneva.com` has no A record — the partner has not
+    # published it — so the box still serves this tenant on the pre-move alias, proven
+    # by the running bundle's own baked CSP (`connect-src … https://obresse.sofrapiwas.com`).
+    # It is stale (frontend cd395d7, 2026-08-19) and it is WORKING.
+    #
+    # Do NOT "fix" it by rebuilding: a frontend image bakes `domain` as
+    # NEXT_PUBLIC_API_URL, so a rebuild from this entry would swap a working bundle for
+    # one whose every call goes to a name that does not exist, on a host ACME can never
+    # certify. Owner decision, recorded: leave it stale — stale-but-working beats dead.
+    # Do NOT pin it back to the alias either; that contradicts the entry and recreates
+    # exactly the mislabelled-entry drift the domain_mode cross-check exists to prevent.
+    # The unblock is the PARTNER publishing `A obresse.solutioneva.com -> the staging box`,
+    # then a re-provision; it is an owner/partner action, not a build action.
+    frontend_refresh_blocked: >-
+      2026-08-30 — obresse.solutioneva.com has no A record (partner has not published it),
+      so the automated frontend release refresh would bake an unresolvable origin and kill
+      a live tenant. Leave stale until the record exists, then DELETE this key.
     db: tenant_obresse
     db_role: tenant_obresse
     compose_project: tenant-obresse
