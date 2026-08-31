@@ -322,12 +322,18 @@ tenants:
     admin_email: mahmutkaya.nl+smoke@gmail.com
     city: Amsterdam
 
-  # Reseller tenant — partner Mustafa Vural (Solution Eva). Full-service bundle
-  # + extra-languages; `online-payments` deliberately absent (needs the restaurant's
-  # own Stripe connected account + KYC first — runbook §2b/§2b.5).
+  # Reseller tenant — partner Mustafa Vural (Solution Eva). RETIRED 2026-08-31:
+  # the restaurant is not going live on the platform (the move to his own zone was
+  # never even applied — see the git history of this block for the 2026-08-30
+  # stale-but-working standoff). Torn down the same day via
+  # deprovision-tenant.sh obresse --drop-db --purge, which archived DB + uploads
+  # into /opt/rumi/backups/archive on the 24-month clock first. The entry stays
+  # (retired, like `smoke`) to keep the record honest and reserve the slug;
+  # the frontend_refresh_blocked key died with the retirement — a retired tenant
+  # is owed nothing by any release chain.
   obresse:
     name: O'Bresse
-    status: active
+    status: retired
     managed: scripts
     box: staging
     # Moved onto the PARTNER's own zone 2026-08-21 at his request (§D1 — the first
@@ -341,24 +347,6 @@ tenants:
     # whose QR codes 404 is worse than one that never moved. Rides our wildcard, so
     # it needs no record of its own.
     domain_aliases: [obresse.sofrapiwas.com]
-    # ⚠ THE MOVE ABOVE HAS NEVER BEEN APPLIED TO THE BOX, and that is deliberate as of
-    # 2026-08-30. `obresse.solutioneva.com` has no A record — the partner has not
-    # published it — so the box still serves this tenant on the pre-move alias, proven
-    # by the running bundle's own baked CSP (`connect-src … https://obresse.sofrapiwas.com`).
-    # It is stale (frontend cd395d7, 2026-08-19) and it is WORKING.
-    #
-    # Do NOT "fix" it by rebuilding: a frontend image bakes `domain` as
-    # NEXT_PUBLIC_API_URL, so a rebuild from this entry would swap a working bundle for
-    # one whose every call goes to a name that does not exist, on a host ACME can never
-    # certify. Owner decision, recorded: leave it stale — stale-but-working beats dead.
-    # Do NOT pin it back to the alias either; that contradicts the entry and recreates
-    # exactly the mislabelled-entry drift the domain_mode cross-check exists to prevent.
-    # The unblock is the PARTNER publishing `A obresse.solutioneva.com -> the staging box`,
-    # then a re-provision; it is an owner/partner action, not a build action.
-    frontend_refresh_blocked: >-
-      2026-08-30 — obresse.solutioneva.com has no A record (partner has not published it),
-      so the automated frontend release refresh would bake an unresolvable origin and kill
-      a live tenant. Leave stale until the record exists, then DELETE this key.
     db: tenant_obresse
     db_role: tenant_obresse
     compose_project: tenant-obresse
