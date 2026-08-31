@@ -106,7 +106,14 @@ jobs:
     # registry (managed / box / archive-before-destroy) as defence in depth.
     name: teardown a tenant on the staging box
     needs: sync-registry
-    if: ${{ inputs.deprovision_slug != '' }}
+    # Ignition via REPOSITORY VARIABLES (vars.TEARDOWN_SLUG / TEARDOWN_MODE /
+    # TEARDOWN_CONFIRM) or dispatch inputs. Vars exist because GitHub's workflow
+    # metadata pipeline was stuck on 2026-08-31: dispatch INPUTS 422'd against a
+    # definition cached from before this job existed, while `vars` is served fresh
+    # and a PLAIN no-inputs dispatch is schema-compatible with that old cache.
+    # One-shot by construction: the operator deletes the three variables as soon
+    # as the run lands. The script's on-box guards are unaffected.
+    if: ${{ vars.TEARDOWN_SLUG != '' || inputs.deprovision_slug != '' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -115,9 +122,9 @@ jobs:
       - name: Validate teardown inputs
         id: args
         env:
-          RAW_SLUG: ${{ inputs.deprovision_slug }}
-          CONFIRM: ${{ inputs.deprovision_confirm }}
-          MODE: ${{ inputs.deprovision_mode }}
+          RAW_SLUG: ${{ inputs.deprovision_slug || vars.TEARDOWN_SLUG }}
+          CONFIRM: ${{ inputs.deprovision_confirm || vars.TEARDOWN_CONFIRM }}
+          MODE: ${{ inputs.deprovision_mode || vars.TEARDOWN_MODE }}
         run: |
           if [[ ! "$RAW_SLUG" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; then
             echo "::error::invalid slug (must match ^[a-z0-9][a-z0-9-]{1,30}\$)"
