@@ -1,4 +1,4 @@
-name: deprovision-tenant
+name: deprovision-tenant  # (re-)registered with Actions by the push that touched this file on main
 
 # The tear-down counterpart to provision-tenant.yml. Runs
 # `deprovision-tenant.sh <slug>` on the STAGING box over SSH, reusing the same
