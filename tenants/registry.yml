@@ -327,7 +327,8 @@ tenants:
   # never even applied — see the git history of this block for the 2026-08-30
   # stale-but-working standoff). Torn down the same day via
   # deprovision-tenant.sh obresse --drop-db --purge, which archived DB + uploads
-  # into /opt/rumi/backups/archive on the 24-month clock first. The entry stays
+  # into /opt/rumi/backups/archive on the 24-month clock first (executed 2026-08-31
+  # via the sync workflow's [teardown:] path). The entry stays
   # (retired, like `smoke`) to keep the record honest and reserve the slug;
   # the frontend_refresh_blocked key died with the retirement — a retired tenant
   # is owed nothing by any release chain.

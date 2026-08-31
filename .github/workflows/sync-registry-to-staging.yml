@@ -29,7 +29,7 @@ name: sync-registry-to-staging
 
 on:
   push:
-    branches: [develop]
+    branches: [develop, main]
     paths:
       - "tenants/registry.yml"
   workflow_dispatch:
