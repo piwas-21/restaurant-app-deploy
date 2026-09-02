@@ -27,6 +27,7 @@ bad()  { printf '  FAIL %s\n' "$1"; fail=1; }
 FNS="$TMP/fns.sh"
 sed -n '/^# --- BEGIN pull_service/,/^# --- END pull_service/p' "$SCRIPT" > "$FNS"
 grep -q 'pull_service()' "$FNS" || { echo "extraction failed — did the markers move?"; exit 1; }
+grep -q 'roll_service()' "$FNS" || { echo "extraction failed — did the markers move?"; exit 1; }
 
 # A `docker` stub whose behaviour is driven by files, so each scenario is one line of setup.
 #   $TMP/compose_pull_fails_until  compose pull fails while the attempt counter is below this
@@ -106,18 +107,54 @@ else
 fi
 
 echo "an unresolvable service name is refused rather than guessed at:"
+# The direct pull SUCCEEDS in this stub, deliberately. With it failing too, the refusal comes from
+# the failed pull and the `[[ -z "$image" ]]` guard is never the thing under test — deleting that
+# guard outright still passed. Now only the guard can produce this result.
 reset 99 yes
 cat > "$TMP/bin/docker" <<'STUB'
 #!/usr/bin/env bash
 [[ "${1:-}" == "compose" && "${2:-}" == "config" ]] && exit 1   # no image resolves
 [[ "${1:-}" == "compose" ]] && exit 1                            # compose pull always fails
-exit 1
+[[ "${1:-}" == "pull" ]] && exit 0                               # a direct pull WOULD work
+exit 0
 STUB
 chmod +x "$TMP/bin/docker"
 if pull_service "$TMP/tenant" frontend-nope >/dev/null 2>&1; then
   bad  "returned success although no image could even be resolved"
 else
   pass "returns non-zero when the service has no resolvable image"
+fi
+
+echo "the ROLL never goes back to the registry — the whole point of the retry above:"
+# This is the call site the previous round left untested, and it is where the 2026-09-02 incident
+# actually lived: both tenant services declare `pull_policy: always`, so a bare `up -d` pulls again
+# and the flaky handshake kills the roll anyway. The stub below FAILS every registry-touching
+# invocation, so the only way this can pass is if the roll asks for none.
+: > "$TMP/calls"
+cat > "$TMP/bin/docker" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$TMPDIR_FOR_STUB/calls"
+# A dead registry: anything that would reach out fails.
+for a in "$@"; do [[ "$a" == "--pull" ]] && seen_pull_flag=1; done
+if [[ "${1:-}" == "pull" ]] || { [[ "${1:-}" == "compose" && "${2:-}" == "pull" ]]; }; then exit 1; fi
+if [[ "${1:-}" == "compose" && "${2:-}" == "up" && "${seen_pull_flag:-}" != "1" ]]; then exit 1; fi
+exit 0
+STUB
+chmod +x "$TMP/bin/docker"
+if roll_service "$TMP/tenant" frontend-acme >/dev/null 2>&1; then
+  pass "the roll succeeds against a dead registry"
+else
+  bad  "the roll tried to reach the registry: $(calls)"
+fi
+if grep -q -- '--pull never' "$TMP/calls"; then
+  pass "it passes --pull never"
+else
+  bad  "no --pull never in the roll: $(calls)"
+fi
+if grep -q -- '--no-deps' "$TMP/calls"; then
+  pass "it passes --no-deps, so a frontend roll does not drag the backend image through GHCR"
+else
+  bad  "no --no-deps in the roll: $(calls)"
 fi
 
 exit "$fail"

@@ -114,4 +114,18 @@ else
   bad  "expected minutes for today's dump, got '$age_new'"
 fi
 
+# An ARCHIVE carries its stamp on the DIRECTORY — `archive/<slug>/<stamp>/db.sql.gz` — so reading
+# the basename alone silently falls through to mtime. That is worst exactly where it matters most:
+# a departed tenant's archive rsynced back from cold storage has a copy-time mtime, and the age
+# line exists to make a stale pick visible.
+ARCH_STAMP="$(stamp_days_ago 32)"
+mkdir -p "$ARCHIVE_DIR/$SLUG/$ARCH_STAMP"
+: > "$ARCHIVE_DIR/$SLUG/$ARCH_STAMP/db.sql.gz"
+age_arch="$(artifact_age "$ARCHIVE_DIR/$SLUG/$ARCH_STAMP/db.sql.gz")"
+if [[ "$age_arch" == "32d ago" ]]; then
+  pass "an archive's db.sql.gz reports 32d from its directory stamp, not 0m from mtime"
+else
+  bad  "expected '32d ago' from the archive directory stamp, got '$age_arch'"
+fi
+
 exit "$fail"

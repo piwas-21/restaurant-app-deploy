@@ -59,9 +59,16 @@ bk_slug_ok "$SLUG" || bk_die "slug must be lowercase [a-z0-9-], 2-31 chars"
 # falls back to the basename behind a '0000' prefix, so it still sorts deterministically — last,
 # where something unrecognised belongs — instead of vanishing from the list.
 artifact_stamp() { # <path> -> sortable key
-  local base; base="$(basename "$1")"
-  if [[ "$base" =~ ([0-9]{8}T[0-9]{6}Z) ]]; then printf '%s' "${BASH_REMATCH[1]}"
-  else printf '0000%s' "$base"; fi
+  local base parent
+  base="$(basename "$1")"
+  if [[ "$base" =~ ([0-9]{8}T[0-9]{6}Z) ]]; then printf '%s' "${BASH_REMATCH[1]}"; return; fi
+  # An ARCHIVE's stamp is on its directory, not on the file inside it: the path is
+  # `archive/<slug>/<stamp>/db.sql.gz`, so the basename alone reads `db.sql.gz` and the age would
+  # silently fall through to mtime — on exactly the population (departed tenants, copies rsynced
+  # back from cold storage) where mtime is least trustworthy.
+  parent="$(basename "$(dirname "$1")")"
+  if [[ "$parent" =~ ([0-9]{8}T[0-9]{6}Z) ]]; then printf '%s' "${BASH_REMATCH[1]}"; return; fi
+  printf '0000%s' "$base"
 }
 
 # How long ago the artifact was taken, read from the stamp in its name so it survives a copy

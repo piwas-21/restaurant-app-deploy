@@ -75,17 +75,24 @@ fi
 # avoid is recreating from whatever happens to be in the local cache, which would report success
 # while leaving the tenant stale, and staleness is the exact thing this script exists to end.
 #
-# Linear backoff, 10s then 20s. Overridable so the unit test can run at zero and so an operator can
-# widen it from the shell during a bad spell, without editing a script that only reaches the box
-# through a deploy release.
+# Linear backoff BETWEEN attempts — 10s after the first failure, 20s after the second, and
+# nothing after the third, because nothing follows it. Overridable so the unit test runs at zero
+# and an operator can widen it from the shell during a bad spell, without editing a script that
+# only reaches the box through a deploy release. Validated: a typo like `10s` would make the
+# arithmetic fail and silently drop the backoff to three instant attempts.
 PULL_BACKOFF_BASE="${PULL_BACKOFF_BASE:-10}"
+[[ "$PULL_BACKOFF_BASE" =~ ^[0-9]+$ ]] || { echo "ERROR: PULL_BACKOFF_BASE must be an integer (got '$PULL_BACKOFF_BASE')" >&2; exit 2; }
 
+# CALL IT AS A CONDITION (`if pull_service …`), never bare. That suppresses errexit through the
+# whole call, which is what stops the `image="$(… | head -1)"` assignment below from aborting the
+# entire script under `pipefail` when `docker compose config` exits non-zero — and what keeps one
+# tenant's failure from taking the rest of the loop with it.
 pull_service() { # <dir> <svc> -> 0 when the service's image is present AND current
   local dir="$1" svc="$2" try image
   for try in 1 2 3; do
     (cd "$dir" && docker compose pull "$svc") && return 0
     echo "   pull attempt ${try}/3 for ${svc} failed" >&2
-    sleep $(( try * PULL_BACKOFF_BASE ))
+    (( try < 3 )) && sleep $(( try * PULL_BACKOFF_BASE ))
   done
 
   # `docker compose pull` re-resolves the manifest against the registry EVEN WHEN THE TAG IS
@@ -105,6 +112,24 @@ pull_service() { # <dir> <svc> -> 0 when the service's image is present AND curr
   echo "   direct pull of ${image} failed too" >&2
   return 1
 }
+
+# Recreate the container onto the image pull_service just secured, WITHOUT going back to the
+# registry.
+#
+# `--pull never` is load-bearing, not caution. Both tenant services declare `pull_policy: always`
+# (tenants/templates/docker-compose.tenant.yml.tpl), so a plain `up -d` re-enters the very registry
+# path pull_service just fought its way past — and the 2026-09-02 incident reproduces in full, now
+# with the retry's sleeps in front of it. The tag has already been updated, so compose still
+# recreates on the image-id change; a roll that changes nothing stays a no-op, which is why
+# `--force-recreate` is deliberately absent.
+#
+# `--no-deps` because a frontend roll otherwise starts `backend-<slug>` too, dragging ITS
+# `pull_policy: always` through the registry — an image this call never guarded, so a flaky GHCR on
+# the backend would fail a frontend-only roll.
+roll_service() { # <dir> <svc>
+  (cd "$1" && docker compose up -d --no-deps --pull never "$2")
+  return $?
+}
 # --- END pull_service ---
 
 FAILED=""
@@ -119,7 +144,7 @@ for SLUG in $SLUGS; do
   echo "==> Refresh ${SVC} (${DIR})"
   # Per-tenant failure must not abort the others, but must be reported: a silent
   # skip is the exact failure mode this script exists to end.
-  if pull_service "$DIR" "$SVC" && (cd "$DIR" && docker compose up -d "$SVC"); then
+  if pull_service "$DIR" "$SVC" && roll_service "$DIR" "$SVC"; then
     echo "   ${SVC} up to date"
   else
     echo "   ERROR: refreshing ${SVC} failed" >&2
