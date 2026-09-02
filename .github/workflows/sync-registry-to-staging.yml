@@ -107,13 +107,23 @@ jobs:
     name: teardown a tenant on the staging box
     needs: sync-registry
     # Ignition via REPOSITORY VARIABLES (vars.TEARDOWN_SLUG / TEARDOWN_MODE /
-    # TEARDOWN_CONFIRM) or dispatch inputs. Vars exist because GitHub's workflow
-    # metadata pipeline was stuck on 2026-08-31: dispatch INPUTS 422'd against a
-    # definition cached from before this job existed, while `vars` is served fresh
-    # and a PLAIN no-inputs dispatch is schema-compatible with that old cache.
-    # One-shot by construction: the operator deletes the three variables as soon
-    # as the run lands. The script's on-box guards are unaffected.
-    if: ${{ vars.TEARDOWN_SLUG != '' || inputs.deprovision_slug != '' }}
+    # TEARDOWN_CONFIRM) or dispatch inputs. Vars exist because on 2026-08-31 dispatch
+    # INPUTS 422'd against a definition cached from before this job existed, while
+    # `vars` is served fresh and a PLAIN no-inputs dispatch is schema-compatible with
+    # that old cache.
+    #
+    # `github.event_name == 'workflow_dispatch'` is the load-bearing half of this
+    # condition, and it is not decoration. A repo VARIABLE persists until someone
+    # deletes it, but this workflow also fires on every push to develop/main that
+    # touches registry.yml — and a registry push is exactly what every tenant
+    # provisioning produces. The original note here said the vars were "one-shot by
+    # construction: the operator deletes the three variables as soon as the run
+    # lands", which is a claim about operator memory, not about construction: a
+    # forgotten var would have turned the next routine provisioning merge into an
+    # unrequested `--drop-db --purge` of whichever slug was still stored. Requiring a
+    # dispatch makes the ignition per-run for real, because a `push` event cannot
+    # satisfy it however stale the vars are. The script's on-box guards are unaffected.
+    if: ${{ github.event_name == 'workflow_dispatch' && (vars.TEARDOWN_SLUG != '' || inputs.deprovision_slug != '') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
