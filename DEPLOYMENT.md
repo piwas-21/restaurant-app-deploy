@@ -734,6 +734,26 @@ the day it is registered — no workflow edit, no hardcoded slug. Nothing matche
 is a clean exit 0; a tenant that fails to roll is reported and exits non-zero
 (the point is to stop being silent).
 
+**It survives a flaky GHCR, and never lies about it.** The box's link to ghcr.io is
+intermittently bad — measured 2026-09-02, 2 of 5 TLS handshakes hung past 25s while 3
+finished under a second, with DNS, load and disk clean; a frontend release reached prod and
+then failed to roll kebabdilhan twice, including on a re-run. So the pull is retried three
+times (linear backoff, `PULL_BACKOFF_BASE=10` by default and overridable from the shell),
+and then falls back to a plain `docker pull`: **`docker compose pull` re-resolves the
+manifest against the registry even when the tag is already local**, so it fails where a
+direct pull of the same image succeeds. The fallback returns success only when that direct
+pull worked — a tenant is never reported as rolled while still running the old image.
+
+If it still cannot fetch, do it by hand and **confirm by image id, not by exit code**:
+
+```bash
+for i in 1 2 3 4 5; do docker pull -q <image> && break; sleep 10; done
+docker compose -p tenant-<slug> -f /opt/rumi/tenants/<slug>/docker-compose.yml \
+  up -d --no-deps --force-recreate --pull never frontend-<slug>
+docker inspect tenant-<slug>-frontend-<slug>-1 --format '{{.Image}}'   # must equal…
+docker images --no-trunc --format '{{.ID}}' <image>                    # …this
+```
+
 **Both callers live in the backend repo, and both run on the STAGING box** —
 that is where every `managed: scripts` tenant lives, because it is where the
 control plane runs:
@@ -1276,6 +1296,14 @@ of `CREATE TABLE` statements in the dump** (a truncated dump fails this even whe
 quietly); and the rows are counted and reported. It then drops the scratch database — and
 the placeholder role it may have had to invent, because a departed tenant's role was
 dropped with its database — on a trap, so a failed rehearsal leaves nothing behind either.
+
+`--from latest` means **the newest DUMP by the timestamp in its name**, and the resolved
+artifact is printed with its age (`taken 4h ago`) so a stale pick is visible without running
+`--list`. Ordering by filename was the bug here until 2026-09-02: a dump is
+`<slug>-<kind>-<stamp>.sql.gz`, so `manual` and `scheduled` sorted before the timestamp and a
+manual dump taken seconds before a risky change lost to a scheduled one from the week before.
+Archives are a **separate** question — `--from archive:latest` — because they are named by the
+stamp alone and belong to departed tenants.
 
 **Weekly, unmocked, against the real staging box:** `.github/workflows/backup-rehearsal.yml`
 (Tuesdays 05:23 UTC), the same precedent as `provisioning-smoke.yml`. That workflow proves a

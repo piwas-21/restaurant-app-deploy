@@ -54,13 +54,62 @@ bk_slug_ok "$SLUG" || bk_die "slug must be lowercase [a-z0-9-], 2-31 chars"
 [[ -f .env ]] || bk_die "box .env missing (run from /opt/rumi/deploy)"
 
 # ── what is restorable, newest first ────────────────────────────────────────────────
+# --- BEGIN artifact ordering (extracted verbatim by tests/restore-artifact-order.sh) ---
+# The UTC stamp an artifact carries in its own name (…-20260902T131529Z…). An unexpected name
+# falls back to the basename behind a '0000' prefix, so it still sorts deterministically — last,
+# where something unrecognised belongs — instead of vanishing from the list.
+artifact_stamp() { # <path> -> sortable key
+  local path="$1" base parent
+  base="$(basename "$path")"
+  if [[ "$base" =~ ([0-9]{8}T[0-9]{6}Z) ]]; then printf '%s' "${BASH_REMATCH[1]}"; return; fi
+  # An ARCHIVE's stamp is on its directory, not on the file inside it: the path is
+  # `archive/<slug>/<stamp>/db.sql.gz`, so the basename alone reads `db.sql.gz` and the age would
+  # silently fall through to mtime — on exactly the population (departed tenants, copies rsynced
+  # back from cold storage) where mtime is least trustworthy.
+  parent="$(basename "$(dirname "$path")")"
+  if [[ "$parent" =~ ([0-9]{8}T[0-9]{6}Z) ]]; then printf '%s' "${BASH_REMATCH[1]}"; return; fi
+  printf '0000%s' "$base"
+}
+
+# How long ago the artifact was taken, read from the stamp in its name so it survives a copy
+# that did not preserve mtime. Falls back to the filesystem when the name carries no stamp.
+artifact_age() { # <path> -> human string
+  local path="$1" stamp epoch now delta
+  stamp="$(artifact_stamp "$path")"
+  if [[ "$stamp" =~ ^[0-9]{8}T[0-9]{6}Z$ ]]; then
+    epoch="$(python3 -c 'import datetime,sys; print(int(datetime.datetime.strptime(sys.argv[1], "%Y%m%dT%H%M%SZ").replace(tzinfo=datetime.timezone.utc).timestamp()))' "$stamp" 2>/dev/null || echo '')"
+  fi
+  [[ -n "${epoch:-}" ]] || epoch="$(python3 -c 'import os,sys; print(int(os.path.getmtime(sys.argv[1])))' "$path" 2>/dev/null || echo 0)"
+  now="$(date -u +%s)"
+  delta=$(( now - epoch ))
+  (( delta < 0 )) && delta=0
+  if   (( delta < 3600  )); then printf '%dm ago' $(( delta / 60 ))
+  elif (( delta < 86400 )); then printf '%dh ago' $(( delta / 3600 ))
+  else                           printf '%dd ago' $(( delta / 86400 )); fi
+}
+
 list_artifacts() {
   local d="${TENANT_DUMP_DIR}/${SLUG}"
-  [[ -d "$d" ]] && find "$d" -maxdepth 1 -type f -name '*.sql.gz' | sort -r
+  # Ordered by the stamp EMBEDDED IN THE NAME, never by the name itself. A dump is
+  # `<slug>-<kind>-<stamp>.sql.gz`, so the KIND sorts ahead of the timestamp and a plain
+  # `sort -r` puts every `scheduled-…` above every `manual-…`: a manual dump taken seconds
+  # before a risky change lost to a scheduled one from a week earlier, and `--from latest`
+  # silently restored the older file. That is the one place a wrong-but-plausible answer
+  # costs the most.
+  if [[ -d "$d" ]]; then
+    find "$d" -maxdepth 1 -type f -name '*.sql.gz' -print0 \
+      | while IFS= read -r -d '' f; do printf '%s\t%s\n' "$(artifact_stamp "$f")" "$f"; done \
+      | sort -r | cut -f2-
+  fi
+  # Archive directories are named by the stamp ALONE (`archive/<slug>/<stamp>/`), so their
+  # plain sort is already chronological. Left exactly as it was rather than churned — the bug
+  # above is specific to the name shape that carries a kind, and a "fix" here would be a
+  # change with nothing behind it.
   d="${ARCHIVE_DIR}/${SLUG}"
   [[ -d "$d" ]] && find "$d" -mindepth 1 -maxdepth 1 -type d | sort -r
   return 0
 }
+# --- END artifact ordering ---
 
 if $LIST; then
   bk_log "restorable artifacts for '${SLUG}'"
@@ -98,7 +147,9 @@ resolve_from() {
 
 FILE="$(resolve_from "$FROM")"
 REF="${FILE#"${BACKUP_ROOT}"/}"
-bk_log "artifact: ${REF} ($(bk_size "$FILE") bytes)"
+# The AGE, not just the name: `--from latest` resolves silently, and an unexpectedly stale pick
+# is exactly what this line makes visible without anyone thinking to run --list first.
+bk_log "artifact: ${REF} ($(bk_size "$FILE") bytes, taken $(artifact_age "$FILE"))"
 
 # ── 1. the stream is intact ─────────────────────────────────────────────────────────
 echo "==> gzip integrity"
