@@ -29,10 +29,30 @@ name: sync-registry-to-staging
 
 on:
   push:
-    branches: [develop]
+    branches: [develop, main]
     paths:
       - "tenants/registry.yml"
   workflow_dispatch:
+    inputs:
+      deprovision_slug:
+        description: "OPTIONAL teardown: registry slug to deprovision after the sync (empty = sync only)"
+        required: false
+        type: string
+        default: ""
+      deprovision_mode:
+        description: "How much to remove (see deprovision-tenant.sh)"
+        required: false
+        type: choice
+        default: teardown
+        options:
+          - teardown
+          - drop-db
+          - purge
+      deprovision_confirm:
+        description: "REQUIRED iff a slug is given: re-type the slug to confirm"
+        required: false
+        type: string
+        default: ""
 
 concurrency:
   # Shares sync-to-staging.yml's group: two rsyncs into /opt/rumi/deploy at once
@@ -72,3 +92,91 @@ jobs:
           rsync -az --human-readable --itemize-changes \
             -e "ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes -o ConnectTimeout=15" \
             ./tenants/registry.yml "${STAGING_USER}@${STAGING_HOST}:/opt/rumi/deploy/tenants/registry.yml"
+
+  teardown:
+    # The on-box half of deprovision-tenant.sh, piggybacked on THIS workflow because
+    # GitHub never registered the standalone deprovision-tenant.yml (#166/#167/#168/#169:
+    # added, touched, removed and re-added by pushes to main — the Actions workflow index
+    # still 404s it). Registered workflows re-read their file from the default branch on
+    # every dispatch, so the guarded job here is the path that actually runs. Delete this
+    # job (and dispatch the standalone file instead) the day the index catches up.
+    #
+    # Guards mirror deprovision-tenant.yml: grammar-gated slug, confirm must re-type it,
+    # mode maps to the script's own escalation, and the script re-validates the on-box
+    # registry (managed / box / archive-before-destroy) as defence in depth.
+    name: teardown a tenant on the staging box
+    needs: sync-registry
+    # Ignition via REPOSITORY VARIABLES (vars.TEARDOWN_SLUG / TEARDOWN_MODE /
+    # TEARDOWN_CONFIRM) or dispatch inputs. Vars exist because on 2026-08-31 dispatch
+    # INPUTS 422'd against a definition cached from before this job existed, while
+    # `vars` is served fresh and a PLAIN no-inputs dispatch is schema-compatible with
+    # that old cache.
+    #
+    # `github.event_name == 'workflow_dispatch'` is the load-bearing half of this
+    # condition, and it is not decoration. A repo VARIABLE persists until someone
+    # deletes it, but this workflow also fires on every push to develop/main that
+    # touches registry.yml — and a registry push is exactly what every tenant
+    # provisioning produces. The original note here said the vars were "one-shot by
+    # construction: the operator deletes the three variables as soon as the run
+    # lands", which is a claim about operator memory, not about construction: a
+    # forgotten var would have turned the next routine provisioning merge into an
+    # unrequested `--drop-db --purge` of whichever slug was still stored. Requiring a
+    # dispatch makes the ignition per-run for real, because a `push` event cannot
+    # satisfy it however stale the vars are. The script's on-box guards are unaffected.
+    if: ${{ github.event_name == 'workflow_dispatch' && (vars.TEARDOWN_SLUG != '' || inputs.deprovision_slug != '') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 20
+    steps:
+      - name: Validate teardown inputs
+        id: args
+        env:
+          RAW_SLUG: ${{ inputs.deprovision_slug || vars.TEARDOWN_SLUG }}
+          CONFIRM: ${{ inputs.deprovision_confirm || vars.TEARDOWN_CONFIRM }}
+          MODE: ${{ inputs.deprovision_mode || vars.TEARDOWN_MODE }}
+        run: |
+          if [[ ! "$RAW_SLUG" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; then
+            echo "::error::invalid slug (must match ^[a-z0-9][a-z0-9-]{1,30}\$)"
+            exit 1
+          fi
+          if [[ "$CONFIRM" != "$RAW_SLUG" ]]; then
+            echo "::error::deprovision_confirm does not match the slug — type it exactly to confirm"
+            exit 1
+          fi
+          case "$MODE" in
+            teardown) FLAGS='' ;;
+            drop-db)  FLAGS='--drop-db' ;;
+            purge)    FLAGS='--drop-db --purge' ;;
+            *) echo "::error::unknown mode $MODE"; exit 1 ;;
+          esac
+          {
+            echo "slug=$RAW_SLUG"
+            echo "flags=$FLAGS"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Configure SSH (pinned host key)
+        env:
+          STAGING_SSH_KEY: ${{ secrets.STAGING_SSH_KEY }}
+          STAGING_KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$STAGING_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$STAGING_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Run deprovision-tenant.sh on the box
+        env:
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          SLUG: ${{ steps.args.outputs.slug }}
+          FLAGS: ${{ steps.args.outputs.flags }}
+        run: |
+          # FLAGS is built above from the closed mode choice — never from raw input.
+          # shellcheck disable=SC2086
+          ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes \
+            -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=15 \
+            "${STAGING_USER}@${STAGING_HOST}" \
+            "cd /opt/rumi/deploy && ./deprovision-tenant.sh '${SLUG}' ${FLAGS}"

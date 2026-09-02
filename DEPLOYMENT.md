@@ -679,6 +679,21 @@ bash .ssh/staging.sh 'cd /opt/rumi/deploy && ./deprovision-tenant.sh <slug> --dr
 Then flip the tenant's `status` in `tenants/registry.yml` in git — scripts
 never edit the registry.
 
+The same teardown runs from GitHub as a **`deprovision-tenant.yml` dispatch** (slug,
+a `confirm` that must re-type the slug, and a mode of `teardown` / `drop-db` /
+`purge`). That workflow 404'd from the Actions index for weeks and the reason turned
+out to be mundane: **GitHub registers `workflow_dispatch` workflows from the DEFAULT
+branch**, which here is `develop`, and the file had only ever been merged to `main`.
+It became dispatchable once `main` was back-merged into `develop`. If a workflow you
+just added will not dispatch, check which branch it is on before looking for anything
+subtler.
+
+`sync-registry-to-staging.yml` carries a duplicate `teardown` job from the period when
+the standalone one could not be dispatched. It now requires a `workflow_dispatch`
+event, so a routine registry push cannot reach it whatever `vars.TEARDOWN_*` still
+hold. Prefer the standalone workflow; the duplicate can go once a dispatch of it has
+been observed to work.
+
 **Layout on the box:** `/opt/rumi/tenants/<slug>/{.env,app-secrets.json,docker-compose.yml,uploads/}`
 (generated, never synced) · `caddy-tenants/<slug>.caddy` (generated, gitignored;
 dir-mounted into Caddy so a plain `caddy reload` applies changes — the
