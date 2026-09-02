@@ -127,7 +127,8 @@ pull_service() { # <dir> <svc> -> 0 when the service's image is present AND curr
 # `pull_policy: always` through the registry — an image this call never guarded, so a flaky GHCR on
 # the backend would fail a frontend-only roll.
 roll_service() { # <dir> <svc>
-  (cd "$1" && docker compose up -d --no-deps --pull never "$2")
+  local dir="$1" svc="$2"
+  (cd "$dir" && docker compose up -d --no-deps --pull never "$svc")
   return $?
 }
 # --- END pull_service ---

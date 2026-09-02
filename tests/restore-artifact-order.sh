@@ -21,8 +21,8 @@ SCRIPT="$HERE/../restore-tenant.sh"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 fail=0
-pass() { printf '  ok   %s\n' "$1"; }
-bad()  { printf '  FAIL %s\n' "$1"; fail=1; }
+pass() { local desc="$1"; printf '  ok   %s\n' "$desc"; }
+bad()  { local desc="$1"; printf '  FAIL %s\n' "$desc"; fail=1; }
 
 FNS="$TMP/fns.sh"
 sed -n '/^# --- BEGIN artifact ordering/,/^# --- END artifact ordering/p' "$SCRIPT" > "$FNS"
@@ -36,10 +36,10 @@ mkdir -p "$TENANT_DUMP_DIR/$SLUG" "$ARCHIVE_DIR/$SLUG/20260801T120000Z"
 
 # Stamps computed from NOW, not written down: a hardcoded 2026 date would keep passing while
 # quietly testing nothing once the wall clock moved past it.
-stamp_days_ago() { python3 -c '
+stamp_days_ago() { local days="$1"; python3 -c '
 from datetime import datetime, timedelta, timezone
 import sys
-print((datetime.now(timezone.utc) - timedelta(days=int(sys.argv[1]))).strftime("%Y%m%dT%H%M%SZ"))' "$1"; }
+print((datetime.now(timezone.utc) - timedelta(days=int(sys.argv[1]))).strftime("%Y%m%dT%H%M%SZ"))' "$days"; }
 
 TODAY="$(stamp_days_ago 0)"
 D2="$(stamp_days_ago 2)"

@@ -21,8 +21,8 @@ SCRIPT="$HERE/../refresh-tenant-images.sh"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 fail=0
-pass() { printf '  ok   %s\n' "$1"; }
-bad()  { printf '  FAIL %s\n' "$1"; fail=1; }
+pass() { local desc="$1"; printf '  ok   %s\n' "$desc"; }
+bad()  { local desc="$1"; printf '  FAIL %s\n' "$desc"; fail=1; }
 
 FNS="$TMP/fns.sh"
 sed -n '/^# --- BEGIN pull_service/,/^# --- END pull_service/p' "$SCRIPT" > "$FNS"
@@ -68,7 +68,7 @@ export PULL_BACKOFF_BASE=0
 
 reset() { : > "$TMP/calls"; echo 0 > "$TMP/attempts"; echo "${1:-0}" > "$TMP/compose_pull_fails_until"; echo "${2:-no}" > "$TMP/direct_pull_ok"; }
 calls() { tr '\n' ' ' < "$TMP/calls"; }
-count() { grep -c "$1" "$TMP/calls" 2>/dev/null || true; }
+count() { local pat="$1"; grep -c "$pat" "$TMP/calls" 2>/dev/null || true; }
 
 echo "a healthy registry costs exactly one call:"
 reset 0 no

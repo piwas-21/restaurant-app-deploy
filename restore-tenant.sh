@@ -59,14 +59,14 @@ bk_slug_ok "$SLUG" || bk_die "slug must be lowercase [a-z0-9-], 2-31 chars"
 # falls back to the basename behind a '0000' prefix, so it still sorts deterministically — last,
 # where something unrecognised belongs — instead of vanishing from the list.
 artifact_stamp() { # <path> -> sortable key
-  local base parent
-  base="$(basename "$1")"
+  local path="$1" base parent
+  base="$(basename "$path")"
   if [[ "$base" =~ ([0-9]{8}T[0-9]{6}Z) ]]; then printf '%s' "${BASH_REMATCH[1]}"; return; fi
   # An ARCHIVE's stamp is on its directory, not on the file inside it: the path is
   # `archive/<slug>/<stamp>/db.sql.gz`, so the basename alone reads `db.sql.gz` and the age would
   # silently fall through to mtime — on exactly the population (departed tenants, copies rsynced
   # back from cold storage) where mtime is least trustworthy.
-  parent="$(basename "$(dirname "$1")")"
+  parent="$(basename "$(dirname "$path")")"
   if [[ "$parent" =~ ([0-9]{8}T[0-9]{6}Z) ]]; then printf '%s' "${BASH_REMATCH[1]}"; return; fi
   printf '0000%s' "$base"
 }
@@ -74,12 +74,12 @@ artifact_stamp() { # <path> -> sortable key
 # How long ago the artifact was taken, read from the stamp in its name so it survives a copy
 # that did not preserve mtime. Falls back to the filesystem when the name carries no stamp.
 artifact_age() { # <path> -> human string
-  local stamp epoch now delta
-  stamp="$(artifact_stamp "$1")"
+  local path="$1" stamp epoch now delta
+  stamp="$(artifact_stamp "$path")"
   if [[ "$stamp" =~ ^[0-9]{8}T[0-9]{6}Z$ ]]; then
     epoch="$(python3 -c 'import datetime,sys; print(int(datetime.datetime.strptime(sys.argv[1], "%Y%m%dT%H%M%SZ").replace(tzinfo=datetime.timezone.utc).timestamp()))' "$stamp" 2>/dev/null || echo '')"
   fi
-  [[ -n "${epoch:-}" ]] || epoch="$(python3 -c 'import os,sys; print(int(os.path.getmtime(sys.argv[1])))' "$1" 2>/dev/null || echo 0)"
+  [[ -n "${epoch:-}" ]] || epoch="$(python3 -c 'import os,sys; print(int(os.path.getmtime(sys.argv[1])))' "$path" 2>/dev/null || echo 0)"
   now="$(date -u +%s)"
   delta=$(( now - epoch ))
   (( delta < 0 )) && delta=0
