@@ -571,6 +571,18 @@ jobs:
             # being able to rehearse on a laptop.
             since="$(python3 -c 'import datetime as d; print((d.datetime.now(d.timezone.utc) - d.timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
             echo "==> dispatching build-tenant-image for $IMAGE_TAG"
+            # MERGE ORDER on `-f locale` below, and it is not cosmetic: this dispatch
+            # targets $FRONTEND_REF, which defaults to `main`. A workflow_dispatch REJECTS
+            # an input the target ref does not declare (422 "Unexpected inputs provided"),
+            # and this step runs under `set -euo pipefail` — so passing `locale` before the
+            # frontend release carrying it reaches `main` does not merely lose the locale,
+            # it ABORTS the provisioning loop: no image, no provision, tenant left absent.
+            # The frontend `locale` input landed on develop in restaurant-app-frontend#694.
+            #
+            # The comment sits HERE rather than inside the invocation because a `#` line
+            # between two backslash-continued lines TERMINATES the command: the preceding
+            # `\` splices the comment onto it, and every later `-f …` line becomes its own
+            # top-level command. Measured: `-f: command not found`, exit 127.
             GH_TOKEN="$FRONTEND_DISPATCH_TOKEN" gh workflow run build-tenant-image.yml \
               --repo "$FRONTEND_REPO" --ref "$FRONTEND_REF" \
               -f tenant_domain="$DOMAIN" \

@@ -303,7 +303,8 @@ plane later calls the same scripts (ADR-003 — no parallel mechanism).
    compose template since #33); `locale` bakes `NEXT_PUBLIC_TENANT_LOCALE`, which
    decides where that currency's symbol goes and how the amount is punctuated
    (frontend #694, default `de-CH` — `EUR 8.00` under de-CH, `8,00 €` under
-   fr-FR, so a non-Swiss tenant must pass it); the two `pwa_*` colours bake the web-app manifest
+   fr-FR, so a non-Swiss tenant must pass it); the two `pwa_*` colours bake
+   the web-app manifest
    palette, whose default is **RUMI red** (see the registry field above). All of them
    are optional (defaults preserve old dispatches) but every real tenant should pass
    the registry values — and a non-red tenant that omits the palette gets no error,

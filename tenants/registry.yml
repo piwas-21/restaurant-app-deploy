@@ -66,7 +66,11 @@
 #                 develop's EF migrations to that tenant's database — not reversible by
 #                 re-pointing the image. A moving tag only tracks on the STAGING box; see
 #                 DEPLOYMENT.md §"Tenants on moving tags".
-#   locale:       OPTIONAL BCP-47 tag, absent -> `de-CH`. It decides where the currency
+#   locale:       OPTIONAL BCP-47 tag — **lowercase language, uppercase region: `de-CH`,
+#                 not `de-ch`**. BCP-47 itself treats case as insignificant and `Intl`
+#                 silently canonicalises, but the grammar gate here is case-STRICT, so
+#                 `de-ch` refuses the entry (loudly, in both plan builders) rather than
+#                 provisioning. Absent -> `de-CH`. It decides where the currency
 #                 SYMBOL goes and how the amount is punctuated, which `currency:` does not:
 #                 de-CH renders `EUR 8.00`, fr-FR renders `8,00 €`. So it is NOT derivable
 #                 from the currency — EUR is spoken in fr-FR, nl-NL and de-DE, which place
