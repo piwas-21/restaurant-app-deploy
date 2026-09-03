@@ -66,6 +66,17 @@
 #                 develop's EF migrations to that tenant's database — not reversible by
 #                 re-pointing the image. A moving tag only tracks on the STAGING box; see
 #                 DEPLOYMENT.md §"Tenants on moving tags".
+#   locale:       OPTIONAL BCP-47 tag, absent -> `de-CH`. It decides where the currency
+#                 SYMBOL goes and how the amount is punctuated, which `currency:` does not:
+#                 de-CH renders `EUR 8.00`, fr-FR renders `8,00 €`. So it is NOT derivable
+#                 from the currency — EUR is spoken in fr-FR, nl-NL and de-DE, which place
+#                 and punctuate the same amount three different ways — and it is not the
+#                 tenant's `languages` either, whose first entry is a UI language, not a
+#                 formatting region.
+#                 Baked into the frontend bundle as NEXT_PUBLIC_TENANT_LOCALE at BUILD
+#                 time, alongside `currency`, so changing it is an image rebuild and not a
+#                 re-provision. Absent behaves exactly as before the field existed (the
+#                 Swiss default), which is why every entry predating it is left alone.
 #   currency / languages / modules: recorded per ADR-010; provisioning writes them into the
 #                 tenant instance env. The VOCABULARY is validated: modules must come from
 #                 core | kitchen-board | cashier | server | reservations | loyalty |
