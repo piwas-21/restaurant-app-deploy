@@ -418,7 +418,11 @@ tenants:
   # and must be set there before Mollie billing is switched on.
   mcdoner:
     name: MC FOOD
-    status: provisioning
+    # Provisioned and verified 2026-09-03: catalogue loaded (16 categories, 57 catalogue
+    # products, 45 menu bundles, 22 hidden components, 118 images), profile and opening
+    # hours written, prices confirmed rendering `14,00 €` in a browser. `active` is what
+    # makes it eligible for the frontend RELEASE refresh — see list-release-tenants.sh.
+    status: active
     managed: scripts
     # staging, like this partner's other two clients. Not prod: no automation reaches the
     # prod box (the merge chain is staging-only, and cross-box prod provisioning is out of
