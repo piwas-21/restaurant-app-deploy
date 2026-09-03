@@ -241,6 +241,11 @@ plane later calls the same scripts (ADR-003 — no parallel mechanism).
    tags, currency/languages/modules, `city` for the seeded RestaurantInfo
    identity), PR → merge → sync to the box.
 
+   **`locale`** (optional): the BCP-47 tag that formats prices — absent = `de-CH`.
+   Say it for any tenant outside Switzerland: `currency: EUR` alone renders
+   `EUR 8.00`, and `locale: fr-FR` renders `8,00 €`. It is baked into the bundle,
+   so it is set at **build** time and changing it later is an image rebuild.
+
    **`base_domain`** (optional, §D1): the zone a `domain_mode: subdomain` tenant
    lives under. **Absent = `sofrapiwas.com`**, which is what every existing entry
    means — set it only when a reseller partner hosts the client under his own
@@ -289,13 +294,17 @@ plane later calls the same scripts (ADR-003 — no parallel mechanism).
    built, running, and answers every visit with a TLS error.
 3. **Frontend image**: `NEXT_PUBLIC_*` are baked per domain, so build the
    tenant's image first (frontend repo):
-   `gh workflow run build-tenant-image.yml -f tenant_domain=<domain> -f image_tag=tenant-<slug> -f restaurant_name="<registry name>" -f template=<registry template> -f currency=<registry currency> -f pwa_theme_color=<registry pwa_theme_color> -f pwa_background_color=<registry pwa_background_color>`
+   `gh workflow run build-tenant-image.yml -f tenant_domain=<domain> -f image_tag=tenant-<slug> -f restaurant_name="<registry name>" -f template=<registry template> -f currency=<registry currency> -f locale=<registry locale> -f pwa_theme_color=<registry pwa_theme_color> -f pwa_background_color=<registry pwa_background_color>`
    — `restaurant_name` bakes the page-metadata `<title>` (frontend #125 part 1);
    `template` bakes the UI template (ADR-006, default `classic`); `currency`
    bakes `NEXT_PUBLIC_TENANT_CURRENCY` for all displayed prices (frontend #169,
    default `CHF` — pair it with the registry `currency:` field, whose backend
    half `TENANT_CURRENCY` → `Localization__Currency` ships via the tenant
-   compose template since #33); the two `pwa_*` colours bake the web-app manifest
+   compose template since #33); `locale` bakes `NEXT_PUBLIC_TENANT_LOCALE`, which
+   decides where that currency's symbol goes and how the amount is punctuated
+   (frontend #694, default `de-CH` — `EUR 8.00` under de-CH, `8,00 €` under
+   fr-FR, so a non-Swiss tenant must pass it); the two `pwa_*` colours bake
+   the web-app manifest
    palette, whose default is **RUMI red** (see the registry field above). All of them
    are optional (defaults preserve old dispatches) but every real tenant should pass
    the registry values — and a non-red tenant that omits the palette gets no error,

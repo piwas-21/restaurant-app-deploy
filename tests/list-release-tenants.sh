@@ -153,6 +153,9 @@ FIX="$(run good.example "$WORK/fixture.yml")"
 Q_ELIGIBLE='[.eligible[].slug] | join(",")'
 Q_UNACK='[.refused_unacknowledged[].slug] | join(",")'
 Q_ACK='[.refused_acknowledged[].slug] | join(",")'
+# The fixture yields exactly one eligible tenant, so `[0]` is deterministic. Named for the
+# same reason as the three above (Sonar shelldre:S1192) — and it reads as a sentence.
+Q_LOCALE='.eligible[0].locale'
 
 # `local` for every positional, here and everywhere below (Sonar shelldre:S7679).
 sel()   { local query="$1"; printf '%s' "$FIX" | jq -r "$query"; }
@@ -172,6 +175,24 @@ for pair in "legacyone:managed" "retiredone:status" "provisioningone:status" "de
     bad "$slug: expected an exclusion mentioning '$want', got '$reason'"
   fi
 done
+
+# ── 3b. The build inputs a matrix leg carries ────────────────────────────────────────
+# `locale` decides where the currency symbol goes (de-CH: `EUR 8.00`, fr-FR: `8,00 €`),
+# so an eligible tenant that does not carry one into the plan is a tenant the release
+# rebuilds with Swiss formatting. Asserted on the EMITTED JSON, not on the registry text:
+# it is the plan the frontend workflow's matrix reads.
+echo "3b. locale reaches the plan"
+[[ "$(sel "$Q_LOCALE")" == "de-CH" ]] \
+  && pass "a tenant with no locale: field plans as de-CH (unchanged from before the field)" \
+  || bad "absent locale planned as '$(sel "$Q_LOCALE")', expected 'de-CH'"
+
+sed 's/^    currency: EUR$/    currency: EUR\n    locale: fr-FR/' \
+  "$WORK/fixture.yml" > "$WORK/fixture-locale.yml"
+grep -q 'locale: fr-FR' "$WORK/fixture-locale.yml" || { echo "fixture edit failed"; exit 1; }
+WITH_LOCALE="$(run good.example "$WORK/fixture-locale.yml")"
+[[ "$(slugs "$WITH_LOCALE" "$Q_LOCALE")" == "fr-FR" ]] \
+  && pass "a declared locale is carried through to the plan verbatim" \
+  || bad "locale: fr-FR planned as '$(slugs "$WITH_LOCALE" "$Q_LOCALE")'"
 
 # ── 4. THE DNS GUARD ─────────────────────────────────────────────────────────────────
 # Same fixture, same tenant, one thing changed: the host no longer resolves. A rebuild
@@ -241,6 +262,10 @@ shape_case "an unknown template is refused" \
   's/^    template: classic$/    template: brutalist/' 'is not classic|craft'
 shape_case "a bad currency is refused" \
   's/^    currency: EUR$/    currency: euros/' 'ISO 4217'
+# Underscore rather than a word, because `fr_FR` is the typo a human actually makes —
+# it is what every POSIX locale on the box is called.
+shape_case "a bad locale is refused" \
+  's/^    currency: EUR$/    currency: EUR\n    locale: fr_FR/' 'is not a BCP-47 tag'
 shape_case "an implausible box is refused" \
   's/^    box: staging$/    box: laptop/' 'neither prod nor staging'
 

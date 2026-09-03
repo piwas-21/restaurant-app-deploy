@@ -76,6 +76,27 @@ for key in "${PWA_KEYS[@]}"; do
   fi
 done
 
+# ── 1b. `locale`, by the same two assertions ─────────────────────────────────────────
+# Not folded into the derived loop above: that set is derived by `grep -oE '"pwa_[a-z_]+":'`,
+# and widening that pattern to catch `locale` would also catch `slug`/`domain`/`name`, whose
+# dispatch flags are spelled differently (`restaurant_name` for `name`) — the loop would then
+# fail on keys that are forwarded correctly. Naming this one is the honest cost of that.
+#
+# Why it needs a test at all is this file's own header argument: `locale` is read from the
+# registry, validated, and carried through plan.json — and if the last line is deleted the
+# tenant is built with the de-CH default, which is a plausible-looking price on every screen
+# rather than an error anywhere.
+if grep -qF -- '-f locale="$LOCALE"' "$WF"; then
+  pass "locale is forwarded to build-tenant-image.yml as -f locale=\"\$LOCALE\""
+else
+  bad  "locale is read from the registry but NEVER forwarded to the tenant image build"
+fi
+if grep -qF 'LOCALE="$(jq -r ".todo[$i].locale' "$WF"; then
+  pass "LOCALE is read out of the provisioning plan"
+else
+  bad  "LOCALE is passed to the dispatch but never read out of plan.json"
+fi
+
 # ── 2. The reader carries a registry palette into the candidate record ───────────────
 run_reader() { # $1 = registry yaml body; prints candidates.json
   local body="$1" dir="$WORK/run"

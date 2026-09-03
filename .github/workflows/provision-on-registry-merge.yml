@@ -216,7 +216,7 @@ jobs:
 
       - name: Read provisioning intent from the registry
         # A pure read of the entry that was just reviewed and merged: everything the
-        # build needs (domain, name, template, currency, PWA palette, image tag) comes
+        # build needs (domain, name, template, currency, locale, PWA palette, image tag) comes
         # from there, so
         # the chain cannot disagree with what the founder approved.
         #
@@ -249,6 +249,11 @@ jobs:
           HOST = r"[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+"
           TAG = r"[A-Za-z0-9][A-Za-z0-9._-]{0,62}"
           CTRL = re.compile(r"[\x00-\x1f\x7f]")
+          # Language, optional script, optional region — deliberately narrower than
+          # BCP-47, like list-release-tenants.sh's copy of it. This catches the typo
+          # (`fr_FR`, `french`) before a ~20-minute tenant image build;
+          # build-tenant-image.yml validates the tag canonically, and is the authority.
+          LOCALE = r"[a-z]{2,3}(-[A-Z][a-z]{3})?(-([A-Z]{2}|[0-9]{3}))?"
 
           with open("tenants/registry.yml") as f:
               reg = yaml.safe_load(f) or {}
@@ -283,6 +288,12 @@ jobs:
               domain = str(t.get("domain") or f"{slug}.{base_domain}")
               template = str(t.get("template") or "classic")
               currency = str(t.get("currency") or "CHF")
+              # BCP-47 price formatting (frontend #694). Absent -> `de-CH`, the same
+              # fallback build-tenant-image.yml already applies, so this changes nothing
+              # for the Swiss tenants and is the whole point for a EUR one: de-CH renders
+              # `EUR 8.00`, fr-FR renders `8,00 €`. NOT derivable from `currency` — EUR is
+              # spoken in fr-FR, nl-NL and de-DE, which punctuate it three ways.
+              locale = str(t.get("locale") or "de-CH")
               # PWA manifest palette (frontend #644). ABSENT IS MEANINGFUL, not a gap to
               # fill: empty forwards nothing, the frontend keeps its own default, and the
               # image is byte-identical to a build made before this field existed. That
@@ -310,6 +321,9 @@ jobs:
               if not ok(r"[A-Z]{3}", currency):
                   reject(slug, f"currency '{currency}' is not a 3-letter ISO 4217 code")
                   continue
+              if not ok(LOCALE, locale):
+                  reject(slug, f"locale '{locale}' is not a BCP-47 tag like de-CH or fr-FR")
+                  continue
               # Refused here as well as by the frontend workflow, for the reason
               # `base_domain` gives above: everything between the two is a ~20-minute
               # tenant image build, and a rejected dispatch input surfaces as a failed
@@ -329,7 +343,8 @@ jobs:
                   continue
               candidates.append({
                   "slug": slug, "domain": domain, "name": name,
-                  "template": template, "currency": currency, "image_tag": image_tag,
+                  "template": template, "currency": currency, "locale": locale,
+                  "image_tag": image_tag,
                   "pwa_theme_color": pwa_theme_color,
                   "pwa_background_color": pwa_background_color,
               })
@@ -524,6 +539,10 @@ jobs:
             NAME="$(jq -r ".todo[$i].name" "$STATE/plan.json")"
             TEMPLATE="$(jq -r ".todo[$i].template" "$STATE/plan.json")"
             CURRENCY="$(jq -r ".todo[$i].currency" "$STATE/plan.json")"
+            # // "de-CH" for the reason the palette gives just below: a plan.json written
+            # before `locale` existed (a re-run against an older artifact) would otherwise
+            # dispatch the literal string "null", which build-tenant-image.yml rejects.
+            LOCALE="$(jq -r ".todo[$i].locale // \"de-CH\"" "$STATE/plan.json")"
             # // "" so a plan.json written before the palette existed (a re-run against an
             # older artifact) yields the empty default rather than the string "null".
             PWA_THEME_COLOR="$(jq -r ".todo[$i].pwa_theme_color // \"\"" "$STATE/plan.json")"
@@ -539,7 +558,7 @@ jobs:
             fi
 
             if [ "$DRY_RUN" = "true" ]; then
-              echo "DRY RUN — would build $IMAGE_TAG for $DOMAIN ($TEMPLATE/$CURRENCY), then provision $SLUG"
+              echo "DRY RUN — would build $IMAGE_TAG for $DOMAIN ($TEMPLATE/$CURRENCY/$LOCALE), then provision $SLUG"
               printf -- '- `%s` (%s) — dry run, nothing done; would build `%s` then provision\n' \
                 "$SLUG" "$BOX_STATE" "$IMAGE_TAG" >> "$STATE/notes.md"
               echo "::endgroup::"
@@ -552,6 +571,18 @@ jobs:
             # being able to rehearse on a laptop.
             since="$(python3 -c 'import datetime as d; print((d.datetime.now(d.timezone.utc) - d.timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
             echo "==> dispatching build-tenant-image for $IMAGE_TAG"
+            # MERGE ORDER on `-f locale` below, and it is not cosmetic: this dispatch
+            # targets $FRONTEND_REF, which defaults to `main`. A workflow_dispatch REJECTS
+            # an input the target ref does not declare (422 "Unexpected inputs provided"),
+            # and this step runs under `set -euo pipefail` — so passing `locale` before the
+            # frontend release carrying it reaches `main` does not merely lose the locale,
+            # it ABORTS the provisioning loop: no image, no provision, tenant left absent.
+            # The frontend `locale` input landed on develop in restaurant-app-frontend#694.
+            #
+            # The comment sits HERE rather than inside the invocation because a `#` line
+            # between two backslash-continued lines TERMINATES the command: the preceding
+            # `\` splices the comment onto it, and every later `-f …` line becomes its own
+            # top-level command. Measured: `-f: command not found`, exit 127.
             GH_TOKEN="$FRONTEND_DISPATCH_TOKEN" gh workflow run build-tenant-image.yml \
               --repo "$FRONTEND_REPO" --ref "$FRONTEND_REF" \
               -f tenant_domain="$DOMAIN" \
@@ -559,6 +590,7 @@ jobs:
               -f restaurant_name="$NAME" \
               -f template="$TEMPLATE" \
               -f currency="$CURRENCY" \
+              -f locale="$LOCALE" \
               -f pwa_theme_color="$PWA_THEME_COLOR" \
               -f pwa_background_color="$PWA_BACKGROUND_COLOR"
             wait_for_build "$IMAGE_TAG" "$since"

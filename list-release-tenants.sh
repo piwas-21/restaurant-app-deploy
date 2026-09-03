@@ -126,6 +126,11 @@ SLUG = r"[a-z0-9][a-z0-9-]{1,30}"
 HOST = r"[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+"
 TAG = r"[A-Za-z0-9][A-Za-z0-9._-]{0,62}"
 CTRL = re.compile(r"[\x00-\x1f\x7f]")
+# Language, optional script, optional region — deliberately NARROWER than BCP-47. This
+# gate exists to catch the typo (`fr_FR`, `french`, `FR-fr`) before a ~20-minute tenant
+# image build, not to be an authority on locale tags: build-tenant-image.yml validates
+# the same value canonically with Intl.getCanonicalLocales, which is the real check.
+LOCALE = r"[a-z]{2,3}(-[A-Z][a-z]{3})?(-([A-Z]{2}|[0-9]{3}))?"
 
 # Tags this chain must never publish to. `latest` is the PROD frontend tag the RUMI box
 # pins; `staging` is the develop tag. Building a tenant-domain bundle onto either would
@@ -184,6 +189,13 @@ for slug, t in sorted((reg.get("tenants") or {}).items()):
     domain = str(t.get("domain") or f"{slug}.{base_domain}")
     template = str(t.get("template") or "classic")
     currency = str(t.get("currency") or "CHF")
+    # Absent -> `de-CH`, the same fallback src/lib/config.ts and build-tenant-image.yml
+    # already apply, so emitting it for EVERY tenant changes no existing build: the
+    # Swiss tenants were getting de-CH before this field existed and still do. It is the
+    # EUR tenants that need it said out loud — de-CH renders `EUR 8.00`, fr-FR `8,00 €`.
+    # Paired with `currency:` and never derived from it: EUR is spoken in fr-FR, nl-NL
+    # and de-DE, which place and punctuate the same amount three different ways.
+    locale = str(t.get("locale") or "de-CH")
     pwa_theme_color = str(t.get("pwa_theme_color") or "")
     pwa_background_color = str(t.get("pwa_background_color") or "")
     image_tag = str(t.get("frontend_tag") or f"tenant-{slug}")
@@ -200,6 +212,8 @@ for slug, t in sorted((reg.get("tenants") or {}).items()):
         grammar = f"template '{template}' is not classic|craft"
     elif not ok(r"[A-Z]{3}", currency):
         grammar = f"currency '{currency}' is not a 3-letter ISO 4217 code"
+    elif not ok(LOCALE, locale):
+        grammar = f"locale '{locale}' is not a BCP-47 tag like de-CH or fr-FR"
     elif not ok(TAG, image_tag):
         grammar = f"frontend_tag '{image_tag}' is not a usable image tag"
     elif image_tag in FORBIDDEN_TAGS:
@@ -227,7 +241,7 @@ for slug, t in sorted((reg.get("tenants") or {}).items()):
 
     eligible.append({
         "slug": slug, "domain": domain, "name": name, "template": template,
-        "currency": currency, "image_tag": image_tag, "box": box,
+        "currency": currency, "locale": locale, "image_tag": image_tag, "box": box,
         "pwa_theme_color": pwa_theme_color,
         "pwa_background_color": pwa_background_color,
     })
