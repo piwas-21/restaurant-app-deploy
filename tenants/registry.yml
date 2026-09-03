@@ -404,3 +404,49 @@ tenants:
     template: classic
     admin_email: kebabdilhan@solutioneva.com
     city: Cluses
+
+  # Reseller tenant #3 — partner Mustafa Vural (Solution Eva). MC FOOD, a kebab/tacos
+  # snack in Orchamps-Vennes (Doubs, FR), migrating from their own temporary platform.
+  #
+  # THE FIRST TENANT WHOSE CATALOGUE COMES FROM OUTSIDE. Provisioning gives an EMPTY
+  # tenant; the 16 categories, 68 products, 34 menu bundles, 22 components and 118 images
+  # are loaded afterwards by the frontend repo's docs/onboarding/mcfood/import.mjs. Run it
+  # against STAGING first — its own README says why.
+  #
+  # Commercially: FREE until they decide to continue (owner, 2026-09-03). Nothing here
+  # expresses that — the registry carries no price — it lives on the control-plane record,
+  # and must be set there before Mollie billing is switched on.
+  mcdoner:
+    name: MC FOOD
+    status: provisioning
+    managed: scripts
+    # staging, like this partner's other two clients. Not prod: no automation reaches the
+    # prod box (the merge chain is staging-only, and cross-box prod provisioning is out of
+    # ADR-012's scope), so a prod tenant would be hand-run and would be the first
+    # script-managed tenant sharing a box with RUMI.
+    box: staging
+    domain: mcdoner.sofrapiwas.com
+    domain_mode: subdomain
+    # OUR zone — rides the *.sofrapiwas.com wildcard, so it needs no DNS record of its own,
+    # unlike obresse on the partner's solutioneva.com.
+    db: tenant_mcdoner
+    db_role: tenant_mcdoner
+    compose_project: tenant-mcdoner
+    backend_tag: latest
+    frontend_tag: tenant-mcdoner
+    currency: EUR
+    # THE REASON THE locale FIELD EXISTS (#178). Without it every price on this French
+    # tenant renders `EUR 8.00` instead of `8,00 €`.
+    locale: fr-FR
+    languages: [fr, en]
+    # `online-payments` is ABSENT and that is SEQUENCING, not an oversight. Their current
+    # site takes card online; ours needs the restaurant's own Stripe connected account and
+    # KYC first, which only the restaurateur can complete (provision-tenant.sh exits 1 on
+    # the module without `stripe_account:`). MC FOOD opens on cash + card in the
+    # restaurant; when Mustafa returns `acct_…`, ONE commit adds `stripe_account:` AND
+    # `online-payments` together, then a re-provision. Runbook §2b.5.
+    modules: [core, kitchen-board, cashier, server, reservations, loyalty, printing, extra-languages]
+    # classic on the partner's standing preference since 2026-08-21.
+    template: classic
+    admin_email: mcdoner@solutioneva.com
+    city: Orchamps-Vennes
