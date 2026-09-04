@@ -1,0 +1,37 @@
+# gitleaks configuration for the deploy repo (#161).
+#
+# Extends the built-in ruleset rather than replacing it — a hand-written rule list
+# is a scanner that only finds what its author already thought of.
+[extend]
+useDefault = true
+
+# ONE exclusion, and only a path one, because the file is nothing but hashes.
+#
+# `.secrets.baseline` stores detect-secrets' SHA-1 `hashed_secret` digests, and
+# gitleaks' `generic-api-key` rule matches those digests as if they were keys —
+# 11 findings, all of them the other scanner's bookkeeping. Measured at the
+# version this workflow actually pins (8.21.2): without this the job is RED on the
+# very commit that adds it.
+#
+# Excluding it costs nothing that could hide a real secret: the file contains no
+# plaintext, only digests, so there is nothing in it for any scanner to find.
+#
+# NOTE ON WHAT IS *NOT* HERE. An earlier draft also allowlisted the two
+# `curl -u "${BOX_STRIPE_KEY}:"` lines in provision-tenant.sh. That was wrong
+# twice over and both halves are worth recording:
+#
+#   1. It was verified against a locally-installed gitleaks 8.30.1 while CI pins
+#      8.21.2. At 8.21.2 those two lines produce NO finding at all, so the
+#      allowlist suppressed nothing and was pure risk. Verifying a gate against a
+#      different build of the gate is the whole failure.
+#   2. A top-level `[allowlist]` with `regexTarget = "match"` applies to EVERY
+#      rule, and `curl-auth-user` matches across up to five lines — so a literal
+#      `sk_live_…` key on a line NEAR one of those `-u "${VAR}:"` blocks fell
+#      inside the same match window and was suppressed too. Demonstrated at
+#      8.21.2. A "narrow" allowlist that is only narrow in the author's head.
+#
+# If those two lines ever do start producing findings on a future gitleaks, fix it
+# with a per-rule allowlist measured AT THE PINNED VERSION, not a global one.
+[allowlist]
+description = "detect-secrets' own baseline — SHA-1 digests, no plaintext"
+paths = ['''\.secrets\.baseline$''']

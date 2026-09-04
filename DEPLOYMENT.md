@@ -1618,7 +1618,7 @@ missed-order/error counts to the sofra control plane's `/api/telemetry/fleet` ro
    `FleetPush__*` + `SENTRY_DSN` into the backend. The backend auto-migrates the fleet tables
    on startup. So a freshly provisioned tenant reports to `/admin/fleet` automatically. Until
    the secret is set the pusher is **inert** (self-guards on an empty secret) — safe to ship.
-3. **Roll sofra** to pick up the ingest secret: `docker compose -f docker-compose.prod.yml up -d sofra`.
+3. **Roll sofra** to pick up the ingest secret — `docker compose -f docker-compose.prod.yml up -d sofra`.
 4. **RUMI (the main stack):** its `FleetPush__*` is now wired straight into `docker-compose.prod.yml`
    (`FleetPush__Enabled` defaults on; slug `rumi`). So once the backend fleet code is on the prod box
    (backend #199–#203, released to `main` + auto-deployed) and `PRINTER_TELEMETRY_SECRET` is set
