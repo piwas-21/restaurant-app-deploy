@@ -455,6 +455,19 @@ services:
       # is set alongside a non-test key — but the real guard is here: never put a
       # `live_` key on this service.
       MOLLIE_API_KEY: "${MOLLIE_API_KEY_TEST:-}"
+      # The TEST Stripe key and its OWN webhook secret, here for exactly the reason the
+      # test Mollie key is: the fee-refund rail is only worth having if it can be
+      # exercised against a deployed control plane, and that must never involve real
+      # money. This service is a separate block from `sofra` with its own explicit
+      # environment — it inherits NOTHING — so the vars must be repeated here or the
+      # webhook answers 503 on staging forever, which reads as a code failure and is
+      # not one.
+      #
+      # NEVER put a live key or a live `whsec_` on this service. A live key here would
+      # let a staging session refund REAL application fees, and the endpoint secret is
+      # what decides which Stripe account's events this instance will act on.
+      STRIPE_API_KEY: "${SOFRA_STRIPE_API_KEY_TEST:-}"
+      STRIPE_CONNECT_WEBHOOK_SECRET: "${SOFRA_STRIPE_CONNECT_WEBHOOK_SECRET_TEST:-}"
       # Read-only, same synced registry as prod, so /admin/tenants renders. The control
       # plane never writes it (ADR-003), and the mount below is :ro regardless.
       TENANT_REGISTRY_PATH: /data/tenants/registry.yml
