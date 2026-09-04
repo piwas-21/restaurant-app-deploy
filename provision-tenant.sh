@@ -71,8 +71,8 @@ if not t:
 for k in ("name", "status", "managed", "box", "domain", "domain_mode",
           "base_domain", "domain_aliases", "db", "db_role", "compose_project",
           "backend_tag", "frontend_tag", "currency", "languages", "modules",
-          "admin_email", "city", "template", "stripe_account", "mail_from",
-          "partner_name", "partner_url", "partner_attribution"):
+          "admin_email", "city", "template", "stripe_account", "payments_commission_bps",
+          "mail_from", "partner_name", "partner_url", "partner_attribution"):
     v = t.get(k, "")
     if isinstance(v, list):
         v = ",".join(map(str, v))
@@ -95,16 +95,59 @@ case "$TENANT_TEMPLATE" in
   *) echo "ERROR: registry entry '$SLUG' has template '$TENANT_TEMPLATE' — allowed: classic | craft (absent = classic)" >&2; exit 1 ;;
 esac
 
+# Does this tenant carry a given module? `modules` arrives as csv, so the test is a padded needle
+# in a padded haystack — and the padding is load-bearing: drop a space and `online-payments` would
+# also match a hypothetical `no-online-payments`. Written out four separate times before this, which
+# is four chances to get that subtlety wrong independently.
+#
+# Returns non-zero when the module is absent, so under `set -e` only ever call it as a CONDITION
+# (`if tenant_has_module x`, `! tenant_has_module x`, or either side of &&/||) — never as a bare
+# statement, which would abort the script on a perfectly ordinary "no".
+# --- BEGIN module membership helpers
+tenant_has_module() {
+  local module="$1"
+  [[ " ${REG_MODULES//,/ } " == *" $module "* ]]
+}
+# --- END module membership helpers
+
 # Online payments needs BOTH halves or it is not a working purchase. A tenant that bought the
 # module but has no connected account would provision happily and then fail at the diner's first
 # card payment — the worst place to discover it. Refuse here instead. (The reverse, an account
 # recorded before the module is bought, is fine: it stays inert until the module is added.)
-if [[ " ${REG_MODULES//,/ } " == *" online-payments "* && -z "$REG_STRIPE_ACCOUNT" ]]; then
+if tenant_has_module online-payments && [[ -z "$REG_STRIPE_ACCOUNT" ]]; then
   echo "ERROR: tenant '$SLUG' buys 'online-payments' but has no 'stripe_account' in the registry" >&2
   echo "       This refusal is BEFORE the database, so nothing was created — and a tenant already" >&2
   echo "       live on this slug is untouched, but every re-provision of it stops here." >&2
   echo "       Fix it in ONE registry commit: add 'stripe_account: acct_...' AND keep" >&2
   echo "       'online-payments' in modules. See docs/runbooks/signup-to-live-tenant.md §2b.5." >&2
+  exit 1
+fi
+
+# Sofra's optional per-transaction commission (Stripe's application_fee_amount), in basis
+# points — 100 = 1.00%, absent in the registry means empty here, normalized to 0 = no
+# commission (no fee parameter sent to Stripe at all).
+REG_PAYMENTS_COMMISSION_BPS="${REG_PAYMENTS_COMMISSION_BPS:-0}"
+[[ "$REG_PAYMENTS_COMMISSION_BPS" =~ ^[0-9]+$ ]] \
+  || { echo "ERROR: tenant '$SLUG' has payments_commission_bps='$REG_PAYMENTS_COMMISSION_BPS' — must be a non-negative integer (basis points, 100 = 1.00%)" >&2; exit 1; }
+# The ceiling is a safety guard, not a preference: Stripe does not reject an oversized
+# application_fee_amount, it silently CAPS it at 100% of the order instead (measured
+# 2026-09-04) — so a fat-fingered value above 1000 would not error at Stripe, it would just
+# take the whole order.
+if (( REG_PAYMENTS_COMMISSION_BPS > 1000 )); then
+  echo "ERROR: tenant '$SLUG' has payments_commission_bps=$REG_PAYMENTS_COMMISSION_BPS — refusing anything above 1000 (10%)" >&2
+  echo "       Stripe does not reject an oversized application fee, it silently CAPS it at 100% of" >&2
+  echo "       the order instead (measured 2026-09-04) — this ceiling is a safety guard, not a" >&2
+  echo "       preference. Lower it in the registry if a higher rate is genuinely intended." >&2
+  exit 1
+fi
+# A commission on a tenant that cannot take online payments is a configuration mistake that
+# would otherwise sit silent — same reasoning as the online-payments/stripe_account refusal above.
+if (( REG_PAYMENTS_COMMISSION_BPS > 0 )) && { ! tenant_has_module online-payments || [[ -z "$REG_STRIPE_ACCOUNT" ]]; }; then
+  echo "ERROR: tenant '$SLUG' has payments_commission_bps=$REG_PAYMENTS_COMMISSION_BPS but does not have a" >&2
+  echo "       working online-payments setup ('online-payments' in modules AND a 'stripe_account' set)" >&2
+  echo "       — a commission on a tenant that cannot take online payments is a configuration mistake" >&2
+  echo "       that would otherwise sit silent. Set it back to 0, or add the module and" >&2
+  echo "       'stripe_account' first. See docs/runbooks/signup-to-live-tenant.md §2b.5." >&2
   exit 1
 fi
 
@@ -176,7 +219,7 @@ for m in "${_MODULES[@]}"; do
   [[ " $KNOWN_MODULES " == *" $m "* ]] \
     || { echo "ERROR: registry entry '$SLUG' lists unknown module '$m' — allowed: $KNOWN_MODULES" >&2; exit 1; }
 done
-[[ " ${REG_MODULES//,/ } " == *" core "* ]] \
+tenant_has_module core \
   || echo "WARN: tenant '$SLUG' has no 'core' module — every instance runs the core surface regardless" >&2
 
 # Languages (EMAIL-LOCALISATION-PLAN §5 S9). Validated for the same reason the modules are,
@@ -765,11 +808,14 @@ set_env_line PRINTER_TELEMETRY_SECRET "$BOX_TELEMETRY_SECRET"
 # online-payments must not be one env edit away from taking card payments.
 set_env_line STRIPE_PLATFORM_API_KEY "$BOX_STRIPE_KEY"
 set_env_line STRIPE_CONNECTED_ACCOUNT_ID "$REG_STRIPE_ACCOUNT"
-if [[ " ${REG_MODULES//,/ } " == *" online-payments "* ]]; then
+if tenant_has_module online-payments; then
   set_env_line STRIPE_ENABLED "true"
 else
   set_env_line STRIPE_ENABLED "false"
 fi
+# Commission is validated above (non-negative, <= 1000, and zero unless online-payments +
+# stripe_account are both present) — rendered as-is here, default 0.
+set_env_line STRIPE_COMMISSION_BPS "${REG_PAYMENTS_COMMISSION_BPS:-0}"
 
 # Partner attribution, written on EVERY run (fresh AND existing) for the reason the
 # Stripe lines are: it legitimately drifts, and the direction that matters is REMOVAL.
@@ -960,7 +1006,7 @@ echo "==> Stripe payment methods (only when this tenant bought online-payments)"
 #
 # Each connected account has TWO payment-method configurations: its own (parent:None — the one
 # Checkout actually uses) and one inherited from the platform's. This flips the account's OWN one.
-if [[ " ${REG_MODULES//,/ } " == *" online-payments "* ]]; then
+if tenant_has_module online-payments; then
   if [[ -z "$BOX_STRIPE_KEY" ]]; then
     echo "ERROR: tenant '$SLUG' bought online-payments but STRIPE_PLATFORM_API_KEY is unset on this box" >&2
     echo "       The tenant would provision with a checkout that cannot take a card. Set it and re-run." >&2

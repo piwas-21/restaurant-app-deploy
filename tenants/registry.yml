@@ -126,6 +126,28 @@
 #                   - RUMI (managed: legacy) runs the MAIN compose project, so its list below
 #                     never reaches its container and never will. It is documentation of what
 #                     tenant 1 has, not a control. Do not try to make it one.
+#   payments_commission_bps: OPTIONAL integer, basis points — 100 = 1.00%. Absent = 0 = no
+#                 commission: at 0 the backend does not send Stripe's `application_fee_amount`
+#                 parameter at all, rather than sending a zero value. Every tenant below is
+#                 absent, i.e. 0 — this key exists so a commission CAN be turned on later, not
+#                 because one is on now.
+#
+#                 Only meaningful when `modules` includes `online-payments` AND `stripe_account`
+#                 is set — provision-tenant.sh refuses a non-zero value on a tenant missing
+#                 either half, the same way it refuses `online-payments` without
+#                 `stripe_account` above: a commission on a tenant that cannot take online
+#                 payments is a configuration mistake that would otherwise sit silent.
+#
+#                 Changing it is the same as changing `modules`: nothing until you
+#                 RE-PROVISION that tenant (a bare `docker compose restart` re-reads nothing,
+#                 measured 2026-08-18) — a registry edit alone does not touch a running
+#                 container.
+#
+#                 provision-tenant.sh also refuses anything above 1000 (10%). That ceiling is a
+#                 safety guard, not a preference: Stripe does not reject an oversized
+#                 application fee, it silently CAPS it at 100% of the order instead (measured
+#                 2026-09-04), so a fat-fingered value here would not error at Stripe, it would
+#                 just take the whole order.
 #   city:     optional free text — seeds RestaurantInfo.City on the tenant's first boot
 #             (deploy#16 / backend #120, via RestaurantInfoSeed__City). `name` and
 #             `admin_email` seed RestaurantInfo Name/Email the same way; the seeder is a

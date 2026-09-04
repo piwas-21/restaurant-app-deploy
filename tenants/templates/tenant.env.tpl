@@ -91,6 +91,18 @@ STRIPE_ENABLED=false
 STRIPE_PLATFORM_API_KEY=
 STRIPE_CONNECTED_ACCOUNT_ID=
 
+# Sofra's optional per-transaction commission on the Stripe wiring above (Stripe's
+# `application_fee_amount`), in basis points — 100 = 1.00%. Written by provision-tenant.sh
+# on every run from the registry's optional `payments_commission_bps` (absent = 0), same as
+# STRIPE_CONNECTED_ACCOUNT_ID above — editing it by hand is overwritten on the next
+# re-provision. 0 means no fee parameter is sent to Stripe at all, not a zero-value one.
+#
+# provision-tenant.sh refuses anything above 1000 (10%) and refuses a non-zero value on a
+# tenant that lacks a working online-payments/stripe_account pair: the backend also refuses
+# above 1000 because Stripe does not reject an oversized application fee, it silently CAPS
+# it at 100% of the order instead (measured 2026-09-04).
+STRIPE_COMMISSION_BPS=0
+
 # --- Partner attribution (SOFRA-PARTNER-PLAN §11d, channel C) ----------------------------
 # "Site by <name>", linked, in the tenant footer — the reseller who built and provisioned
 # this site. Both lines are written by provision-tenant.sh on EVERY run from the registry's

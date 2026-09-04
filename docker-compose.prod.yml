@@ -154,6 +154,13 @@ services:
       Stripe__Enabled: "${STRIPE_ENABLED:-false}"
       Stripe__PlatformApiKey: "${STRIPE_PLATFORM_API_KEY:-}"
       Stripe__ConnectedAccountId: "${STRIPE_CONNECTED_ACCOUNT_ID:-}"
+      # Sofra's optional per-transaction commission (application_fee_amount), basis points —
+      # 100 = 1.00%, default 0 = no fee parameter sent at all, so THIS CHANGES NOTHING TODAY
+      # either, same as the three lines above. The backend refuses anything above 1000 (10%):
+      # Stripe does not reject an oversized application fee, it silently CAPS it at 100% of
+      # the order instead (measured 2026-09-04) — the ceiling is a safety guard, not a
+      # preference.
+      Stripe__Commission__Bps: "${STRIPE_COMMISSION_BPS:-0}"
       # Sign in with Apple (backend AppleAuthSettings, "Authentication:Apple"). The accepted
       # `aud` of the identity token the mobile app sends to POST /api/Auth/apple-login — i.e.
       # the iOS BUNDLE ID of the RUMI app (rumi-mobile/app.json -> expo.ios.bundleIdentifier).
