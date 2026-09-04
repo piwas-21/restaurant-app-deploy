@@ -1289,6 +1289,11 @@ each sweep last actually ran: piwas-21/sofra#209.
 
 ## Backups & restore (cross-box, since 2026-07-09)
 
+> **Rotating a secret?** [docs/runbooks/rotate-secrets.md](docs/runbooks/rotate-secrets.md)
+> — one section per secret, written from a rotation actually rehearsed on staging.
+> `RESTIC_PASSWORD` in particular is **re-key, not rotate**: changing the value orphans every
+> existing snapshot, and no procedure in this file recovers from losing it.
+
 **Design** (workspace cost plan §10.1 — box loss must not mean data loss): both
 boxes dump nightly to a local dir; prod then ships everything off-box with
 restic. Each box's data ends up **encrypted on the other box**:
