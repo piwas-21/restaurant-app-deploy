@@ -214,6 +214,7 @@ if [[ -n "$INTO" ]]; then
   else
     echo "==> creating ${TARGET}"
     psql_admin "CREATE DATABASE ${TARGET}"
+    CREATED_TARGET=true
   fi
 else
   # Rehearsal. Name is unique per run and self-describing, so an abandoned one after a
@@ -250,6 +251,20 @@ if ! psql_q postgres "SELECT 1 FROM pg_roles WHERE rolname='${DB_ROLE}'" | grep 
   echo "==> role ${DB_ROLE} is gone — creating it NOLOGIN for the rehearsal"
   psql_admin "CREATE ROLE ${DB_ROLE} NOLOGIN"
   CREATED_ROLE=true
+fi
+
+# A database created a moment ago carries PostgreSQL's default ACL — CONNECT for
+# PUBLIC — so a DR restore silently undoes #155 for the tenant it is rescuing, and
+# leaves it that way. Applied HERE rather than beside the CREATE because the role may
+# not have existed yet at that point: on a true disaster restore the database and its
+# role are both gone, the block above invents the role, and a GRANT before it would
+# have aborted the recovery under ON_ERROR_STOP.
+#
+# Only for a real restore. A rehearsal scratch database is dropped on the way out.
+if [[ "${CREATED_TARGET:-false}" == true ]]; then
+  psql_admin "GRANT CONNECT ON DATABASE ${TARGET} TO ${DB_ROLE}"
+  psql_admin "REVOKE CONNECT ON DATABASE ${TARGET} FROM PUBLIC"
+  echo "==> ${TARGET}: CONNECT restricted to ${DB_ROLE} (+ superusers) — #155"
 fi
 
 # ── 3. postgres accepts it ──────────────────────────────────────────────────────────
