@@ -1232,6 +1232,61 @@ Prod box: 15 GiB RAM, ~14 GiB free at snapshot. (This also confirms a
 *co-located* self-hosted Sentry is a non-starter — its ~16 GiB minimum would
 starve the live client stack — so error tracking stays on Sentry SaaS EU.)
 
+## Cron redundancy (`cron-fallback.sh`)
+
+On 2026-08-24 GitHub began refusing to **start** every scheduled job on `piwas-21/sofra` —
+an Actions billing block: `"steps": []`, a job that lived one second. All six scheduled
+workflows were down for **six days** and nothing noticed. It was found because a release
+coordinator happened to open the Actions tab (#165).
+
+A watchdog *inside* Actions would have been killed by the same block. **A signal that only
+reports when its own reporter is alive is not a signal.** So the second trigger runs from
+the box's own crontab, on the box's own clock, needing nothing from GitHub:
+
+```cron
+# Redundant cron triggers (#165). Offset from the GitHub Actions schedule on purpose —
+# these are a SECOND path, not a replacement, and either alone keeps the sweeps running.
+ 8 14 * * *   /opt/rumi/deploy/cron-fallback.sh trial-warnings >> /opt/rumi/cron-fallback.log 2>&1
+ 7,37 * * * * /opt/rumi/deploy/cron-fallback.sh go-live        >> /opt/rumi/cron-fallback.log 2>&1
+47 9,19 * * * /opt/rumi/deploy/cron-fallback.sh backup-alerts  >> /opt/rumi/cron-fallback.log 2>&1
+17 11 * * *   /opt/rumi/deploy/cron-fallback.sh retention      >> /opt/rumi/cron-fallback.log 2>&1
+```
+
+`go-live` runs half-hourly because a tenant waiting to be announced is waiting on it; the
+other three are daily, offset by hours from the Actions runs.
+
+### Is double-firing safe? Measured, not assumed
+
+Each endpoint called twice back to back against the live control plane, 2026-09-04:
+
+| endpoint | 1st | 2nd |
+|---|---|---|
+| `trial-warnings` | `{"considered":0,…}` | identical |
+| `go-live` | `{"considered":0,"announced":0,…}` | identical |
+| `retention` | `{"deleted":{…0,0,0}}` | identical |
+| `backup-alerts` | `{"decision":"recovered","emailed":true}` | `{"decision":"healthy","emailed":false}` |
+
+The first three are **send-once by audit marker** — firing again sends nothing. The fourth
+is **edge-triggered**: it mails on a state *transition*, so a second call does not duplicate
+a mail, but an extra call can notice a transition sooner than Actions would have. A
+difference in timing, not in content — and the reason the schedule above is offset rather
+than doubled up.
+
+### It fails loudly, on purpose
+
+The caller *workflows* warn-and-exit-0 when `CRON_SECRET` is absent, which is right for a CI
+job nothing depends on. This script **refuses**, because it exists precisely because the
+other path went quiet, and a fallback that silently does nothing is the same defect wearing
+a different hat. Verified: a wrong secret logs `FAIL … 401` and exits 1; a missing one
+refuses before making any request.
+
+The secret is the box `.env`'s `SOFRA_CRON_SECRET` (mapped to `CRON_SECRET` in the sofra
+container). Rotating it means rotating the GitHub Actions secret too, or the two paths
+disagree — see [rotate-secrets.md](docs/runbooks/rotate-secrets.md).
+
+The companion is a **freshness readout** on the founder's `/admin`, so a reader can see when
+each sweep last actually ran: piwas-21/sofra#209.
+
 ## Backups & restore (cross-box, since 2026-07-09)
 
 **Design** (workspace cost plan §10.1 — box loss must not mean data loss): both
