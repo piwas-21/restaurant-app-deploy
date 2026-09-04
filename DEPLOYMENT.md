@@ -622,7 +622,8 @@ that the gates gate rather than that the unrestricted path works:
 |---|---|
 | `/api/tenant/modules` | `enforced: true`, exactly the six bought ids (not the whole vocabulary) |
 | startup log | `Module enforcement ON — enabled: core, kitchen-board, cashier, server, reservations, loyalty` |
-| `printing` **not bought** — `GET /api/orders/printer-feed` with a **valid** `X-Api-Key` | **404 `ModuleNotEnabled`** |
+| `printing` **not bought** — `GET /api/orders/printer-feed` with a **valid** `X-Api-Key` | **404 `ModuleNotEnabled`** (the module gate is controller-scope, so it wins over the key check) |
+| `printing` bought — `PrinterSettings:ApiKey` **blank** | **401** on every printer endpoint since backend #475. It used to serve EVERYONE: the filter failed open, and the order feed carries customer names, phones and addresses. Provisioning always generates a key, so this is the hand-edited case; the backend logs it once at startup. |
 | `printing` **not bought** — `GET /api/devices` with an **admin JWT** | **404 `ModuleNotEnabled`** |
 | the six bought surfaces (`/api/Events/kitchen`, `/api/Events/service`, `/api/Orders/z-report`, `/api/Reservations`, `/api/admin/PointRules`, `/api/UserGroup`) | all serve |
 | UI, module temporarily narrowed | `/reservations` renders a themed *"Not available here"*; the nav entry, the home hero CTA and all four loyalty admin links disappear |
