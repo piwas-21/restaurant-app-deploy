@@ -105,7 +105,8 @@ esac
 # statement, which would abort the script on a perfectly ordinary "no".
 # --- BEGIN module membership helpers
 tenant_has_module() {
-  [[ " ${REG_MODULES//,/ } " == *" $1 "* ]]
+  local module="$1"
+  [[ " ${REG_MODULES//,/ } " == *" $module "* ]]
 }
 # --- END module membership helpers
 
