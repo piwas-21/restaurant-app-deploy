@@ -155,6 +155,7 @@ jobs:
           printf 'none\n' > "$STATE/stage"
 
       - name: Verify the upstream registry sync, and that it was ours
+        id: provenance
         # A step, not the job's `if:` — see the header. Two things are checked, and the
         # order matters: this runs BEFORE the checkout, because the next step checks out
         # the triggering commit's SHA.
@@ -176,6 +177,32 @@ jobs:
           THIS_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+
+          # OUR OWN `main` IS NOT A FAILURE — it is a release (#172).
+          #
+          # `sync-registry-to-staging` triggers on pushes to BOTH `develop` and `main`, so
+          # every release merge that carries a registry change re-runs the sync on `main`,
+          # which chains this workflow, which correctly refuses to provision from a ref that
+          # is not `develop`. The refusal is right. Filing "Auto-provisioning FAILED" for it
+          # was not: it fired on 2026-08-31 twice, and an alarm that cries on a routine,
+          # expected, correct event is an alarm the founder learns to close unread — which
+          # is the failure this reporting exists to prevent.
+          #
+          # Narrow on purpose. Only THIS repo's `main` is benign; every other ref is still a
+          # hard failure with an issue, because this job holds a box SSH key and a cross-repo
+          # dispatch token and "a ref I cannot attribute" is exactly the confused-deputy
+          # shape the check exists for. A fork, a feature branch and a renamed default all
+          # still stop here loudly.
+          if [ "$UPSTREAM_REPO" = "$THIS_REPO" ] && [ "$UPSTREAM_BRANCH" = "main" ]; then
+            echo "::notice::release merge on $THIS_REPO@main — provisioning is develop-only, nothing to do"
+            # An OUTPUT, not a bare `exit 0`. Exiting a step successfully lets the JOB
+            # continue, and the next steps read the registry and provision from it — which
+            # is precisely what this check exists to prevent. Every remaining step is gated
+            # on this, including the reporter: there is nothing to report about a release.
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           if [ "$UPSTREAM_REPO" != "$THIS_REPO" ] || [ "$UPSTREAM_BRANCH" != "develop" ]; then
             {
               echo "**Refused: the triggering run was not this repo's \`develop\`.**"
@@ -200,6 +227,7 @@ jobs:
           fi
 
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        if: steps.provenance.outputs.release != 'true'
         # No `ref:` — the default branch (`develop`) tip. An earlier draft checked out
         # `github.event.workflow_run.head_sha`, which is the textbook `workflow_run`
         # confused-deputy shape (this job holds a box SSH key and a cross-repo dispatch
@@ -215,8 +243,9 @@ jobs:
         # received is traceable.
 
       - name: Read provisioning intent from the registry
+        if: steps.provenance.outputs.release != 'true'
         # A pure read of the entry that was just reviewed and merged: everything the
-        # build needs (domain, name, template, currency, PWA palette, image tag) comes
+        # build needs (domain, name, template, currency, locale, PWA palette, image tag) comes
         # from there, so
         # the chain cannot disagree with what the founder approved.
         #
@@ -249,6 +278,11 @@ jobs:
           HOST = r"[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+"
           TAG = r"[A-Za-z0-9][A-Za-z0-9._-]{0,62}"
           CTRL = re.compile(r"[\x00-\x1f\x7f]")
+          # Language, optional script, optional region — deliberately narrower than
+          # BCP-47, like list-release-tenants.sh's copy of it. This catches the typo
+          # (`fr_FR`, `french`) before a ~20-minute tenant image build;
+          # build-tenant-image.yml validates the tag canonically, and is the authority.
+          LOCALE = r"[a-z]{2,3}(-[A-Z][a-z]{3})?(-([A-Z]{2}|[0-9]{3}))?"
 
           with open("tenants/registry.yml") as f:
               reg = yaml.safe_load(f) or {}
@@ -283,6 +317,12 @@ jobs:
               domain = str(t.get("domain") or f"{slug}.{base_domain}")
               template = str(t.get("template") or "classic")
               currency = str(t.get("currency") or "CHF")
+              # BCP-47 price formatting (frontend #694). Absent -> `de-CH`, the same
+              # fallback build-tenant-image.yml already applies, so this changes nothing
+              # for the Swiss tenants and is the whole point for a EUR one: de-CH renders
+              # `EUR 8.00`, fr-FR renders `8,00 €`. NOT derivable from `currency` — EUR is
+              # spoken in fr-FR, nl-NL and de-DE, which punctuate it three ways.
+              locale = str(t.get("locale") or "de-CH")
               # PWA manifest palette (frontend #644). ABSENT IS MEANINGFUL, not a gap to
               # fill: empty forwards nothing, the frontend keeps its own default, and the
               # image is byte-identical to a build made before this field existed. That
@@ -310,6 +350,9 @@ jobs:
               if not ok(r"[A-Z]{3}", currency):
                   reject(slug, f"currency '{currency}' is not a 3-letter ISO 4217 code")
                   continue
+              if not ok(LOCALE, locale):
+                  reject(slug, f"locale '{locale}' is not a BCP-47 tag like de-CH or fr-FR")
+                  continue
               # Refused here as well as by the frontend workflow, for the reason
               # `base_domain` gives above: everything between the two is a ~20-minute
               # tenant image build, and a rejected dispatch input surfaces as a failed
@@ -329,7 +372,8 @@ jobs:
                   continue
               candidates.append({
                   "slug": slug, "domain": domain, "name": name,
-                  "template": template, "currency": currency, "image_tag": image_tag,
+                  "template": template, "currency": currency, "locale": locale,
+                  "image_tag": image_tag,
                   "pwa_theme_color": pwa_theme_color,
                   "pwa_background_color": pwa_background_color,
               })
@@ -342,6 +386,7 @@ jobs:
           PY
 
       - name: Configure SSH (pinned host key)
+        if: steps.provenance.outputs.release != 'true'
         # Same pattern and same secrets as provision-tenant.yml / sync-to-staging.yml.
         env:
           STAGING_SSH_KEY: ${{ secrets.STAGING_SSH_KEY }}
@@ -354,6 +399,7 @@ jobs:
           chmod 644 ~/.ssh/known_hosts
 
       - name: Ask the box what it already has
+        if: steps.provenance.outputs.release != 'true'
         # THE idempotency step — see the header for why the marker, not `.env`, is the
         # key, and why `partial` provisions rather than skipping. Slugs go over stdin
         # (ssh joins argv into one command string, so they must NOT be passed as remote
@@ -402,7 +448,8 @@ jobs:
 
       - name: Refuse an implausible batch
         # A cap, not a queue: if this trips, something edited the registry wholesale.
-        if: steps.filter.outputs.count != '0'
+        # `release` gates every working step — see the provenance check (#172).
+        if: steps.provenance.outputs.release != 'true' && steps.filter.outputs.count != '0'
         run: |
           set -euo pipefail
           count="$(jq '.todo | length' "$STATE/plan.json")"
@@ -424,7 +471,7 @@ jobs:
         # QUIETLY just stops the funnel (runbook §0). This one is checked before any work
         # starts, and reported like any other failure — the founder gets an issue, not a
         # green run that provisioned nothing.
-        if: steps.filter.outputs.count != '0' && env.DRY_RUN != 'true'
+        if: steps.provenance.outputs.release != 'true' && steps.filter.outputs.count != '0' && env.DRY_RUN != 'true'
         env:
           FRONTEND_DISPATCH_TOKEN: ${{ secrets.FRONTEND_DISPATCH_TOKEN }}
         run: |
@@ -444,7 +491,7 @@ jobs:
           fi
 
       - name: Build tenant images and provision
-        if: steps.filter.outputs.count != '0'
+        if: steps.provenance.outputs.release != 'true' && steps.filter.outputs.count != '0'
         env:
           STAGING_USER: ${{ secrets.STAGING_USER }}
           STAGING_HOST: ${{ secrets.STAGING_HOST }}
@@ -524,6 +571,10 @@ jobs:
             NAME="$(jq -r ".todo[$i].name" "$STATE/plan.json")"
             TEMPLATE="$(jq -r ".todo[$i].template" "$STATE/plan.json")"
             CURRENCY="$(jq -r ".todo[$i].currency" "$STATE/plan.json")"
+            # // "de-CH" for the reason the palette gives just below: a plan.json written
+            # before `locale` existed (a re-run against an older artifact) would otherwise
+            # dispatch the literal string "null", which build-tenant-image.yml rejects.
+            LOCALE="$(jq -r ".todo[$i].locale // \"de-CH\"" "$STATE/plan.json")"
             # // "" so a plan.json written before the palette existed (a re-run against an
             # older artifact) yields the empty default rather than the string "null".
             PWA_THEME_COLOR="$(jq -r ".todo[$i].pwa_theme_color // \"\"" "$STATE/plan.json")"
@@ -539,7 +590,7 @@ jobs:
             fi
 
             if [ "$DRY_RUN" = "true" ]; then
-              echo "DRY RUN — would build $IMAGE_TAG for $DOMAIN ($TEMPLATE/$CURRENCY), then provision $SLUG"
+              echo "DRY RUN — would build $IMAGE_TAG for $DOMAIN ($TEMPLATE/$CURRENCY/$LOCALE), then provision $SLUG"
               printf -- '- `%s` (%s) — dry run, nothing done; would build `%s` then provision\n' \
                 "$SLUG" "$BOX_STATE" "$IMAGE_TAG" >> "$STATE/notes.md"
               echo "::endgroup::"
@@ -552,6 +603,18 @@ jobs:
             # being able to rehearse on a laptop.
             since="$(python3 -c 'import datetime as d; print((d.datetime.now(d.timezone.utc) - d.timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
             echo "==> dispatching build-tenant-image for $IMAGE_TAG"
+            # MERGE ORDER on `-f locale` below, and it is not cosmetic: this dispatch
+            # targets $FRONTEND_REF, which defaults to `main`. A workflow_dispatch REJECTS
+            # an input the target ref does not declare (422 "Unexpected inputs provided"),
+            # and this step runs under `set -euo pipefail` — so passing `locale` before the
+            # frontend release carrying it reaches `main` does not merely lose the locale,
+            # it ABORTS the provisioning loop: no image, no provision, tenant left absent.
+            # The frontend `locale` input landed on develop in restaurant-app-frontend#694.
+            #
+            # The comment sits HERE rather than inside the invocation because a `#` line
+            # between two backslash-continued lines TERMINATES the command: the preceding
+            # `\` splices the comment onto it, and every later `-f …` line becomes its own
+            # top-level command. Measured: `-f: command not found`, exit 127.
             GH_TOKEN="$FRONTEND_DISPATCH_TOKEN" gh workflow run build-tenant-image.yml \
               --repo "$FRONTEND_REPO" --ref "$FRONTEND_REF" \
               -f tenant_domain="$DOMAIN" \
@@ -559,6 +622,7 @@ jobs:
               -f restaurant_name="$NAME" \
               -f template="$TEMPLATE" \
               -f currency="$CURRENCY" \
+              -f locale="$LOCALE" \
               -f pwa_theme_color="$PWA_THEME_COLOR" \
               -f pwa_background_color="$PWA_BACKGROUND_COLOR"
             wait_for_build "$IMAGE_TAG" "$since"
@@ -592,8 +656,9 @@ jobs:
 
       - name: Report the outcome
         # Always — a chain nobody is watching has to say what it did, including "nothing,
-        # and here is why".
-        if: always()
+        # and here is why". The one exception is a RELEASE merge, which is not this
+        # chain's business at all: reporting it was the noise #172 is about.
+        if: always() && steps.provenance.outputs.release != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           JOB_STATUS: ${{ job.status }}

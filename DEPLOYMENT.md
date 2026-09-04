@@ -241,6 +241,11 @@ plane later calls the same scripts (ADR-003 — no parallel mechanism).
    tags, currency/languages/modules, `city` for the seeded RestaurantInfo
    identity), PR → merge → sync to the box.
 
+   **`locale`** (optional): the BCP-47 tag that formats prices — absent = `de-CH`.
+   Say it for any tenant outside Switzerland: `currency: EUR` alone renders
+   `EUR 8.00`, and `locale: fr-FR` renders `8,00 €`. It is baked into the bundle,
+   so it is set at **build** time and changing it later is an image rebuild.
+
    **`base_domain`** (optional, §D1): the zone a `domain_mode: subdomain` tenant
    lives under. **Absent = `sofrapiwas.com`**, which is what every existing entry
    means — set it only when a reseller partner hosts the client under his own
@@ -289,13 +294,17 @@ plane later calls the same scripts (ADR-003 — no parallel mechanism).
    built, running, and answers every visit with a TLS error.
 3. **Frontend image**: `NEXT_PUBLIC_*` are baked per domain, so build the
    tenant's image first (frontend repo):
-   `gh workflow run build-tenant-image.yml -f tenant_domain=<domain> -f image_tag=tenant-<slug> -f restaurant_name="<registry name>" -f template=<registry template> -f currency=<registry currency> -f pwa_theme_color=<registry pwa_theme_color> -f pwa_background_color=<registry pwa_background_color>`
+   `gh workflow run build-tenant-image.yml -f tenant_domain=<domain> -f image_tag=tenant-<slug> -f restaurant_name="<registry name>" -f template=<registry template> -f currency=<registry currency> -f locale=<registry locale> -f pwa_theme_color=<registry pwa_theme_color> -f pwa_background_color=<registry pwa_background_color>`
    — `restaurant_name` bakes the page-metadata `<title>` (frontend #125 part 1);
    `template` bakes the UI template (ADR-006, default `classic`); `currency`
    bakes `NEXT_PUBLIC_TENANT_CURRENCY` for all displayed prices (frontend #169,
    default `CHF` — pair it with the registry `currency:` field, whose backend
    half `TENANT_CURRENCY` → `Localization__Currency` ships via the tenant
-   compose template since #33); the two `pwa_*` colours bake the web-app manifest
+   compose template since #33); `locale` bakes `NEXT_PUBLIC_TENANT_LOCALE`, which
+   decides where that currency's symbol goes and how the amount is punctuated
+   (frontend #694, default `de-CH` — `EUR 8.00` under de-CH, `8,00 €` under
+   fr-FR, so a non-Swiss tenant must pass it); the two `pwa_*` colours bake
+   the web-app manifest
    palette, whose default is **RUMI red** (see the registry field above). All of them
    are optional (defaults preserve old dispatches) but every real tenant should pass
    the registry values — and a non-red tenant that omits the palette gets no error,
@@ -335,6 +344,78 @@ plane later calls the same scripts (ADR-003 — no parallel mechanism).
    should return the registry name/city/admin_email (not RUMI values), the
    page `<title>` and footer © should show the tenant name, and a decoded
    access token should carry `tenant: <slug>` (backend #117).
+
+### Tenant database isolation (`harden-tenant-db-access.sh`)
+
+Every tenant gets its own database on the shared Postgres — there is no `TenantId`
+column anywhere, so the database boundary IS the isolation. PostgreSQL, however,
+grants `CONNECT` on a new database to `PUBLIC`, which means every role on the
+cluster including every other tenant's. Measured on staging before this was closed:
+
+```
+$ psql -U tenant_demo -h 127.0.0.1 -d tenant_kebabdilhan -tAc 'SELECT current_database()'
+tenant_kebabdilhan          <- succeeded
+```
+
+No data was exposed — table reads and schema writes both fail closed — so this was
+defence in depth rather than an active leak (#155).
+
+`provision-tenant.sh` now revokes it at creation, unconditionally, so a re-provision
+also repairs an older database. For databases created before that, run the one-off:
+
+```bash
+cd /opt/rumi/deploy
+./harden-tenant-db-access.sh            # dry run — reports what WOULD change
+./harden-tenant-db-access.sh --apply
+```
+
+It reads `tenants/registry.yml` rather than matching `tenant_%`, because tenant 1's
+database is `restaurantdb` and no prefix would have caught it, and it honours
+`BOX_ROLE` so a tenant belonging to the other box is left alone — `restaurantdb`
+exists on **both** boxes, so without that filter a prod entry would be applied here.
+It also covers the two **control-plane** databases (`sofra`, `sofra_staging`), which
+are not tenants and appear in no registry: leaving them out was the reciprocal hole,
+since every tenant role could open a session on the database holding partner, billing
+and CRM records.
+
+`GRANT` runs **before** `REVOKE`, so a failed grant changes nothing. That order is what
+makes "cannot lock anyone out" true in general rather than by luck: a database *owner*
+keeps `CONNECT` through ownership, so the wrong order looks safe for every
+scripts-provisioned tenant and strands any role that is not the owner.
+
+Nothing operational is affected, and it is worth naming why rather than asserting it —
+every non-superuser client on the box connects to its **own** database:
+
+| client | role | database |
+|---|---|---|
+| base RUMI backend | `POSTGRES_USER` (superuser) | `restaurantdb` |
+| tenant backends | `TENANT_DB_ROLE`, which is also the DB **owner** | its own |
+| sofra / sofra-staging | `sofra` / `sofra_staging` | its own |
+| `backup-dump.sh`, `backup-tenant.sh`, `restore-tenant.sh`, `deprovision-tenant.sh` | `POSTGRES_USER` (superuser) | any |
+| postgres healthcheck | `pg_isready` — does not authenticate | — |
+| restic / Dozzle / printer feed | no database client | — |
+
+Reverse with `GRANT CONNECT ON DATABASE <db> TO PUBLIC`.
+
+A `retired` tenant is **reported, not hardened**: `deprovision-tenant.sh` KEEPS the
+database and its login role unless `--drop-db` was passed, so a retired slug can still
+own exactly the loose database this closes. The script prints a `NOTE` line for any it
+finds rather than filtering it out of sight.
+
+**Applied to the staging box 2026-09-04** — three tenant databases plus both
+control-plane databases. Verified after: a cross-tenant connect and a
+tenant→control-plane connect both answer `FATAL: permission denied for database`, each
+tenant still reaches its own, all five hosts answer `/api/health` 200, and the sofra
+logs carry no permission or Prisma errors. A second run reports `0 database(s) would
+change`.
+
+**The prod box has not been run yet**; it holds one database whose only client is the
+superuser, so there is no cross-tenant reach there to close, but running it keeps the
+two boxes describable by the same sentence.
+
+A **restore re-creates the database**, and a new database gets the loose default back —
+so `restore-tenant.sh` re-applies the revoke on a real `--into` restore. Without that
+the hardening looks permanent and quietly is not.
 
 ### Granting `online-payments` to a tenant that is already live
 
@@ -541,7 +622,8 @@ that the gates gate rather than that the unrestricted path works:
 |---|---|
 | `/api/tenant/modules` | `enforced: true`, exactly the six bought ids (not the whole vocabulary) |
 | startup log | `Module enforcement ON — enabled: core, kitchen-board, cashier, server, reservations, loyalty` |
-| `printing` **not bought** — `GET /api/orders/printer-feed` with a **valid** `X-Api-Key` | **404 `ModuleNotEnabled`** |
+| `printing` **not bought** — `GET /api/orders/printer-feed` with a **valid** `X-Api-Key` | **404 `ModuleNotEnabled`** (the module gate is controller-scope, so it wins over the key check) |
+| `printing` bought — `PrinterSettings:ApiKey` **blank** | **401** on every printer endpoint since backend #475. It used to serve EVERYONE: the filter failed open, and the order feed carries customer names, phones and addresses. Provisioning always generates a key, so this is the hand-edited case; the backend logs it once at startup. |
 | `printing` **not bought** — `GET /api/devices` with an **admin JWT** | **404 `ModuleNotEnabled`** |
 | the six bought surfaces (`/api/Events/kitchen`, `/api/Events/service`, `/api/Orders/z-report`, `/api/Reservations`, `/api/admin/PointRules`, `/api/UserGroup`) | all serve |
 | UI, module temporarily narrowed | `/reservations` renders a themed *"Not available here"*; the nav entry, the home hero CTA and all four loyalty admin links disappear |
@@ -1151,7 +1233,67 @@ Prod box: 15 GiB RAM, ~14 GiB free at snapshot. (This also confirms a
 *co-located* self-hosted Sentry is a non-starter — its ~16 GiB minimum would
 starve the live client stack — so error tracking stays on Sentry SaaS EU.)
 
+## Cron redundancy (`cron-fallback.sh`)
+
+On 2026-08-24 GitHub began refusing to **start** every scheduled job on `piwas-21/sofra` —
+an Actions billing block: `"steps": []`, a job that lived one second. All six scheduled
+workflows were down for **six days** and nothing noticed. It was found because a release
+coordinator happened to open the Actions tab (#165).
+
+A watchdog *inside* Actions would have been killed by the same block. **A signal that only
+reports when its own reporter is alive is not a signal.** So the second trigger runs from
+the box's own crontab, on the box's own clock, needing nothing from GitHub:
+
+```cron
+# Redundant cron triggers (#165). Offset from the GitHub Actions schedule on purpose —
+# these are a SECOND path, not a replacement, and either alone keeps the sweeps running.
+ 8 14 * * *   /opt/rumi/deploy/cron-fallback.sh trial-warnings >> /opt/rumi/cron-fallback.log 2>&1
+ 7,37 * * * * /opt/rumi/deploy/cron-fallback.sh go-live        >> /opt/rumi/cron-fallback.log 2>&1
+47 9,19 * * * /opt/rumi/deploy/cron-fallback.sh backup-alerts  >> /opt/rumi/cron-fallback.log 2>&1
+17 11 * * *   /opt/rumi/deploy/cron-fallback.sh retention      >> /opt/rumi/cron-fallback.log 2>&1
+```
+
+`go-live` runs half-hourly because a tenant waiting to be announced is waiting on it; the
+other three are daily, offset by hours from the Actions runs.
+
+### Is double-firing safe? Measured, not assumed
+
+Each endpoint called twice back to back against the live control plane, 2026-09-04:
+
+| endpoint | 1st | 2nd |
+|---|---|---|
+| `trial-warnings` | `{"considered":0,…}` | identical |
+| `go-live` | `{"considered":0,"announced":0,…}` | identical |
+| `retention` | `{"deleted":{…0,0,0}}` | identical |
+| `backup-alerts` | `{"decision":"recovered","emailed":true}` | `{"decision":"healthy","emailed":false}` |
+
+The first three are **send-once by audit marker** — firing again sends nothing. The fourth
+is **edge-triggered**: it mails on a state *transition*, so a second call does not duplicate
+a mail, but an extra call can notice a transition sooner than Actions would have. A
+difference in timing, not in content — and the reason the schedule above is offset rather
+than doubled up.
+
+### It fails loudly, on purpose
+
+The caller *workflows* warn-and-exit-0 when `CRON_SECRET` is absent, which is right for a CI
+job nothing depends on. This script **refuses**, because it exists precisely because the
+other path went quiet, and a fallback that silently does nothing is the same defect wearing
+a different hat. Verified: a wrong secret logs `FAIL … 401` and exits 1; a missing one
+refuses before making any request.
+
+The secret is the box `.env`'s `SOFRA_CRON_SECRET` (mapped to `CRON_SECRET` in the sofra
+container). Rotating it means rotating the GitHub Actions secret too, or the two paths
+disagree — see [rotate-secrets.md](docs/runbooks/rotate-secrets.md).
+
+The companion is a **freshness readout** on the founder's `/admin`, so a reader can see when
+each sweep last actually ran: piwas-21/sofra#209.
+
 ## Backups & restore (cross-box, since 2026-07-09)
+
+> **Rotating a secret?** [docs/runbooks/rotate-secrets.md](docs/runbooks/rotate-secrets.md)
+> — one section per secret, written from a rotation actually rehearsed on staging.
+> `RESTIC_PASSWORD` in particular is **re-key, not rotate**: changing the value orphans every
+> existing snapshot, and no procedure in this file recovers from losing it.
 
 **Design** (workspace cost plan §10.1 — box loss must not mean data loss): both
 boxes dump nightly to a local dir; prod then ships everything off-box with
@@ -1609,7 +1751,7 @@ missed-order/error counts to the sofra control plane's `/api/telemetry/fleet` ro
    `FleetPush__*` + `SENTRY_DSN` into the backend. The backend auto-migrates the fleet tables
    on startup. So a freshly provisioned tenant reports to `/admin/fleet` automatically. Until
    the secret is set the pusher is **inert** (self-guards on an empty secret) — safe to ship.
-3. **Roll sofra** to pick up the ingest secret: `docker compose -f docker-compose.prod.yml up -d sofra`.
+3. **Roll sofra** to pick up the ingest secret — `docker compose -f docker-compose.prod.yml up -d sofra`.
 4. **RUMI (the main stack):** its `FleetPush__*` is now wired straight into `docker-compose.prod.yml`
    (`FleetPush__Enabled` defaults on; slug `rumi`). So once the backend fleet code is on the prod box
    (backend #199–#203, released to `main` + auto-deployed) and `PRINTER_TELEMETRY_SECRET` is set

@@ -66,6 +66,21 @@
 #                 develop's EF migrations to that tenant's database — not reversible by
 #                 re-pointing the image. A moving tag only tracks on the STAGING box; see
 #                 DEPLOYMENT.md §"Tenants on moving tags".
+#   locale:       OPTIONAL BCP-47 tag — **lowercase language, uppercase region: `de-CH`,
+#                 not `de-ch`**. BCP-47 itself treats case as insignificant and `Intl`
+#                 silently canonicalises, but the grammar gate here is case-STRICT, so
+#                 `de-ch` refuses the entry (loudly, in both plan builders) rather than
+#                 provisioning. Absent -> `de-CH`. It decides where the currency
+#                 SYMBOL goes and how the amount is punctuated, which `currency:` does not:
+#                 de-CH renders `EUR 8.00`, fr-FR renders `8,00 €`. So it is NOT derivable
+#                 from the currency — EUR is spoken in fr-FR, nl-NL and de-DE, which place
+#                 and punctuate the same amount three different ways — and it is not the
+#                 tenant's `languages` either, whose first entry is a UI language, not a
+#                 formatting region.
+#                 Baked into the frontend bundle as NEXT_PUBLIC_TENANT_LOCALE at BUILD
+#                 time, alongside `currency`, so changing it is an image rebuild and not a
+#                 re-provision. Absent behaves exactly as before the field existed (the
+#                 Swiss default), which is why every entry predating it is left alone.
 #   currency / languages / modules: recorded per ADR-010; provisioning writes them into the
 #                 tenant instance env. The VOCABULARY is validated: modules must come from
 #                 core | kitchen-board | cashier | server | reservations | loyalty |
@@ -111,6 +126,28 @@
 #                   - RUMI (managed: legacy) runs the MAIN compose project, so its list below
 #                     never reaches its container and never will. It is documentation of what
 #                     tenant 1 has, not a control. Do not try to make it one.
+#   payments_commission_bps: OPTIONAL integer, basis points — 100 = 1.00%. Absent = 0 = no
+#                 commission: at 0 the backend does not send Stripe's `application_fee_amount`
+#                 parameter at all, rather than sending a zero value. Every tenant below is
+#                 absent, i.e. 0 — this key exists so a commission CAN be turned on later, not
+#                 because one is on now.
+#
+#                 Only meaningful when `modules` includes `online-payments` AND `stripe_account`
+#                 is set — provision-tenant.sh refuses a non-zero value on a tenant missing
+#                 either half, the same way it refuses `online-payments` without
+#                 `stripe_account` above: a commission on a tenant that cannot take online
+#                 payments is a configuration mistake that would otherwise sit silent.
+#
+#                 Changing it is the same as changing `modules`: nothing until you
+#                 RE-PROVISION that tenant (a bare `docker compose restart` re-reads nothing,
+#                 measured 2026-08-18) — a registry edit alone does not touch a running
+#                 container.
+#
+#                 provision-tenant.sh also refuses anything above 1000 (10%). That ceiling is a
+#                 safety guard, not a preference: Stripe does not reject an oversized
+#                 application fee, it silently CAPS it at 100% of the order instead (measured
+#                 2026-09-04), so a fat-fingered value here would not error at Stripe, it would
+#                 just take the whole order.
 #   city:     optional free text — seeds RestaurantInfo.City on the tenant's first boot
 #             (deploy#16 / backend #120, via RestaurantInfoSeed__City). `name` and
 #             `admin_email` seed RestaurantInfo Name/Email the same way; the seeder is a
@@ -389,3 +426,53 @@ tenants:
     template: classic
     admin_email: kebabdilhan@solutioneva.com
     city: Cluses
+
+  # Reseller tenant #3 — partner Mustafa Vural (Solution Eva). MC FOOD, a kebab/tacos
+  # snack in Orchamps-Vennes (Doubs, FR), migrating from their own temporary platform.
+  #
+  # THE FIRST TENANT WHOSE CATALOGUE COMES FROM OUTSIDE. Provisioning gives an EMPTY
+  # tenant; the 16 categories, 68 products, 34 menu bundles, 22 components and 118 images
+  # are loaded afterwards by the frontend repo's docs/onboarding/mcfood/import.mjs. Run it
+  # against STAGING first — its own README says why.
+  #
+  # Commercially: FREE until they decide to continue (owner, 2026-09-03). Nothing here
+  # expresses that — the registry carries no price — it lives on the control-plane record,
+  # and must be set there before Mollie billing is switched on.
+  mcdoner:
+    name: MC FOOD
+    # Provisioned and verified 2026-09-03: catalogue loaded (16 categories, 57 catalogue
+    # products, 45 menu bundles, 22 hidden components, 118 images), profile and opening
+    # hours written, prices confirmed rendering `14,00 €` in a browser. `active` is what
+    # makes it eligible for the frontend RELEASE refresh — see list-release-tenants.sh.
+    status: active
+    managed: scripts
+    # staging, like this partner's other two clients. Not prod: no automation reaches the
+    # prod box (the merge chain is staging-only, and cross-box prod provisioning is out of
+    # ADR-012's scope), so a prod tenant would be hand-run and would be the first
+    # script-managed tenant sharing a box with RUMI.
+    box: staging
+    domain: mcdoner.sofrapiwas.com
+    domain_mode: subdomain
+    # OUR zone — rides the *.sofrapiwas.com wildcard, so it needs no DNS record of its own,
+    # unlike obresse on the partner's solutioneva.com.
+    db: tenant_mcdoner
+    db_role: tenant_mcdoner
+    compose_project: tenant-mcdoner
+    backend_tag: latest
+    frontend_tag: tenant-mcdoner
+    currency: EUR
+    # THE REASON THE locale FIELD EXISTS (#178). Without it every price on this French
+    # tenant renders `EUR 8.00` instead of `8,00 €`.
+    locale: fr-FR
+    languages: [fr, en]
+    # `online-payments` is ABSENT and that is SEQUENCING, not an oversight. Their current
+    # site takes card online; ours needs the restaurant's own Stripe connected account and
+    # KYC first, which only the restaurateur can complete (provision-tenant.sh exits 1 on
+    # the module without `stripe_account:`). MC FOOD opens on cash + card in the
+    # restaurant; when Mustafa returns `acct_…`, ONE commit adds `stripe_account:` AND
+    # `online-payments` together, then a re-provision. Runbook §2b.5.
+    modules: [core, kitchen-board, cashier, server, reservations, loyalty, printing, extra-languages]
+    # classic on the partner's standing preference since 2026-08-21.
+    template: classic
+    admin_email: mcdoner@solutioneva.com
+    city: Orchamps-Vennes
