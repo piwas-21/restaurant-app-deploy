@@ -155,6 +155,7 @@ jobs:
           printf 'none\n' > "$STATE/stage"
 
       - name: Verify the upstream registry sync, and that it was ours
+        id: provenance
         # A step, not the job's `if:` — see the header. Two things are checked, and the
         # order matters: this runs BEFORE the checkout, because the next step checks out
         # the triggering commit's SHA.
@@ -176,6 +177,32 @@ jobs:
           THIS_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+
+          # OUR OWN `main` IS NOT A FAILURE — it is a release (#172).
+          #
+          # `sync-registry-to-staging` triggers on pushes to BOTH `develop` and `main`, so
+          # every release merge that carries a registry change re-runs the sync on `main`,
+          # which chains this workflow, which correctly refuses to provision from a ref that
+          # is not `develop`. The refusal is right. Filing "Auto-provisioning FAILED" for it
+          # was not: it fired on 2026-08-31 twice, and an alarm that cries on a routine,
+          # expected, correct event is an alarm the founder learns to close unread — which
+          # is the failure this reporting exists to prevent.
+          #
+          # Narrow on purpose. Only THIS repo's `main` is benign; every other ref is still a
+          # hard failure with an issue, because this job holds a box SSH key and a cross-repo
+          # dispatch token and "a ref I cannot attribute" is exactly the confused-deputy
+          # shape the check exists for. A fork, a feature branch and a renamed default all
+          # still stop here loudly.
+          if [ "$UPSTREAM_REPO" = "$THIS_REPO" ] && [ "$UPSTREAM_BRANCH" = "main" ]; then
+            echo "::notice::release merge on $THIS_REPO@main — provisioning is develop-only, nothing to do"
+            # An OUTPUT, not a bare `exit 0`. Exiting a step successfully lets the JOB
+            # continue, and the next steps read the registry and provision from it — which
+            # is precisely what this check exists to prevent. Every remaining step is gated
+            # on this, including the reporter: there is nothing to report about a release.
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           if [ "$UPSTREAM_REPO" != "$THIS_REPO" ] || [ "$UPSTREAM_BRANCH" != "develop" ]; then
             {
               echo "**Refused: the triggering run was not this repo's \`develop\`.**"
@@ -200,6 +227,7 @@ jobs:
           fi
 
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        if: steps.provenance.outputs.release != 'true'
         # No `ref:` — the default branch (`develop`) tip. An earlier draft checked out
         # `github.event.workflow_run.head_sha`, which is the textbook `workflow_run`
         # confused-deputy shape (this job holds a box SSH key and a cross-repo dispatch
@@ -215,6 +243,7 @@ jobs:
         # received is traceable.
 
       - name: Read provisioning intent from the registry
+        if: steps.provenance.outputs.release != 'true'
         # A pure read of the entry that was just reviewed and merged: everything the
         # build needs (domain, name, template, currency, locale, PWA palette, image tag) comes
         # from there, so
@@ -357,6 +386,7 @@ jobs:
           PY
 
       - name: Configure SSH (pinned host key)
+        if: steps.provenance.outputs.release != 'true'
         # Same pattern and same secrets as provision-tenant.yml / sync-to-staging.yml.
         env:
           STAGING_SSH_KEY: ${{ secrets.STAGING_SSH_KEY }}
@@ -369,6 +399,7 @@ jobs:
           chmod 644 ~/.ssh/known_hosts
 
       - name: Ask the box what it already has
+        if: steps.provenance.outputs.release != 'true'
         # THE idempotency step — see the header for why the marker, not `.env`, is the
         # key, and why `partial` provisions rather than skipping. Slugs go over stdin
         # (ssh joins argv into one command string, so they must NOT be passed as remote
@@ -417,7 +448,8 @@ jobs:
 
       - name: Refuse an implausible batch
         # A cap, not a queue: if this trips, something edited the registry wholesale.
-        if: steps.filter.outputs.count != '0'
+        # `release` gates every working step — see the provenance check (#172).
+        if: steps.provenance.outputs.release != 'true' && steps.filter.outputs.count != '0'
         run: |
           set -euo pipefail
           count="$(jq '.todo | length' "$STATE/plan.json")"
@@ -439,7 +471,7 @@ jobs:
         # QUIETLY just stops the funnel (runbook §0). This one is checked before any work
         # starts, and reported like any other failure — the founder gets an issue, not a
         # green run that provisioned nothing.
-        if: steps.filter.outputs.count != '0' && env.DRY_RUN != 'true'
+        if: steps.provenance.outputs.release != 'true' && steps.filter.outputs.count != '0' && env.DRY_RUN != 'true'
         env:
           FRONTEND_DISPATCH_TOKEN: ${{ secrets.FRONTEND_DISPATCH_TOKEN }}
         run: |
@@ -459,7 +491,7 @@ jobs:
           fi
 
       - name: Build tenant images and provision
-        if: steps.filter.outputs.count != '0'
+        if: steps.provenance.outputs.release != 'true' && steps.filter.outputs.count != '0'
         env:
           STAGING_USER: ${{ secrets.STAGING_USER }}
           STAGING_HOST: ${{ secrets.STAGING_HOST }}
@@ -624,8 +656,9 @@ jobs:
 
       - name: Report the outcome
         # Always — a chain nobody is watching has to say what it did, including "nothing,
-        # and here is why".
-        if: always()
+        # and here is why". The one exception is a RELEASE merge, which is not this
+        # chain's business at all: reporting it was the noise #172 is about.
+        if: always() && steps.provenance.outputs.release != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           JOB_STATUS: ${{ job.status }}
