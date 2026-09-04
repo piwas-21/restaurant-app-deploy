@@ -176,6 +176,11 @@ services:
       Stripe__Enabled: "${STRIPE_ENABLED:-false}"
       Stripe__PlatformApiKey: "${STRIPE_PLATFORM_API_KEY:-}"
       Stripe__ConnectedAccountId: "${STRIPE_CONNECTED_ACCOUNT_ID:-}"
+      # Sofra's optional per-transaction commission (application_fee_amount), basis points —
+      # 100 = 1.00%, default 0 = no fee parameter sent at all. Per-tenant, from the registry's
+      # `payments_commission_bps` (provision-tenant.sh). Ships INERT: every existing tenant's
+      # .env has 0 until someone deliberately raises it.
+      Stripe__Commission__Bps: "${STRIPE_COMMISSION_BPS:-0}"
       FleetPush__TenantSlug: "__SLUG__"
       # Server-side error tracking (shared Sentry EU project; inert without a DSN).
       # SENTRY_ENVIRONMENT is flowed from the box (=BOX_ROLE) by provision-tenant.sh; empty here

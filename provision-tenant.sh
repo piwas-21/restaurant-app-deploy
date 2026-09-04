@@ -71,8 +71,8 @@ if not t:
 for k in ("name", "status", "managed", "box", "domain", "domain_mode",
           "base_domain", "domain_aliases", "db", "db_role", "compose_project",
           "backend_tag", "frontend_tag", "currency", "languages", "modules",
-          "admin_email", "city", "template", "stripe_account", "mail_from",
-          "partner_name", "partner_url", "partner_attribution"):
+          "admin_email", "city", "template", "stripe_account", "payments_commission_bps",
+          "mail_from", "partner_name", "partner_url", "partner_attribution"):
     v = t.get(k, "")
     if isinstance(v, list):
         v = ",".join(map(str, v))
@@ -105,6 +105,34 @@ if [[ " ${REG_MODULES//,/ } " == *" online-payments "* && -z "$REG_STRIPE_ACCOUN
   echo "       live on this slug is untouched, but every re-provision of it stops here." >&2
   echo "       Fix it in ONE registry commit: add 'stripe_account: acct_...' AND keep" >&2
   echo "       'online-payments' in modules. See docs/runbooks/signup-to-live-tenant.md §2b.5." >&2
+  exit 1
+fi
+
+# Sofra's optional per-transaction commission (Stripe's application_fee_amount), in basis
+# points — 100 = 1.00%, absent in the registry means empty here, normalized to 0 = no
+# commission (no fee parameter sent to Stripe at all).
+REG_PAYMENTS_COMMISSION_BPS="${REG_PAYMENTS_COMMISSION_BPS:-0}"
+[[ "$REG_PAYMENTS_COMMISSION_BPS" =~ ^[0-9]+$ ]] \
+  || { echo "ERROR: tenant '$SLUG' has payments_commission_bps='$REG_PAYMENTS_COMMISSION_BPS' — must be a non-negative integer (basis points, 100 = 1.00%)" >&2; exit 1; }
+# The ceiling is a safety guard, not a preference: Stripe does not reject an oversized
+# application_fee_amount, it silently CAPS it at 100% of the order instead (measured
+# 2026-09-04) — so a fat-fingered value above 1000 would not error at Stripe, it would just
+# take the whole order.
+if (( REG_PAYMENTS_COMMISSION_BPS > 1000 )); then
+  echo "ERROR: tenant '$SLUG' has payments_commission_bps=$REG_PAYMENTS_COMMISSION_BPS — refusing anything above 1000 (10%)" >&2
+  echo "       Stripe does not reject an oversized application fee, it silently CAPS it at 100% of" >&2
+  echo "       the order instead (measured 2026-09-04) — this ceiling is a safety guard, not a" >&2
+  echo "       preference. Lower it in the registry if a higher rate is genuinely intended." >&2
+  exit 1
+fi
+# A commission on a tenant that cannot take online payments is a configuration mistake that
+# would otherwise sit silent — same reasoning as the online-payments/stripe_account refusal above.
+if (( REG_PAYMENTS_COMMISSION_BPS > 0 )) && { [[ " ${REG_MODULES//,/ } " != *" online-payments "* ]] || [[ -z "$REG_STRIPE_ACCOUNT" ]]; }; then
+  echo "ERROR: tenant '$SLUG' has payments_commission_bps=$REG_PAYMENTS_COMMISSION_BPS but does not have a" >&2
+  echo "       working online-payments setup ('online-payments' in modules AND a 'stripe_account' set)" >&2
+  echo "       — a commission on a tenant that cannot take online payments is a configuration mistake" >&2
+  echo "       that would otherwise sit silent. Set it back to 0, or add the module and" >&2
+  echo "       'stripe_account' first. See docs/runbooks/signup-to-live-tenant.md §2b.5." >&2
   exit 1
 fi
 
@@ -770,6 +798,9 @@ if [[ " ${REG_MODULES//,/ } " == *" online-payments "* ]]; then
 else
   set_env_line STRIPE_ENABLED "false"
 fi
+# Commission is validated above (non-negative, <= 1000, and zero unless online-payments +
+# stripe_account are both present) — rendered as-is here, default 0.
+set_env_line STRIPE_COMMISSION_BPS "${REG_PAYMENTS_COMMISSION_BPS:-0}"
 
 # Partner attribution, written on EVERY run (fresh AND existing) for the reason the
 # Stripe lines are: it legitimately drifts, and the direction that matters is REMOVAL.
