@@ -345,6 +345,78 @@ plane later calls the same scripts (ADR-003 — no parallel mechanism).
    page `<title>` and footer © should show the tenant name, and a decoded
    access token should carry `tenant: <slug>` (backend #117).
 
+### Tenant database isolation (`harden-tenant-db-access.sh`)
+
+Every tenant gets its own database on the shared Postgres — there is no `TenantId`
+column anywhere, so the database boundary IS the isolation. PostgreSQL, however,
+grants `CONNECT` on a new database to `PUBLIC`, which means every role on the
+cluster including every other tenant's. Measured on staging before this was closed:
+
+```
+$ psql -U tenant_demo -h 127.0.0.1 -d tenant_kebabdilhan -tAc 'SELECT current_database()'
+tenant_kebabdilhan          <- succeeded
+```
+
+No data was exposed — table reads and schema writes both fail closed — so this was
+defence in depth rather than an active leak (#155).
+
+`provision-tenant.sh` now revokes it at creation, unconditionally, so a re-provision
+also repairs an older database. For databases created before that, run the one-off:
+
+```bash
+cd /opt/rumi/deploy
+./harden-tenant-db-access.sh            # dry run — reports what WOULD change
+./harden-tenant-db-access.sh --apply
+```
+
+It reads `tenants/registry.yml` rather than matching `tenant_%`, because tenant 1's
+database is `restaurantdb` and no prefix would have caught it, and it honours
+`BOX_ROLE` so a tenant belonging to the other box is left alone — `restaurantdb`
+exists on **both** boxes, so without that filter a prod entry would be applied here.
+It also covers the two **control-plane** databases (`sofra`, `sofra_staging`), which
+are not tenants and appear in no registry: leaving them out was the reciprocal hole,
+since every tenant role could open a session on the database holding partner, billing
+and CRM records.
+
+`GRANT` runs **before** `REVOKE`, so a failed grant changes nothing. That order is what
+makes "cannot lock anyone out" true in general rather than by luck: a database *owner*
+keeps `CONNECT` through ownership, so the wrong order looks safe for every
+scripts-provisioned tenant and strands any role that is not the owner.
+
+Nothing operational is affected, and it is worth naming why rather than asserting it —
+every non-superuser client on the box connects to its **own** database:
+
+| client | role | database |
+|---|---|---|
+| base RUMI backend | `POSTGRES_USER` (superuser) | `restaurantdb` |
+| tenant backends | `TENANT_DB_ROLE`, which is also the DB **owner** | its own |
+| sofra / sofra-staging | `sofra` / `sofra_staging` | its own |
+| `backup-dump.sh`, `backup-tenant.sh`, `restore-tenant.sh`, `deprovision-tenant.sh` | `POSTGRES_USER` (superuser) | any |
+| postgres healthcheck | `pg_isready` — does not authenticate | — |
+| restic / Dozzle / printer feed | no database client | — |
+
+Reverse with `GRANT CONNECT ON DATABASE <db> TO PUBLIC`.
+
+A `retired` tenant is **reported, not hardened**: `deprovision-tenant.sh` KEEPS the
+database and its login role unless `--drop-db` was passed, so a retired slug can still
+own exactly the loose database this closes. The script prints a `NOTE` line for any it
+finds rather than filtering it out of sight.
+
+**Applied to the staging box 2026-09-04** — three tenant databases plus both
+control-plane databases. Verified after: a cross-tenant connect and a
+tenant→control-plane connect both answer `FATAL: permission denied for database`, each
+tenant still reaches its own, all five hosts answer `/api/health` 200, and the sofra
+logs carry no permission or Prisma errors. A second run reports `0 database(s) would
+change`.
+
+**The prod box has not been run yet**; it holds one database whose only client is the
+superuser, so there is no cross-tenant reach there to close, but running it keeps the
+two boxes describable by the same sentence.
+
+A **restore re-creates the database**, and a new database gets the loose default back —
+so `restore-tenant.sh` re-applies the revoke on a real `--into` restore. Without that
+the hardening looks permanent and quietly is not.
+
 ### Granting `online-payments` to a tenant that is already live
 
 The self-serve buyer of `online-payments` is provisioned **without** it — sofra's generator

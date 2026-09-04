@@ -857,6 +857,30 @@ else
   echo "   created database ${REG_DB} (owner ${REG_DB_ROLE})"
 fi
 
+# Isolation, applied UNCONDITIONALLY so a re-provision repairs a database created
+# before this existed (#155).
+#
+# PostgreSQL grants CONNECT on a new database to PUBLIC, which means every role on
+# the cluster — including every OTHER tenant's role. Measured on staging before this
+# was written: `psql -U tenant_demo -d tenant_obresse` succeeded. Table reads and
+# schema writes both failed closed, so no data was exposed; this is the
+# defence-in-depth layer that should never have been left to a default, and the
+# isolation model behind it (database-per-tenant, no TenantId column anywhere) is
+# otherwise sound.
+#
+# Both statements are idempotent, and neither can lock out operations: POSTGRES_USER
+# is a SUPERUSER, and superusers bypass these ACLs entirely — so backup-dump.sh,
+# restore-tenant.sh and every psql_deploy call here are unaffected. The explicit
+# GRANT is what keeps the tenant's own role working once PUBLIC's is gone.
+echo "==> Database access (grant the tenant's own role, then revoke PUBLIC's)"
+# GRANT first. These are separate statements, so if the GRANT fails nothing has
+# changed yet — the other order can strand a role that is not the database owner.
+# Every tenant created here IS its database's owner (CREATE DATABASE … OWNER above),
+# which is exactly why the wrong order would have looked safe indefinitely.
+psql_deploy -c "GRANT CONNECT ON DATABASE ${REG_DB} TO ${REG_DB_ROLE}"
+psql_deploy -c "REVOKE CONNECT ON DATABASE ${REG_DB} FROM PUBLIC"
+echo "   ${REG_DB}: CONNECT is now ${REG_DB_ROLE} (+ superusers) only"
+
 echo "==> Pull images (project tenant-${SLUG})"
 (cd "$TENANT_DIR" && docker compose pull)
 
