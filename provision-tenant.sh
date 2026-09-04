@@ -95,11 +95,25 @@ case "$TENANT_TEMPLATE" in
   *) echo "ERROR: registry entry '$SLUG' has template '$TENANT_TEMPLATE' — allowed: classic | craft (absent = classic)" >&2; exit 1 ;;
 esac
 
+# Does this tenant carry a given module? `modules` arrives as csv, so the test is a padded needle
+# in a padded haystack — and the padding is load-bearing: drop a space and `online-payments` would
+# also match a hypothetical `no-online-payments`. Written out four separate times before this, which
+# is four chances to get that subtlety wrong independently.
+#
+# Returns non-zero when the module is absent, so under `set -e` only ever call it as a CONDITION
+# (`if tenant_has_module x`, `! tenant_has_module x`, or either side of &&/||) — never as a bare
+# statement, which would abort the script on a perfectly ordinary "no".
+# --- BEGIN module membership helpers
+tenant_has_module() {
+  [[ " ${REG_MODULES//,/ } " == *" $1 "* ]]
+}
+# --- END module membership helpers
+
 # Online payments needs BOTH halves or it is not a working purchase. A tenant that bought the
 # module but has no connected account would provision happily and then fail at the diner's first
 # card payment — the worst place to discover it. Refuse here instead. (The reverse, an account
 # recorded before the module is bought, is fine: it stays inert until the module is added.)
-if [[ " ${REG_MODULES//,/ } " == *" online-payments "* && -z "$REG_STRIPE_ACCOUNT" ]]; then
+if tenant_has_module online-payments && [[ -z "$REG_STRIPE_ACCOUNT" ]]; then
   echo "ERROR: tenant '$SLUG' buys 'online-payments' but has no 'stripe_account' in the registry" >&2
   echo "       This refusal is BEFORE the database, so nothing was created — and a tenant already" >&2
   echo "       live on this slug is untouched, but every re-provision of it stops here." >&2
@@ -127,7 +141,7 @@ if (( REG_PAYMENTS_COMMISSION_BPS > 1000 )); then
 fi
 # A commission on a tenant that cannot take online payments is a configuration mistake that
 # would otherwise sit silent — same reasoning as the online-payments/stripe_account refusal above.
-if (( REG_PAYMENTS_COMMISSION_BPS > 0 )) && { [[ " ${REG_MODULES//,/ } " != *" online-payments "* ]] || [[ -z "$REG_STRIPE_ACCOUNT" ]]; }; then
+if (( REG_PAYMENTS_COMMISSION_BPS > 0 )) && { ! tenant_has_module online-payments || [[ -z "$REG_STRIPE_ACCOUNT" ]]; }; then
   echo "ERROR: tenant '$SLUG' has payments_commission_bps=$REG_PAYMENTS_COMMISSION_BPS but does not have a" >&2
   echo "       working online-payments setup ('online-payments' in modules AND a 'stripe_account' set)" >&2
   echo "       — a commission on a tenant that cannot take online payments is a configuration mistake" >&2
@@ -204,7 +218,7 @@ for m in "${_MODULES[@]}"; do
   [[ " $KNOWN_MODULES " == *" $m "* ]] \
     || { echo "ERROR: registry entry '$SLUG' lists unknown module '$m' — allowed: $KNOWN_MODULES" >&2; exit 1; }
 done
-[[ " ${REG_MODULES//,/ } " == *" core "* ]] \
+tenant_has_module core \
   || echo "WARN: tenant '$SLUG' has no 'core' module — every instance runs the core surface regardless" >&2
 
 # Languages (EMAIL-LOCALISATION-PLAN §5 S9). Validated for the same reason the modules are,
@@ -793,7 +807,7 @@ set_env_line PRINTER_TELEMETRY_SECRET "$BOX_TELEMETRY_SECRET"
 # online-payments must not be one env edit away from taking card payments.
 set_env_line STRIPE_PLATFORM_API_KEY "$BOX_STRIPE_KEY"
 set_env_line STRIPE_CONNECTED_ACCOUNT_ID "$REG_STRIPE_ACCOUNT"
-if [[ " ${REG_MODULES//,/ } " == *" online-payments "* ]]; then
+if tenant_has_module online-payments; then
   set_env_line STRIPE_ENABLED "true"
 else
   set_env_line STRIPE_ENABLED "false"
@@ -991,7 +1005,7 @@ echo "==> Stripe payment methods (only when this tenant bought online-payments)"
 #
 # Each connected account has TWO payment-method configurations: its own (parent:None — the one
 # Checkout actually uses) and one inherited from the platform's. This flips the account's OWN one.
-if [[ " ${REG_MODULES//,/ } " == *" online-payments "* ]]; then
+if tenant_has_module online-payments; then
   if [[ -z "$BOX_STRIPE_KEY" ]]; then
     echo "ERROR: tenant '$SLUG' bought online-payments but STRIPE_PLATFORM_API_KEY is unset on this box" >&2
     echo "       The tenant would provision with a checkout that cannot take a card. Set it and re-run." >&2
