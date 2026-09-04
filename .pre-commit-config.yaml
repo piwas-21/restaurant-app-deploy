@@ -12,8 +12,11 @@
 #     bash setup_hooks.sh        # or: pre-commit install
 # Run manually:  pre-commit run --all-files
 #
-# Only non-file-modifying checks are enabled so a first run on this long-lived
-# infra tree can't rewrite files unexpectedly.
+# Every check here was non-file-modifying until #161: `detect-secrets` DOES rewrite
+# `.secrets.baseline` in place when line numbers drift, and then exits 1 asking you
+# to stage it. That is the one exception, it is confined to a file that exists only
+# for this hook, and it never touches infra scripts — which is what the original
+# rule was protecting.
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
@@ -26,3 +29,28 @@ repos:
       - id: check-merge-conflict
       - id: check-added-large-files
         args: ["--maxkb=1000"]
+
+  # ── Secret scanning (#161) ────────────────────────────────────────────
+  # This was the ONLY app repo with no secret scanner at any layer, and it is
+  # the one where a pasted credential is most likely to land: it is the
+  # box-infra source of truth, and every merge rsyncs to BOTH boxes.
+  #
+  # Prevention, not cleanup — the history is clean. Verified across all refs
+  # before this was added: `.env`, `app-secrets.json` and `dozzle-users.yml`
+  # return 0 commits each, and no `.pem`/`.key`/`.pfx`/`.p12`/`id_rsa` blob was
+  # ever added. Positive control: the identical command against `.env.example`
+  # returns 21, so the search works and the zeros are real rather than a
+  # broken pathspec.
+  #
+  # Every entry in `.secrets.baseline` today is a literal placeholder
+  # (`REPLACE_WITH_openssl_rand_base64_48`, `__JWT_SECRET__`) in an example or
+  # template file, or a sentence in DEPLOYMENT.md. Each was read before being
+  # baselined; none is a credential. Regenerate with:
+  #     detect-secrets scan --baseline .secrets.baseline
+  # Don't add path excludes here — they hide rows the baseline already
+  # captures, which is how a repo ends up blind to its own worst directory.
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args: ["--baseline", ".secrets.baseline"]
