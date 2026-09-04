@@ -290,6 +290,26 @@ services:
       # Mollie subscription billing (S9, sofra ADR-011 Job A). Unset -> billing
       # UI shows "not configured" and the webhook 503s; the site still serves.
       MOLLIE_API_KEY: "${MOLLIE_API_KEY:-}"
+      # Stripe Connect webhook (ADR-011 Job B, the application-fee refund rail).
+      # Sofra is the PLATFORM: when a restaurant refunds a charge in its own Stripe
+      # dashboard, Stripe does NOT return the application fee — the connected account
+      # simply loses it — so a platform-level `connect: true` endpoint listens for
+      # charge.refunded across every connected account and issues the matching fee
+      # refund. Both unset -> the webhook answers 503 and refunds nothing; the site
+      # still serves. Only needed once some tenant runs a non-zero
+      # payments_commission_bps, which today is none of them.
+      #
+      # DELIBERATELY NOT ${STRIPE_PLATFORM_API_KEY}. That key is the one the TENANT
+      # BACKENDS use and it is narrowed to carry no refunds write at all — which is
+      # exactly why RUMI refuses to refund Stripe-captured payments itself. Refunding
+      # an application fee needs `Application fees -> write`, so it is a SEPARATE
+      # restricted key held only by the control plane. Sharing one key would hand
+      # every tenant backend the ability to move money it is currently unable to touch.
+      STRIPE_API_KEY: "${SOFRA_STRIPE_API_KEY:-}"
+      # The `whsec_` for the platform-level Connect endpoint. Stripe REFUSES to let a
+      # platform register a webhook on a connected account (measured), so there is one
+      # endpoint, one secret, and the handler routes on the event's `account` field.
+      STRIPE_CONNECT_WEBHOOK_SECRET: "${SOFRA_STRIPE_CONNECT_WEBHOOK_SECRET:-}"
       # Tenant registry, read-only (S6/ADR-007): /admin/tenants renders the
       # same synced YAML the provision scripts consume. The control plane
       # never writes it — lifecycle stays git + scripts (ADR-003).
