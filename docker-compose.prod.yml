@@ -290,14 +290,16 @@ services:
       # Mollie subscription billing (S9, sofra ADR-011 Job A). Unset -> billing
       # UI shows "not configured" and the webhook 503s; the site still serves.
       MOLLIE_API_KEY: "${MOLLIE_API_KEY:-}"
-      # Stripe Connect webhook (ADR-011 Job B, the application-fee refund rail).
-      # Sofra is the PLATFORM: when a restaurant refunds a charge in its own Stripe
-      # dashboard, Stripe does NOT return the application fee — the connected account
-      # simply loses it — so a platform-level `connect: true` endpoint listens for
-      # charge.refunded across every connected account and issues the matching fee
-      # refund. Both unset -> the webhook answers 503 and refunds nothing; the site
-      # still serves. Only needed once some tenant runs a non-zero
-      # payments_commission_bps, which today is none of them.
+      # Stripe webhooks (ADR-011 Job B, the application-fee refund rail). Sofra is the
+      # PLATFORM: when a restaurant refunds a charge in its own Stripe dashboard, Stripe
+      # does NOT return the application fee — the connected account simply loses it — so
+      # a platform-level `connect: true` endpoint listens for charge.refunded across
+      # every connected account and issues the matching fee refund. Since 2026-09-04
+      # there is a SECOND, account-scoped endpoint on the same URL for the platform's
+      # own application_fee.created events; the two `whsec_` below are why. All unset ->
+      # the webhook answers 503 and refunds nothing; the site still serves. Only needed
+      # once some tenant runs a non-zero payments_commission_bps, which today is none of
+      # them.
       #
       # DELIBERATELY NOT ${STRIPE_PLATFORM_API_KEY}. That key is the one the TENANT
       # BACKENDS use and it is narrowed to carry no refunds write at all — which is
@@ -306,10 +308,30 @@ services:
       # restricted key held only by the control plane. Sharing one key would hand
       # every tenant backend the ability to move money it is currently unable to touch.
       STRIPE_API_KEY: "${SOFRA_STRIPE_API_KEY:-}"
-      # The `whsec_` for the platform-level Connect endpoint. Stripe REFUSES to let a
-      # platform register a webhook on a connected account (measured), so there is one
-      # endpoint, one secret, and the handler routes on the event's `account` field.
+      # The `whsec_` for the platform-level `connect: true` endpoint. Stripe REFUSES to
+      # let a platform register a webhook ON a connected account (measured), so this one
+      # endpoint is how every connected account's events arrive, and the handler routes
+      # on the event's `account` field.
       STRIPE_CONNECT_WEBHOOK_SECRET: "${SOFRA_STRIPE_CONNECT_WEBHOOK_SECRET:-}"
+      # The `whsec_` for the SECOND endpoint, registered on the SAME URL but ACCOUNT-
+      # SCOPED (not a Connect endpoint). The two scopes are orthogonal, not overlapping.
+      # Measured against the live API 2026-09-04: with no `Stripe-Account` header the
+      # platform scope holds application_fee.created = 5 and charge.refunded = 0; with
+      # `Stripe-Account: acct_...` the same query holds application_fee.created = 0 and
+      # charge.refunded = 2. That charge.refunded row is the CONTROL that makes the two
+      # zeros mean something. application_fee.created carries `account: null`, so the
+      # `connect: true` endpoint above will NEVER be handed one.
+      #
+      # A wrong config here is SILENT: Stripe answers HTTP 200 when you add
+      # application_fee.created to a Connect endpoint and then simply never fires it.
+      # Hence a second endpoint rather than a second event on the first. (The API does
+      # not echo `connect` back either — the tell that an endpoint IS a Connect one is
+      # its `application: ca_...`.)
+      #
+      # One URL, one handler, TWO secrets: the route tries the Connect secret first and
+      # this one second, so both must be set for both rails to verify. Unset stays safe
+      # — the endpoint just refuses a signature it cannot verify.
+      STRIPE_ACCOUNT_WEBHOOK_SECRET: "${SOFRA_STRIPE_ACCOUNT_WEBHOOK_SECRET:-}"
       # Tenant registry, read-only (S6/ADR-007): /admin/tenants renders the
       # same synced YAML the provision scripts consume. The control plane
       # never writes it — lifecycle stays git + scripts (ADR-003).
@@ -468,6 +490,14 @@ services:
       # what decides which Stripe account's events this instance will act on.
       STRIPE_API_KEY: "${SOFRA_STRIPE_API_KEY_TEST:-}"
       STRIPE_CONNECT_WEBHOOK_SECRET: "${SOFRA_STRIPE_CONNECT_WEBHOOK_SECRET_TEST:-}"
+      # The staging half of the SECOND, account-scoped endpoint: same URL on
+      # staging.sofrapiwas.com, its own `whsec_`. It exists because
+      # application_fee.created is a PLATFORM event (`account: null`) that a
+      # `connect: true` endpoint never receives — see the `sofra` block for the
+      # measurement. Same rule as everything else here: this service inherits NOTHING,
+      # so leaving it unset means staging verifies Connect events only and the fee
+      # ledger half of the rail is untestable — again with no error anywhere.
+      STRIPE_ACCOUNT_WEBHOOK_SECRET: "${SOFRA_STRIPE_ACCOUNT_WEBHOOK_SECRET_TEST:-}"
       # Read-only, same synced registry as prod, so /admin/tenants renders. The control
       # plane never writes it (ADR-003), and the mount below is :ro regardless.
       TENANT_REGISTRY_PATH: /data/tenants/registry.yml
