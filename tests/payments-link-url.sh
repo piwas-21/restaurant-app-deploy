@@ -35,8 +35,8 @@ done
 source "$FNS"
 
 fail=0
-pass() { printf '  ok   %s\n' "$1"; }
-bad()  { printf '  FAIL %s\n' "$1"; fail=1; }
+pass() { local desc="$1"; printf '  ok   %s\n' "$desc"; }
+bad()  { local desc="$1"; printf '  FAIL %s\n' "$desc"; fail=1; }
 
 LINK="https://sofrapiwas.com/onboarding/payments/DZ2p0mVQ0RmTESTTOKENnotreal"
 
