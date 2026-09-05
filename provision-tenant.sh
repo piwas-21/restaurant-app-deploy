@@ -72,6 +72,7 @@ for k in ("name", "status", "managed", "box", "domain", "domain_mode",
           "base_domain", "domain_aliases", "db", "db_role", "compose_project",
           "backend_tag", "frontend_tag", "currency", "languages", "modules",
           "admin_email", "city", "template", "stripe_account", "payments_commission_bps",
+          "payments_link_url",
           "mail_from", "partner_name", "partner_url", "partner_attribution"):
     v = t.get(k, "")
     if isinstance(v, list):
@@ -816,6 +817,21 @@ fi
 # Commission is validated above (non-negative, <= 1000, and zero unless online-payments +
 # stripe_account are both present) — rendered as-is here, default 0.
 set_env_line STRIPE_COMMISSION_BPS "${REG_PAYMENTS_COMMISSION_BPS:-0}"
+# The restaurant's own Stripe onboarding page, under Connect EXPRESS: the platform mints the
+# connected account and prefills it, and the restaurant finishes a short form at Stripe.
+#
+# COPIED VERBATIM, never assembled here. The control plane writes one finished, absolute,
+# locale-free URL into the registry entry, and this line copies it. That is deliberate: the
+# path segment is a 32-byte bearer token over one restaurant's onboarding, and a box that
+# concatenated a base URL would (a) have to learn that the value contains a credential and
+# (b) be able to get the ORIGIN wrong per environment — a link that works and points at the
+# wrong site. It also lets the origin move (staging, a partner zone) with no change here.
+#
+# Written on EVERY run, like the Stripe lines above and for the same reason: the direction
+# that matters is REMOVAL. A tenant whose account is unset must not keep an old link sitting
+# in its .env with a green provision claiming the change was applied. Absent -> empty, and
+# the backend reports an empty value as null rather than falling back to anything.
+set_env_line STRIPE_PAYMENTS_LINK_URL "${REG_PAYMENTS_LINK_URL:-}"
 
 # Partner attribution, written on EVERY run (fresh AND existing) for the reason the
 # Stripe lines are: it legitimately drifts, and the direction that matters is REMOVAL.
