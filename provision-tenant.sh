@@ -1059,15 +1059,49 @@ for cfg in data.get("data", []):
   # FAILS THE PROVISION on purpose. A tenant who paid for online payments and silently got a
   # checkout without TWINT is a broken purchase that nobody would notice until a Swiss diner
   # complained — the "gate that fails open" shape this repo has been bitten by before.
-  if curl -sS --fail --max-time 20 \
+  # READ THE ANSWER, NOT THE STATUS CODE. Measured on a LIVE CH Express account 2026-09-05: this
+  # POST returns HTTP 200 and `display_preference.value: on` while `twint.available` stays FALSE,
+  # because the PLATFORM's own `twint_payments` capability is `inactive` pending Stripe's approval
+  # (and Stripe only lets full-dashboard connected accounts self-enable TWINT, so for Express it is
+  # the platform's job). In TEST mode the same call answers `available: true`, which is why this
+  # block was first written trusting `--fail`.
+  #
+  # So the guard above protects against a REFUSAL, and there is none. Without the read-back, a CH
+  # tenant provisions GREEN with TWINT missing from checkout — precisely the "broken purchase
+  # nobody notices until a Swiss diner complains" this block says it exists to prevent.
+  TWINT_RESP="$(curl -sS --fail --max-time 20 \
       -u "${BOX_STRIPE_KEY}:" \
       -H "Stripe-Account: ${REG_STRIPE_ACCOUNT}" \
       -X POST "https://api.stripe.com/v1/payment_method_configurations/${PMC_ID}" \
-      -d "twint[display_preference][preference]=on" >/dev/null; then
-    echo "   ok: TWINT display preference on for ${REG_STRIPE_ACCOUNT} (${PMC_ID})"
-  else
+      -d "twint[display_preference][preference]=on")" || {
     echo "ERROR: failed to enable TWINT on ${REG_STRIPE_ACCOUNT} (${PMC_ID})" >&2
     exit 1
+  }
+
+  TWINT_AVAILABLE="$(printf '%s' "$TWINT_RESP" | python3 -c '
+import json, sys
+try:
+    print(str(json.load(sys.stdin).get("twint", {}).get("available")).lower())
+except Exception:
+    print("unknown")
+' || echo "unknown")"
+
+  if [[ "$TWINT_AVAILABLE" == "true" ]]; then
+    echo "   ok: TWINT display preference on AND available for ${REG_STRIPE_ACCOUNT} (${PMC_ID})"
+  else
+    # NOT exit 1, deliberately, and this is a judgement rather than an oversight: until the
+    # platform capability is approved this is true for EVERY Swiss tenant, so failing here would
+    # block all CH onboarding on a Stripe queue we do not control. Card payments work; TWINT does
+    # not. The cost of continuing is a missing payment method, which is recoverable by a
+    # re-provision once the capability lands. The cost of NOT saying so loudly is a founder who
+    # believes a green provision meant TWINT is on.
+    echo "" >&2
+    echo "WARNING: TWINT is NOT available on ${REG_STRIPE_ACCOUNT} (twint.available=${TWINT_AVAILABLE})." >&2
+    echo "         The preference was accepted (HTTP 200) and changes nothing while the PLATFORM's" >&2
+    echo "         twint_payments capability is inactive. Card payments are unaffected." >&2
+    echo "         This tenant's checkout will NOT offer TWINT. Re-provision once Stripe approves" >&2
+    echo "         the platform capability. See docs/runbooks/signup-to-live-tenant.md 2b.3." >&2
+    echo "" >&2
   fi
 else
   echo "   skip: '$SLUG' has no online-payments module"
