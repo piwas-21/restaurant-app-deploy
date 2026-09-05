@@ -75,6 +75,14 @@ else
 fi
 
 # --- 4. REMOVAL — the direction that matters ---------------------------------------
+# READ THIS BEFORE TRUSTING IT. These next assertions call set_env_line DIRECTLY, so what
+# they prove is that set_env_line OVERWRITES rather than appends — not that
+# provision-tenant.sh reaches them. Measured: wrapping the call in
+# `if [[ -n "$REG_PAYMENTS_LINK_URL" ]]` leaves every assertion below GREEN, because the
+# guard is in the caller and this test is the callee. The property "written on EVERY run"
+# is therefore pinned by assertion 2 above — a source-shape check — and that is the
+# assertion that dies if someone makes the write conditional. Both are needed; neither is
+# sufficient. Do not delete assertion 2 as "just a grep".
 # The tenant above now has a stale link. Re-provision it with NO link in the registry.
 REG_PAYMENTS_LINK_URL=""
 set_env_line STRIPE_PAYMENTS_LINK_URL "${REG_PAYMENTS_LINK_URL:-}"
