@@ -145,8 +145,12 @@ services:
       #
       # The KEY is the BOX's, shared, on the same rail as PRINTER_TELEMETRY_SECRET above: a
       # Stripe restricted key cannot be bound to one acct_, so it is narrowed by permission and
-      # by an Access policy pinning it to the box IPs instead. The ACCOUNT is RUMI's own —
-      # Connect Standard, so the restaurant owns it outright and funds never pass through Sofra.
+      # by an Access policy pinning it to the box IPs instead. The ACCOUNT is the restaurant's
+      # own and funds never pass through Sofra's balance. It no longer says "Connect Standard,
+      # so the restaurant owns it outright": under Connect EXPRESS (ADR-011 amendment,
+      # 2026-09-05) the platform can set payout settings and carries the loss when a negative
+      # balance cannot be recovered. What keeps a leaked BOX key survivable is the permission
+      # narrowing and the IP policy above — not what the account type forbids.
       #
       # ⚠️ This compose runs on BOTH boxes. Setting these on staging points the staging RUMI at
       # whatever account the key can reach, so leave them unset there unless a test account is
