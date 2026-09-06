@@ -141,11 +141,13 @@ roll_service() { # <dir> <svc>
 # AFTER the pull so the claim becomes falsifiable: a refresh that pulled the same
 # image says so in those words, and one that moved names both commits.
 image_revision() { # <image-ref> -> revision label, empty when absent/unlabeled
-  docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$1" 2>/dev/null || true
+  local image_ref="$1"
+  docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image_ref" 2>/dev/null || true
 }
 
 service_image() { # <dir> <svc> -> first configured image ref, empty when unresolvable
-  (cd "$1" && docker compose config --images "$2" 2>/dev/null | head -1) || true
+  local dir="$1" svc="$2"
+  (cd "$dir" && docker compose config --images "$svc" 2>/dev/null | head -1) || true
 }
 
 FAILED=""
