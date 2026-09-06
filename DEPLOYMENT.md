@@ -42,6 +42,13 @@ prod box. It is reached on the web as **`https://staging.fooderist.com`**.
 Purpose: validate fixes and the SaaS transition live before promoting to the one
 production tenant (rumirestaurant.ch).
 
+**Caddy config changes need a container RECREATE, not a reload.** The box copy of
+`Caddyfile` / `Caddyfile.staging` / tenant snippets is a bind-mounted file; `rsync` replaces the
+inode, and `caddy reload` against the mounted path is a no-op on the old inode. After merging any
+Caddy config change, run `docker compose up -d --force-recreate caddy` on the affected box (or
+re-provision the tenant) and verify with `curl -sI` that the new policy is actually served
+(example: the 2026-09-06 uploads change from immutable to `public, max-age=0, must-revalidate`).
+
 **How staging differs from prod — three files only:**
 - `Caddyfile.staging` — same routing, different site address
   (`{$STAGING_DOMAIN}` = `staging.fooderist.com`, a zone we control and whose A
