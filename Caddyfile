@@ -14,6 +14,9 @@ www.rumirestaurant.ch {
 	handle_path /uploads/* {
 		root * /srv/uploads
 		file_server
+		# Backfill rewrites originals and _resize-preview at the same URLs.
+		# Keep stored copies revalidatable with file_server's ETag / Last-Modified.
+		header Cache-Control "public, max-age=0, must-revalidate"
 	}
 
 	# Frontend's own version-aggregation route (combines frontend build info +
