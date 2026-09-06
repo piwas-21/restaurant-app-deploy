@@ -11,6 +11,9 @@ __DOMAIN__ {
 	handle_path /uploads/* {
 		root * /srv/tenants/__SLUG__/uploads
 		file_server
+		# Backfill rewrites originals and _resize-preview at the same URLs.
+		# Keep stored copies revalidatable with file_server's ETag / Last-Modified.
+		header Cache-Control "public, max-age=0, must-revalidate"
 	}
 
 	# Frontend's version-aggregation route — must win over /api/* (Caddy matches
