@@ -133,6 +133,21 @@ roll_service() { # <dir> <svc>
 }
 # --- END pull_service ---
 
+# #157: a per-tenant tag's registry digest does not move until something REBUILDS
+# it, so the bare "up to date" below is true and useless — it says nothing about
+# which commit the tenant is riding while the repo's main moves on (the condition
+# that left two tenants stale unnoticed). The org.opencontainers.image.revision
+# label — the git sha the app repos bake into every image — is printed BEFORE and
+# AFTER the pull so the claim becomes falsifiable: a refresh that pulled the same
+# image says so in those words, and one that moved names both commits.
+image_revision() { # <image-ref> -> revision label, empty when absent/unlabeled
+  docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$1" 2>/dev/null || true
+}
+
+service_image() { # <dir> <svc> -> first configured image ref, empty when unresolvable
+  (cd "$1" && docker compose config --images "$2" 2>/dev/null | head -1) || true
+}
+
 FAILED=""
 for SLUG in $SLUGS; do
   DIR="/opt/rumi/tenants/${SLUG}"
@@ -143,10 +158,27 @@ for SLUG in $SLUGS; do
     continue
   fi
   echo "==> Refresh ${SVC} (${DIR})"
+  # The revision is read from the configured image ref before and after the pull
+  # (#157). An empty result is not fatal — the refresh below still proceeds; it
+  # just has no revision to show.
+  IMAGE="$(service_image "$DIR" "$SVC")"
+  REV_BEFORE=""
+  if [[ -n "$IMAGE" ]]; then
+    REV_BEFORE="$(image_revision "$IMAGE")"
+    echo "   ${SVC} image revision before: ${REV_BEFORE:-<unknown>}"
+  fi
   # Per-tenant failure must not abort the others, but must be reported: a silent
   # skip is the exact failure mode this script exists to end.
   if pull_service "$DIR" "$SVC" && roll_service "$DIR" "$SVC"; then
-    echo "   ${SVC} up to date"
+    REV_AFTER=""
+    if [[ -n "$IMAGE" ]]; then
+      REV_AFTER="$(image_revision "$IMAGE")"
+    fi
+    if [[ -n "$REV_BEFORE" && "$REV_BEFORE" == "$REV_AFTER" ]]; then
+      echo "   ${SVC} up to date — image revision unchanged by the pull (${REV_BEFORE})"
+    else
+      echo "   ${SVC} rolled: image revision ${REV_BEFORE:-<unknown>} -> ${REV_AFTER:-<unknown>}"
+    fi
   else
     echo "   ERROR: refreshing ${SVC} failed" >&2
     FAILED="${FAILED} ${SVC}"
