@@ -42,6 +42,13 @@ prod box. It is reached on the web as **`https://staging.fooderist.com`**.
 Purpose: validate fixes and the SaaS transition live before promoting to the one
 production tenant (rumirestaurant.ch).
 
+**Caddy config changes need a container RECREATE, not a reload.** The box copy of
+`Caddyfile` / `Caddyfile.staging` / tenant snippets is a bind-mounted file; `rsync` replaces the
+inode, and `caddy reload` against the mounted path is a no-op on the old inode. After merging any
+Caddy config change, run `docker compose up -d --force-recreate caddy` on the affected box (or
+re-provision the tenant) and verify with `curl -sI` that the new policy is actually served
+(example: the 2026-09-06 uploads change from immutable to `public, max-age=0, must-revalidate`).
+
 **How staging differs from prod — three files only:**
 - `Caddyfile.staging` — same routing, different site address
   (`{$STAGING_DOMAIN}` = `staging.fooderist.com`, a zone we control and whose A
@@ -86,6 +93,10 @@ ENV_EXAMPLE=.env.staging.example SECRETS_EXAMPLE=app-secrets.staging.example.jso
 # 4. Dozzle login must exist BEFORE the stack starts, or Docker creates a directory at
 #    the bind-mount path and dozzle fails to start:
 docker run --rm amir20/dozzle:v10.6.6 generate admin --name 'RUMI Staging Ops' --password 'CHOOSE_ONE' > dozzle-users.yml
+#    WARNING: that `>` truncates. To ADD a second operator later, never re-run this
+#    line — append/merge instead (same recipe as prod: DEPLOYMENT.md §Viewing logs
+#    in the browser (Dozzle) → "Adding another operator"). A lost password is
+#    unrecoverable (bcrypt) and regenerating drops every other user.
 # 5. Deploy. FIRST make sure STAGING_DOMAIN resolves to this box (A record in a zone
 #    we control, ttl>=7200 — use ./domainio-dns.sh); Caddy needs it for ACME:
 ./deploy.sh
@@ -1105,10 +1116,59 @@ The `dozzle-users.yml` file **must exist before** the stack starts — otherwise
 creates a directory at that bind-mount path and Dozzle fails to read users. See
 `dozzle-users.example.yml` for the schema.
 
+### Adding another operator
+
+The `generate` command above always emits a **complete** `users:` document for exactly
+one user, and its `>` redirect **replaces the whole file**. Re-running it to "add" a
+login silently locks out every existing operator (hit for real 2026-08-29 while adding
+a second login to `/logs`). Adding a user is an append/merge, never a regenerate:
+
+```bash
+ssh rumi@159.195.137.101
+cd /opt/rumi/deploy
+# Rollback point first — this file is the only copy of every operator's login:
+cp -a dozzle-users.yml "dozzle-users.yml.bak.$(date -u +%Y%m%dT%H%M%SZ)"
+# Generate the NEW user into a scratch file, not over the live one:
+docker run --rm amir20/dozzle:v10.6.6 generate <user> \
+  --name '<Full Name>' --password 'STRONG_PASSWORD_HERE' > /tmp/new-user.yml
+# Append the new user's block, skipping the `users:` header line generate emits:
+tail -n +2 /tmp/new-user.yml >> dozzle-users.yml
+rm -f /tmp/new-user.yml
+docker compose -f docker-compose.prod.yml restart dozzle
+```
+
+Verify BOTH halves — a `200` alone proves nothing:
+
+```bash
+# positive control — the new user's real password must return 200 (sets a jwt cookie):
+curl -s -o /dev/null -w '%{http_code}\n' -X POST https://www.rumirestaurant.ch/logs/api/token \
+  --data-urlencode 'username=<user>' --data-urlencode 'password=<the real password>'
+# negative control — a wrong password must return 401:
+curl -s -o /dev/null -w '%{http_code}\n' -X POST https://www.rumirestaurant.ch/logs/api/token \
+  --data-urlencode 'username=<user>' --data-urlencode 'password=WRONG'
+```
+
+Check the **pre-existing** user too: a bad password there must still return `401`
+(not `500`) — that is the tell that the merged YAML still parses. With a valid session
+cookie, `/logs/api/releases` and `/logs/api/events/stream` return `200` where an
+anonymous request gets `401`.
+
+**A lost Dozzle password is unrecoverable.** The file stores only a bcrypt hash, so
+the only remedies are adding a user (above) or regenerating the account — and
+regenerating `dozzle-users.yml` **discards every other user in the file**. The
+password-rotation advice in the Security paragraph below means exactly that; never
+reach for it while another operator still needs their own login.
+
+The same trap exists on **staging**: its first-time setup above uses the same
+`generate >` redirect, so a second staging operator needs the same append/merge
+recipe (against `https://staging.fooderist.com/logs`).
+
 Security: Dozzle mounts the docker socket **read-only** and is never published to a
 host port — it is reachable only through Caddy at `/logs`, gated by its own login.
 Logs can contain PII, so the login is mandatory; rotate the password by regenerating
-`dozzle-users.yml` and restarting the `dozzle` service.
+`dozzle-users.yml` and restarting the `dozzle` service — regeneration **drops every
+other user**, and a lost password is otherwise unrecoverable (bcrypt; see "Adding
+another operator" above).
 
 ---
 
