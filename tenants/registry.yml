@@ -451,10 +451,18 @@ tenants:
     # ADR-012's scope), so a prod tenant would be hand-run and would be the first
     # script-managed tenant sharing a box with RUMI.
     box: staging
-    domain: mcdoner.sofrapiwas.com
+    # On the PARTNER's zone since 2026-09-08, at his request — the same move obresse
+    # made on 2026-08-21 (§D1). solutioneva.com is a verified PartnerDomain in the
+    # control plane (verified 2026-09-06) and has NO wildcard, so this tenant lives or
+    # dies by ONE A record -> the staging box, published by the partner
+    # (contrast our own *.sofrapiwas.com).
+    domain: mcdoner.solutioneva.com
     domain_mode: subdomain
-    # OUR zone — rides the *.sofrapiwas.com wildcard, so it needs no DNS record of its own,
-    # unlike obresse on the partner's solutioneva.com.
+    base_domain: solutioneva.com
+    # The old home, kept as a 301 alias rather than dropped: any QR code or link handed
+    # out since 2026-09-03 keeps working. Rides our wildcard, so it needs no record
+    # of its own.
+    domain_aliases: [mcdoner.sofrapiwas.com]
     db: tenant_mcdoner
     db_role: tenant_mcdoner
     compose_project: tenant-mcdoner
