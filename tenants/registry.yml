@@ -473,13 +473,16 @@ tenants:
     # tenant renders `EUR 8.00` instead of `8,00 €`.
     locale: fr-FR
     languages: [fr, en]
-    # `online-payments` is ABSENT and that is SEQUENCING, not an oversight. Their current
-    # site takes card online; ours needs the restaurant's own Stripe connected account and
-    # KYC first, which only the restaurateur can complete (provision-tenant.sh exits 1 on
-    # the module without `stripe_account:`). MC FOOD opens on cash + card in the
-    # restaurant; when Mustafa returns `acct_…`, ONE commit adds `stripe_account:` AND
-    # `online-payments` together, then a re-provision. Runbook §2b.5.
-    modules: [core, kitchen-board, cashier, server, reservations, loyalty, printing, extra-languages]
+    # MC FOOD does not offer table reservations. Omitting `reservations` is deliberate:
+    # the existing module enforcement path removes the home CTA/nav entries and returns
+    # ModuleNotEnabled from reservation endpoints after the next re-provision.
+    # `online-payments` is also ABSENT and that is SEQUENCING, not an oversight. Their
+    # current site takes card online; ours needs the restaurant's own Stripe connected
+    # account and KYC first, which only the restaurateur can complete (provision-tenant.sh
+    # exits 1 on the module without `stripe_account:`). When Mustafa returns `acct_…`, ONE
+    # commit adds `stripe_account:` AND `online-payments` together, then a re-provision.
+    # Runbook §2b.5.
+    modules: [core, kitchen-board, cashier, server, loyalty, printing, extra-languages]
     # classic on the partner's standing preference since 2026-08-21.
     template: classic
     admin_email: mcdoner@solutioneva.com
