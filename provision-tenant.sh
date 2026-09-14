@@ -724,6 +724,18 @@ if [[ -f "$TENANT_DIR/.env" ]]; then
   # things that legitimately drift); generated secrets stay stable per tenant.
   sed -i -e "s|^BACKEND_TAG=.*|BACKEND_TAG=${REG_BACKEND_TAG:-latest}|" \
          -e "s|^FRONTEND_TAG=.*|FRONTEND_TAG=${REG_FRONTEND_TAG}|" "$TENANT_DIR/.env"
+  # TENANT_DOMAIN is rendered ONCE (fresh path below) and deliberately not re-applied:
+  # nothing on the box consumes it at runtime, so it is an operator-facing record, not
+  # a setting. Exactly that makes it the one line a domain change leaves stale — a
+  # tenant moved onto a partner base_domain (§D1) re-provisions green while this line
+  # still names the old host. Detect and say so; the fix needs no restart, because
+  # nothing reads this line at runtime.
+  ENV_TENANT_DOMAIN="$(grep -E '^TENANT_DOMAIN=' "$TENANT_DIR/.env" | cut -d= -f2- || true)"
+  if [[ -n "$ENV_TENANT_DOMAIN" && "$ENV_TENANT_DOMAIN" != "$REG_DOMAIN" ]]; then
+    echo "WARN: .env still records TENANT_DOMAIN='$ENV_TENANT_DOMAIN', but the registry now says '$REG_DOMAIN'." >&2
+    echo "      Nothing consumes this line at runtime, so nothing is broken — align the record by hand:" >&2
+    echo "        sed -i 's|^TENANT_DOMAIN=.*|TENANT_DOMAIN=$REG_DOMAIN|' $TENANT_DIR/.env" >&2
+  fi
   # Identity lines may be absent on a pre-#16 .env — replace or append (set_env_line, top-level).
   set_env_line TENANT_NAME "$ENV_NAME"
   set_env_line TENANT_CITY "$ENV_CITY"
@@ -867,6 +879,43 @@ if [[ -f "$TENANT_DIR/app-secrets.json" ]]; then
     echo "        python3 -c \"import json;p='$TENANT_DIR/app-secrets.json';d=json.load(open(p));d['EmailSettings']['FromEmail']='$TENANT_FROM_EMAIL';json.dump(d,open(p,'w'),indent=2)\"" >&2
     echo "        docker compose -p ${REG_COMPOSE_PROJECT} -f $TENANT_DIR/docker-compose.yml up -d" >&2
   fi
+  # The keep above also silently keeps DOMAIN-KEYED values, and a domain change is
+  # exactly the move a reseller tenant makes (§D1: onto `base_domain: <partner zone>`).
+  # Registry edit + image rebuild + re-provision then all land green while the tenant's
+  # email links, CORS origin and upload URLs still name the OLD host — the same
+  # "kept, not re-applied" shape as FromEmail above. Compare and say so; never rewrite
+  # a secrets file from a script.
+  SECRETS_DRIFT="$(mktemp)"
+  # Guarded like the FromEmail read above: a corrupt app-secrets.json must not abort
+  # the provision mid-run (and leak the temp file) — a failed compare leaves the file
+  # empty, the -s guard below suppresses the warn, and the run stays green.
+  T_DOMAIN="$REG_DOMAIN" T_SECRETS="$TENANT_DIR/app-secrets.json" python3 - "$SECRETS_DRIFT" <<'PY' || true
+import json, os, sys
+d = json.load(open(os.environ["T_SECRETS"]))
+want = "https://" + os.environ["T_DOMAIN"]
+out = []
+fe = d.get("EmailSettings") or {}
+if fe.get("FrontendBaseUrl") != want:
+    out.append("EmailSettings.FrontendBaseUrl = %s (expected %s)" % (fe.get("FrontendBaseUrl"), want))
+if fe.get("BackendBaseUrl") != want:
+    out.append("EmailSettings.BackendBaseUrl = %s (expected %s)" % (fe.get("BackendBaseUrl"), want))
+origins = (d.get("CorsSettings") or {}).get("AllowedOrigins") or []
+if want not in origins:
+    out.append("CorsSettings.AllowedOrigins = %s (does not contain %s)" % (json.dumps(origins), want))
+base = (d.get("LocalStorage") or {}).get("BaseUrl") or ""
+if base != want + "/uploads":
+    out.append("LocalStorage.BaseUrl = %s (expected %s/uploads)" % (base, want))
+open(sys.argv[1], "w").write("\n".join(out))
+PY
+  if [[ -s "$SECRETS_DRIFT" ]]; then
+    echo "WARN: app-secrets.json still carries domain-keyed values from this tenant's PREVIOUS domain. Drift found:" >&2
+    sed 's/^/        /' "$SECRETS_DRIFT" >&2
+    echo "      Re-provisioning does NOT change these (secrets are kept, like the JWT/printer keys)." >&2
+    echo "      Apply by hand on the box — keep the file at chown 1000:1654 + chmod 640 — then restart:" >&2
+    echo "        python3 -c \"import json;p='$TENANT_DIR/app-secrets.json';d=json.load(open(p));w='https://$REG_DOMAIN';e=d.setdefault('EmailSettings',{});e['FrontendBaseUrl']=w;e['BackendBaseUrl']=w;c=d.setdefault('CorsSettings',{}).setdefault('AllowedOrigins',[]);w not in c and c.append(w);d.setdefault('LocalStorage',{})['BaseUrl']=w+'/uploads';json.dump(d,open(p,'w'),indent=2)\"" >&2
+    echo "        docker compose -p ${REG_COMPOSE_PROJECT} -f $TENANT_DIR/docker-compose.yml restart backend-${SLUG}" >&2
+  fi
+  rm -f "$SECRETS_DRIFT"
 else
   # Reuse this box's Resend key (tenants send via onboarding@resend.dev — see
   # template note). Reads the key from the box's own app-secrets.json.

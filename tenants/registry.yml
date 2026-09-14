@@ -451,10 +451,18 @@ tenants:
     # ADR-012's scope), so a prod tenant would be hand-run and would be the first
     # script-managed tenant sharing a box with RUMI.
     box: staging
-    domain: mcdoner.sofrapiwas.com
+    # On the PARTNER's zone since 2026-09-08, at his request — the same move obresse
+    # made on 2026-08-21 (§D1). solutioneva.com is a verified PartnerDomain in the
+    # control plane (verified 2026-09-06) and has NO wildcard, so this tenant lives or
+    # dies by ONE A record -> the staging box, published by the partner
+    # (contrast our own *.sofrapiwas.com).
+    domain: mcdoner.solutioneva.com
     domain_mode: subdomain
-    # OUR zone — rides the *.sofrapiwas.com wildcard, so it needs no DNS record of its own,
-    # unlike obresse on the partner's solutioneva.com.
+    base_domain: solutioneva.com
+    # The old home, kept as a 301 alias rather than dropped: any QR code or link handed
+    # out since 2026-09-03 keeps working. Rides our wildcard, so it needs no record
+    # of its own.
+    domain_aliases: [mcdoner.sofrapiwas.com]
     db: tenant_mcdoner
     db_role: tenant_mcdoner
     compose_project: tenant-mcdoner
@@ -465,13 +473,16 @@ tenants:
     # tenant renders `EUR 8.00` instead of `8,00 €`.
     locale: fr-FR
     languages: [fr, en]
-    # `online-payments` is ABSENT and that is SEQUENCING, not an oversight. Their current
-    # site takes card online; ours needs the restaurant's own Stripe connected account and
-    # KYC first, which only the restaurateur can complete (provision-tenant.sh exits 1 on
-    # the module without `stripe_account:`). MC FOOD opens on cash + card in the
-    # restaurant; when Mustafa returns `acct_…`, ONE commit adds `stripe_account:` AND
-    # `online-payments` together, then a re-provision. Runbook §2b.5.
-    modules: [core, kitchen-board, cashier, server, reservations, loyalty, printing, extra-languages]
+    # MC FOOD does not offer table reservations. Omitting `reservations` is deliberate:
+    # the existing module enforcement path removes the home CTA/nav entries and returns
+    # ModuleNotEnabled from reservation endpoints after the next re-provision.
+    # `online-payments` is also ABSENT and that is SEQUENCING, not an oversight. Their
+    # current site takes card online; ours needs the restaurant's own Stripe connected
+    # account and KYC first, which only the restaurateur can complete (provision-tenant.sh
+    # exits 1 on the module without `stripe_account:`). When Mustafa returns `acct_…`, ONE
+    # commit adds `stripe_account:` AND `online-payments` together, then a re-provision.
+    # Runbook §2b.5.
+    modules: [core, kitchen-board, cashier, server, loyalty, printing, extra-languages]
     # classic on the partner's standing preference since 2026-08-21.
     template: classic
     admin_email: mcdoner@solutioneva.com
