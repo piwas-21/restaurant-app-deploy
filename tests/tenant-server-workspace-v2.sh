@@ -10,7 +10,9 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT="$HERE/../provision-tenant.sh"
 TEMPLATE="$HERE/../tenants/templates/tenant.env.tpl"
-[[ -f "$SCRIPT" && -f "$TEMPLATE" ]] || { echo "missing rollout inputs" >&2; exit 1; }
+MAIN_COMPOSE="$HERE/../docker-compose.prod.yml"
+[[ -f "$SCRIPT" && -f "$TEMPLATE" && -f "$MAIN_COMPOSE" ]] \
+  || { echo "missing rollout inputs" >&2; exit 1; }
 
 FNS="$(mktemp)"
 WORK="$(mktemp -d)"
@@ -30,6 +32,13 @@ if grep -q '^TENANT_SERVER_WORKSPACE_V2=false$' "$TEMPLATE"; then
   pass 'fresh tenant template defaults Server Workspace V2 to false'
 else
   bad 'fresh tenant template is missing the false default'
+fi
+
+if grep -Fq 'TenantFeatures__ServerWorkspaceV2: "${TENANT_SERVER_WORKSPACE_V2:-false}"' "$MAIN_COMPOSE" \
+    && grep -Fq 'TENANT_FEATURES_REQUEST_TIMEOUT_MS: "${TENANT_FEATURES_REQUEST_TIMEOUT_MS:-3000}"' "$MAIN_COMPOSE"; then
+  pass 'main RUMI compose carries the disabled backend flag and bounded frontend lookup'
+else
+  bad 'main RUMI compose cannot carry the Server Workspace V2 rollout contract'
 fi
 
 TENANT_DIR="$WORK/tenant"
