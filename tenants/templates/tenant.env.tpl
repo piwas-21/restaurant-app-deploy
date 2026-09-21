@@ -62,6 +62,11 @@ TENANT_MODULES=__MODULES__
 # To un-enforce: set `false` here and `docker compose up -d --force-recreate
 # backend-<slug>`.
 TENANT_MODULES_ENFORCE=true
+# Server Workspace V2 rollout (server redesign). This is an operator-controlled UI
+# switch, not a purchased module or an authorization boundary. New tenants stay on
+# the proven V1 workspace until explicitly enabled; re-provisioning preserves a
+# deliberate true/false value on an existing tenant.
+TENANT_SERVER_WORKSPACE_V2=false
 # UI template (frontend ADR-006 / S15 T2): classic | craft, from the registry's
 # optional `template` field (absent -> classic; anything else fails provisioning).
 # NEXT_PUBLIC_* are baked at frontend image build, so this line records intent —

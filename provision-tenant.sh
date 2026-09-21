@@ -701,6 +701,25 @@ set_env_line() { # $1=key $2=value (free text)
   fi
 }
 
+# --- BEGIN server-workspace-rollout helpers
+# Validate an operator-controlled boolean without rewriting it. The caller intentionally
+# preserves an existing tenant's explicit true/false, while compose supplies false when the
+# key is absent (including tenants provisioned before this rollout existed).
+validate_bool_env_line() { # $1=key $2=tenant slug (for diagnostics)
+  local key="$1" slug="$2" value
+  # Trim only the edges. Internal whitespace must remain invalid: Compose would otherwise
+  # forward a value such as `t r u e` and the backend's bool binder would reject it later.
+  value="$(grep -m1 "^${key}=" "$TENANT_DIR/.env" | cut -d= -f2- \
+    | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' || true)"
+  if [[ -n "$value" ]]; then
+    shopt -s nocasematch
+    [[ "$value" == "true" || "$value" == "false" ]] \
+      || { echo "ERROR: tenant '$slug' .env has ${key}='$value' — must be true or false (outer whitespace is allowed; internal whitespace is not, and the value binds to a C# bool)" >&2; shopt -u nocasematch; return 1; }
+    shopt -u nocasematch
+  fi
+}
+# --- END server-workspace-rollout helpers
+
 # Free-text values landing in the tenant .env are interpolated by docker
 # compose — a literal $ must be doubled or compose silently mangles it (same
 # trap as DEV_PORTAL_AUTH_HASH; see DEPLOYMENT.md §Developer Portal).
@@ -749,19 +768,11 @@ if [[ -f "$TENANT_DIR/.env" ]]; then
   set_env_line TENANT_CURRENCY "$(strip_ws "$REG_CURRENCY")"
   set_env_line TENANT_LANGUAGES "$(strip_ws "$REG_LANGUAGES")"
   set_env_line TENANT_MODULES "$(strip_ws "$REG_MODULES")"
-  # The operator's enforcement opt-in is hand-written into this .env (it is a rollout
-  # control, not a product fact, so it is deliberately NOT in the registry) — which makes it
-  # the only unvalidated value in the file. It binds to a C# bool, and the backend resolves
-  # that eagerly at startup, so `TENANT_MODULES_ENFORCE=1` does not mean "on": it throws
-  # before the app listens and `restart: unless-stopped` turns it into a crash loop. Catch a
-  # typo here, where it costs a message, instead of there, where it costs the tenant.
-  _ENFORCE="$(strip_ws "$(grep -m1 '^TENANT_MODULES_ENFORCE=' "$TENANT_DIR/.env" | cut -d= -f2- || true)")"
-  if [[ -n "$_ENFORCE" ]]; then
-    shopt -s nocasematch
-    [[ "$_ENFORCE" == "true" || "$_ENFORCE" == "false" ]] \
-      || { echo "ERROR: tenant '$SLUG' .env has TENANT_MODULES_ENFORCE='$_ENFORCE' — must be exactly true or false (it binds to a bool; anything else crash-loops the backend)" >&2; shopt -u nocasematch; exit 1; }
-    shopt -u nocasematch
-  fi
+  validate_bool_env_line TENANT_SERVER_WORKSPACE_V2 "$SLUG"
+  # Both operator controls bind to C# bools and are validated here before Compose forwards them.
+  # They are not registry facts, so re-provisioning preserves their explicit values unchanged.
+  validate_bool_env_line TENANT_MODULES_ENFORCE "$SLUG" \
+    || { echo "ERROR: tenant '$SLUG' has an invalid TENANT_MODULES_ENFORCE value; the backend would crash-loop" >&2; exit 1; }
 else
   FRESH_ENV=1
   TENANT_DB_PASSWORD="$(rand 48 32)"

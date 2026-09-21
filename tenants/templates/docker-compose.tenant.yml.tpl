@@ -133,6 +133,11 @@ services:
       # are served to the frontend from the backend rather than baked as NEXT_PUBLIC_*.
       Modules__Enabled: "${TENANT_MODULES:-}"
       Modules__Enforce: "${TENANT_MODULES_ENFORCE:-false}"
+      # Server Workspace V2 rollout. This is intentionally separate from Modules__Enabled:
+      # it selects a frontend implementation for the server module and never grants access.
+      # The empty/default path is false so tenants provisioned before this key existed remain
+      # on V1, while an explicit true/false in the tenant .env survives re-provisioning.
+      TenantFeatures__ServerWorkspaceV2: "${TENANT_SERVER_WORKSPACE_V2:-false}"
       # Partner attribution (SOFRA-PARTNER-PLAN §11d, channel C) — the same shape as
       # Modules__Enabled above, and for the same reason: the footer credit is
       # operator-controlled per-tenant data, so it rides a re-provision plus a container
