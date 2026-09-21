@@ -91,6 +91,8 @@ services:
       # runtime; empty -> the SDK is a no-op. SENTRY_ENVIRONMENT labels per box.
       SENTRY_DSN: "${SENTRY_DSN:-}"
       SENTRY_ENVIRONMENT: "${SENTRY_ENVIRONMENT:-}"
+      # Server-rendered rollout discovery fails closed to V1 when this deadline expires.
+      TENANT_FEATURES_REQUEST_TIMEOUT_MS: "${TENANT_FEATURES_REQUEST_TIMEOUT_MS:-3000}"
     depends_on:
       - backend
     networks: [rumi]
@@ -115,6 +117,9 @@ services:
       # labels events per box (both boxes run ASPNETCORE_ENVIRONMENT=Production).
       SENTRY_DSN: "${SENTRY_DSN:-}"
       SENTRY_ENVIRONMENT: "${SENTRY_ENVIRONMENT:-}"
+      # RUMI/main-stack equivalent of the per-tenant Server Workspace V2 switch.
+      # False by default; this grants no module or role access.
+      TenantFeatures__ServerWorkspaceV2: "${TENANT_SERVER_WORKSPACE_V2:-false}"
       # Fleet observability roll-up (Track S) — this backend pushes its device roster +
       # missed-order/error counts to the one sofra control plane (/admin/fleet). Shared bearer
       # from the box .env; the slug is this deployment's own (RUMI = the main stack). Inert until

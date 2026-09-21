@@ -640,6 +640,11 @@ This is a tenant-wide pilot switch: every server/admin user in that tenant recei
 value. There is no per-user database override in this rollout. The value is read while the
 server route subtree is rendered, so it does not make unrelated app routes dynamic.
 
+The main RUMI stack uses the same `TENANT_SERVER_WORKSPACE_V2` variable in the box-level `.env`;
+`docker-compose.prod.yml` maps it to the backend and supplies the frontend's bounded feature
+lookup deadline. Recreate both services after changing it. Provisioned tenants use their own
+tenant-directory `.env` and the template mapping described below.
+
 The tenant compose template maps that value to the backend's
 `TenantFeatures__ServerWorkspaceV2` configuration key. A tenant provisioned before this flag
 existed has the same effective value because compose defaults an absent key to `false`.
