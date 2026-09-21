@@ -215,6 +215,9 @@ services:
     cpus: 1.0
     depends_on:
       - backend-__SLUG__
+    environment:
+      # Server-rendered rollout discovery must fail closed promptly if the backend is wedged.
+      TENANT_FEATURES_REQUEST_TIMEOUT_MS: "${TENANT_FEATURES_REQUEST_TIMEOUT_MS:-3000}"
     networks: [rumi]
 
   # Per-tenant Redis container (ADR-001 left index-vs-container open; a container

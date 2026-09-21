@@ -67,6 +67,9 @@ TENANT_MODULES_ENFORCE=true
 # the proven V1 workspace until explicitly enabled; re-provisioning preserves a
 # deliberate true/false value on an existing tenant.
 TENANT_SERVER_WORKSPACE_V2=false
+# Server-rendered tenant-feature request deadline. Existing tenant files may omit this:
+# the compose template supplies the same operational default.
+TENANT_FEATURES_REQUEST_TIMEOUT_MS=3000
 # UI template (frontend ADR-006 / S15 T2): classic | craft, from the registry's
 # optional `template` field (absent -> classic; anything else fails provisioning).
 # NEXT_PUBLIC_* are baked at frontend image build, so this line records intent —
