@@ -11,15 +11,21 @@ fi
 
 ARCHIVE="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
 CONTAINER="catalogue-restore-check-$$"
+if ! command -v openssl >/dev/null 2>&1; then
+  echo "ERROR: openssl is required to generate a disposable restore password" >&2
+  exit 1
+fi
+catalogue_restore_password="$(openssl rand -hex 32)"
 cleanup() {
   docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
-docker run -d --rm --name "$CONTAINER" \
+POSTGRES_PASSWORD="$catalogue_restore_password" docker run -d --rm --network none --name "$CONTAINER" \
   -e POSTGRES_USER=restore_admin \
-  -e POSTGRES_PASSWORD=restore-only \
+  -e POSTGRES_PASSWORD \
   postgres:16 >/dev/null
+unset catalogue_restore_password
 
 ready=0
 ready_attempt=0

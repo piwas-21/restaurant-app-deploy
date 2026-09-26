@@ -16,16 +16,22 @@ fi
 
 TMP="$(mktemp -d)"
 CONTAINER="catalogue-backup-fixture-$$"
+if ! command -v openssl >/dev/null 2>&1; then
+  echo "ERROR: openssl is required to generate a disposable fixture password" >&2
+  exit 1
+fi
+catalogue_fixture_password="$(openssl rand -hex 32)"
 cleanup() {
   docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
   rm -rf "$TMP"
 }
 trap cleanup EXIT
 
-docker run -d --rm --name "$CONTAINER" \
+POSTGRES_PASSWORD="$catalogue_fixture_password" docker run -d --rm --network none --name "$CONTAINER" \
   -e POSTGRES_USER=restore_admin \
-  -e POSTGRES_PASSWORD=fixture-only \
+  -e POSTGRES_PASSWORD \
   postgres:16 >/dev/null
+unset catalogue_fixture_password
 
 ready=0
 for _ in $(seq 1 30); do
