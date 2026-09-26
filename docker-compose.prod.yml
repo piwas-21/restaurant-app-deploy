@@ -294,6 +294,9 @@ services:
       # are founder-run one-offs via ghcr.io/piwas-21/sofra-migrate — never on
       # container start (see DEPLOYMENT.md "Sofra control plane").
       DATABASE_URL: "postgresql://sofra:${SOFRA_DB_PASSWORD:-}@postgres:5432/sofra"
+      # Curated shared catalogue lives in a separate DB. Both Sofra control planes
+      # use its read-only role; migrations and publishing use the owner one-off.
+      CATALOGUE_DATABASE_URL: "postgresql://sofra_catalogue_reader:${SOFRA_CATALOGUE_READER_PASSWORD:-}@postgres:5432/sofra_catalogue"
       AUTH_SECRET: "${SOFRA_AUTH_SECRET:-}"
       NEXTAUTH_URL: "${SOFRA_APP_URL:-https://sofrapiwas.com}"
       # Mollie subscription billing (S9, sofra ADR-011 Job A). Unset -> billing
@@ -476,6 +479,9 @@ services:
       # Own database + role on the shared server. NEVER point this at `sofra`: the whole
       # value of the environment is that a destructive test cannot reach production data.
       DATABASE_URL: "postgresql://sofra_staging:${SOFRA_STAGING_DB_PASSWORD:-}@postgres:5432/sofra_staging"
+      # The curated central catalogue is shared and read-only in both Sofra control
+      # planes. Keep schema changes on the additive founder-run migration path.
+      CATALOGUE_DATABASE_URL: "postgresql://sofra_catalogue_reader:${SOFRA_CATALOGUE_READER_PASSWORD:-}@postgres:5432/sofra_catalogue"
       # Its own secret — sharing prod's would make a staging session token valid on
       # sofrapiwas.com.
       AUTH_SECRET: "${SOFRA_STAGING_AUTH_SECRET:-}"

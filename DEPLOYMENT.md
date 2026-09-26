@@ -148,6 +148,78 @@ docker run --rm --network deploy_rumi \
 docker compose -f docker-compose.prod.yml up -d sofra
 ```
 
+#### Shared curated catalogue (separate database and role)
+
+Both `sofra` and `sofra-staging` read one Sofra-owned catalogue database through the
+restricted `sofra_catalogue_reader` role. This database is separate from the control
+plane's `sofra` and `sofra_staging` databases. The runtime role can select only the
+published views; migrations and manifest synchronization use the owner role from a
+one-off container. Set `SOFRA_CATALOGUE_READER_PASSWORD` and
+`SOFRA_CATALOGUE_OWNER_PASSWORD` in the box `.env` (placeholders are in
+`.env.staging.example`).
+
+One-time database and role setup on the Sofra box:
+
+```bash
+cd /opt/rumi/deploy
+docker compose -f docker-compose.prod.yml exec postgres \
+  psql -U rumi -d postgres \
+    -c "CREATE ROLE sofra_catalogue_owner LOGIN PASSWORD '<SOFRA_CATALOGUE_OWNER_PASSWORD>'" \
+    -c "CREATE ROLE sofra_catalogue_reader LOGIN PASSWORD '<SOFRA_CATALOGUE_READER_PASSWORD>'" \
+    -c "CREATE DATABASE sofra_catalogue OWNER sofra_catalogue_owner" \
+    -c "GRANT CONNECT ON DATABASE sofra_catalogue TO sofra_catalogue_reader"
+```
+
+Apply its handwritten migrations independently of the control-plane migration. Use the
+image that contains the code being released; catalogue migrations are additive and the
+runtime never runs them at startup.
+
+```bash
+docker pull ghcr.io/piwas-21/sofra:migrate
+docker run --rm --network deploy_rumi \
+  -e CATALOGUE_DATABASE_URL="postgresql://sofra_catalogue_owner:<SOFRA_CATALOGUE_OWNER_PASSWORD>@postgres:5432/sofra_catalogue" \
+  ghcr.io/piwas-21/sofra:migrate \
+  node node_modules/prisma/build/index.js migrate deploy --config prisma.catalogue.config.ts
+```
+
+The checked-in manifest set is intentionally unpublished until operator/editorial review
+is recorded. Validate and store the current draft set with the same owner credential:
+
+```bash
+docker run --rm --network deploy_rumi \
+  ghcr.io/piwas-21/sofra:migrate node scripts/catalogue/validate-manifests.mjs
+docker run --rm --network deploy_rumi \
+  -e CATALOGUE_DATABASE_URL="postgresql://sofra_catalogue_owner:<SOFRA_CATALOGUE_OWNER_PASSWORD>@postgres:5432/sofra_catalogue" \
+  ghcr.io/piwas-21/sofra:migrate node scripts/catalogue/sync-manifests.mjs
+```
+
+The validator prints manifest counts, per-revision locale coverage and blockers. The
+sync command is append-only: it stores drafts without publishing, rejects a changed
+content hash at an existing revision, and records publication events only when a
+manifest explicitly passes the operator-review and editorial gates. For a develop
+release, use the `:migrate-staging` image for both one-off commands. Then start the
+control-plane profiles with `docker compose -f docker-compose.prod.yml up -d sofra`
+and, when opted in, `up -d sofra-staging`.
+
+The admin-only `GET /api/admin/catalogue/health` probe reports catalogue view
+availability and database latency. It is intentionally separate from public
+`/api/health`, which remains dependency-free. If this database is unavailable, template
+suggestions/imports return 503; existing menus, baskets and orders use tenant databases
+and keep working.
+
+The nightly box backup already includes the catalogue in the full `pg_dumpall`; when
+the database exists, `backup-dump.sh` also writes a standalone custom-format
+`dumps/catalogue-<ts>.dump`. The whole dumps directory is sent off-box by
+`backup-offsite.sh`. Rehearse an artifact without connecting to the live server:
+
+```bash
+./verify-catalogue-backup.sh /opt/rumi/backups/dumps/catalogue-<ts>.dump
+```
+
+The check restores to a disposable `postgres:16` container, requires at least one stored
+immutable revision, confirms the runtime role can read the published view, and confirms
+it cannot read the base revision table.
+
 #### Sofra STAGING control plane (develop-tracking)
 
 A second control plane at `staging.sofrapiwas.com`, on the same box and the same shared
@@ -1435,7 +1507,7 @@ restic. Each box's data ends up **encrypted on the other box**:
 
 | Script | Runs on | Produces |
 |---|---|---|
-| `backup-dump.sh` | both boxes, 02:15 box-local (cron) | `/opt/rumi/backups/dumps/`: `pg_dumpall` of the whole cluster (all DBs + roles), uploads-volume tar, `/opt/rumi/tenants` tar, box-config tar (`.env`, `app-secrets.json`, `dozzle-users.yml`); **plus `dumps/tenants/<slug>/<slug>-scheduled-<ts>.sql.gz`, one per managed tenant** (calls `backup-tenant.sh`); keeps 7 days locally, then prunes the archive on its own clock |
+| `backup-dump.sh` | both boxes, 02:15 box-local (cron) | `/opt/rumi/backups/dumps/`: `pg_dumpall` of the whole cluster (all DBs + roles), uploads-volume tar, `/opt/rumi/tenants` tar, box-config tar (`.env`, `app-secrets.json`, `dozzle-users.yml`); when present, a standalone `catalogue-<ts>.dump`; **plus `dumps/tenants/<slug>/<slug>-scheduled-<ts>.sql.gz`, one per managed tenant** (calls `backup-tenant.sh`); keeps 7 days locally, then prunes the archive on its own clock | <!-- pragma: allowlist secret -->
 | `backup-tenant.sh <slug>` | both boxes, from the nightly loop or on demand | one tenant's `pg_dump` + a `.sha256` sidecar. **Complements, never replaces, the cluster dump** — see below |
 | `backup-archive-tenant.sh <slug>` | both boxes, from `deprovision-tenant.sh` or by hand | `archive/<slug>/<ts>/{db.sql.gz,uploads.tar.gz,manifest.json}` — the **long-retention** copy of a departed tenant. `--prune` expires archives past the horizon |
 | `restore-tenant.sh <slug>` | both boxes | **rehearses** a restore into a throwaway database (default), or performs a real one with `--into <db> --force` |
