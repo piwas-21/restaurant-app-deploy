@@ -182,7 +182,7 @@ docker pull ghcr.io/piwas-21/sofra:migrate
 docker run --rm --network deploy_rumi \
   -e CATALOGUE_DATABASE_URL="postgresql://sofra_catalogue_owner:<SOFRA_CATALOGUE_OWNER_PASSWORD>@postgres:5432/sofra_catalogue" \
   ghcr.io/piwas-21/sofra:migrate \
-  node node_modules/prisma/build/index.js migrate deploy --config prisma.catalogue.config.ts
+  sh scripts/catalogue/migrate-deploy.sh
 ```
 
 The checked-in manifest set is intentionally unpublished until operator/editorial review
