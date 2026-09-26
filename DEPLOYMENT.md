@@ -223,9 +223,15 @@ the database exists, `backup-dump.sh` also writes a standalone custom-format
 ./verify-catalogue-backup.sh /opt/rumi/backups/dumps/catalogue-<ts>.dump
 ```
 
-The check restores to a disposable `postgres:16` container, requires at least one stored
-immutable revision, confirms the runtime role can read the published view, and confirms
-it cannot read the base revision table.
+The check restores to a disposable `postgres:16` container and confirms the catalogue
+schema, revision table, and published views exist. Zero stored revisions are valid while
+the starter manifests remain source-only drafts. It checks that the runtime role can
+read both published views and has no base-table access or write permissions. Exercise
+both an empty catalogue and a synthetic one-revision archive locally with:
+
+```bash
+./tests/catalogue-backup-restore.sh
+```
 
 #### Sofra STAGING control plane (develop-tracking)
 

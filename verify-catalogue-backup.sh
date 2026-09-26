@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Restore one standalone catalogue archive into an isolated disposable Postgres
-# container and verify its schema, stored revisions, and read-only runtime view.
+# container and verify its schema, stored revisions, and read-only runtime views.
 # This script never connects to the live deployment.
 set -euo pipefail
 
@@ -43,21 +43,64 @@ docker exec "$CONTAINER" psql -U restore_admin -d postgres -v ON_ERROR_STOP=1 \
 docker exec -i "$CONTAINER" pg_restore -U restore_admin --role=sofra_catalogue_owner \
   --exit-on-error -d sofra_catalogue < "$ARCHIVE"
 
-revision_count="$(docker exec "$CONTAINER" psql -U sofra_catalogue_owner -d sofra_catalogue -At \
-  -c "SELECT count(*) FROM catalogue.revision")"
-[[ "$revision_count" =~ ^[1-9][0-9]*$ ]] || {
-  echo "ERROR: restored archive has no catalogue revisions" >&2
+schema_ready="$(docker exec "$CONTAINER" psql -U sofra_catalogue_owner -d sofra_catalogue -At \
+  -v ON_ERROR_STOP=1 -c "SELECT to_regnamespace('catalogue') IS NOT NULL
+    AND to_regclass('catalogue.revision') IS NOT NULL
+    AND to_regclass('catalogue.public_revision') IS NOT NULL
+    AND to_regclass('catalogue.public_current') IS NOT NULL")"
+[[ "$schema_ready" == "t" ]] || {
+  echo "ERROR: restored archive is missing the catalogue schema, revision table, or published views" >&2
   exit 1
 }
 
-# A successful SELECT through the application role verifies view access. Direct base
-# table access must fail so the runtime credential cannot bypass publication filtering.
-docker exec "$CONTAINER" psql -U sofra_catalogue_reader -d sofra_catalogue -v ON_ERROR_STOP=1 \
-  -c "SELECT count(*) FROM catalogue.public_current" >/dev/null
-if docker exec "$CONTAINER" psql -U sofra_catalogue_reader -d sofra_catalogue -v ON_ERROR_STOP=1 \
-  -c "SELECT count(*) FROM catalogue.revision" >/dev/null 2>&1; then
-  echo "ERROR: restored reader role can read unpublished base revisions" >&2
+revision_count="$(docker exec "$CONTAINER" psql -U sofra_catalogue_owner -d sofra_catalogue -At \
+  -c "SELECT count(*) FROM catalogue.revision")"
+[[ "$revision_count" =~ ^[0-9]+$ ]] || {
+  echo "ERROR: restored archive returned an invalid catalogue revision count" >&2
   exit 1
-fi
+}
 
-echo "Catalogue backup restore check passed: ${revision_count} immutable revision(s) restored; reader role is view-only."
+# A restored catalogue may validly contain zero revisions while every starter manifest
+# is still a source-only draft. Verify both published views are readable, the reader has
+# no schema-create or relation-write rights, and it cannot bypass the views to read base
+# catalogue tables.
+reader_acl="$(docker exec -i "$CONTAINER" psql -U sofra_catalogue_owner -d sofra_catalogue -At \
+  -v ON_ERROR_STOP=1 <<'SQL'
+WITH expected_access(relation_name, can_select) AS (
+  VALUES
+    ('public_revision', true),
+    ('public_current', true),
+    ('template', false),
+    ('revision', false),
+    ('revision_event', false)
+), checked_access AS (
+  SELECT can_select = has_table_privilege('sofra_catalogue_reader',
+           format('catalogue.%I', relation_name), 'SELECT')
+      AND NOT has_table_privilege('sofra_catalogue_reader', format('catalogue.%I', relation_name), 'INSERT')
+      AND NOT has_table_privilege('sofra_catalogue_reader', format('catalogue.%I', relation_name), 'UPDATE')
+      AND NOT has_table_privilege('sofra_catalogue_reader', format('catalogue.%I', relation_name), 'DELETE')
+      AND NOT has_table_privilege('sofra_catalogue_reader', format('catalogue.%I', relation_name), 'TRUNCATE')
+      AND NOT has_table_privilege('sofra_catalogue_reader', format('catalogue.%I', relation_name), 'REFERENCES')
+      AND NOT has_table_privilege('sofra_catalogue_reader', format('catalogue.%I', relation_name), 'TRIGGER') AS valid
+  FROM expected_access
+)
+SELECT has_schema_privilege('sofra_catalogue_reader', 'catalogue', 'USAGE')
+   AND NOT has_schema_privilege('sofra_catalogue_reader', 'catalogue', 'CREATE')
+   AND bool_and(valid)
+FROM checked_access;
+SQL
+)"
+[[ "$reader_acl" == "t" ]] || {
+  echo "ERROR: restored reader role does not have view-only catalogue permissions" >&2
+  exit 1
+}
+view_counts="$(docker exec "$CONTAINER" psql -U sofra_catalogue_reader -d sofra_catalogue -At \
+  -v ON_ERROR_STOP=1 -c "SELECT (SELECT count(*) FROM catalogue.public_revision)::text || ':' ||
+    (SELECT count(*) FROM catalogue.public_current)::text")"
+[[ "$view_counts" =~ ^[0-9]+:[0-9]+$ ]] || {
+  echo "ERROR: restored reader role returned invalid published-view counts" >&2
+  exit 1
+}
+IFS=: read -r public_revision_count public_current_count <<< "$view_counts"
+
+echo "Catalogue backup restore check passed: ${revision_count} immutable revision(s) restored; ${public_revision_count} published revision(s) and ${public_current_count} current template(s) visible; reader role is view-only."
