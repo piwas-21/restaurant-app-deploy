@@ -118,8 +118,9 @@ image `ghcr.io/piwas-21/sofra`) — see the `sofra` service in
 `docker-compose.prod.yml`. It is gated behind the `sofra` compose profile: the
 staging box sets `COMPOSE_PROFILES=sofra` (plus `SOFRA_DOMAIN`,
 `SOFRA_WWW_DOMAIN`, and the waitlist vars — see `.env.staging.example`) in its
-`.env`; prod sets none of them, so nothing changes there. Roll out with
-`docker compose -f docker-compose.prod.yml up -d sofra` and remember a changed
+`.env`; prod sets none of them, so nothing changes there. Before enabling/updating a
+Sofra service, run `python3 ./verify-sofra-catalogue-env.py` on that box, then roll out
+with `docker compose -f docker-compose.prod.yml up -d sofra` and remember a changed
 `Caddyfile.staging` needs `up -d --force-recreate caddy` (bind-mount inode
 gotcha). Verify: `https://sofrapiwas.com/en` (200) and the RUMI staging URL
 still healthy.
@@ -145,6 +146,7 @@ docker pull ghcr.io/piwas-21/sofra:migrate
 docker run --rm --network deploy_rumi \
   -e DATABASE_URL="postgresql://sofra:<SOFRA_DB_PASSWORD>@postgres:5432/sofra" \
   ghcr.io/piwas-21/sofra:migrate          # = prisma migrate deploy
+python3 ./verify-sofra-catalogue-env.py
 docker compose -f docker-compose.prod.yml up -d sofra
 ```
 
@@ -156,10 +158,14 @@ plane's `sofra` and `sofra_staging` databases. The runtime role can select only 
 published views; migrations and manifest synchronization use the owner role from a
 one-off container. Set `SOFRA_CATALOGUE_READER_PASSWORD` and
 `SOFRA_CATALOGUE_OWNER_PASSWORD` in the box `.env` (placeholders are in
-`.env.staging.example`). Public read throttling is configurable through
-`CATALOGUE_READ_RATE_LIMIT_MAX_REQUESTS` and `CATALOGUE_READ_RATE_LIMIT_WINDOW_MS`;
-the application defaults are 300 requests per 900000 milliseconds, and non-positive
-or non-integer overrides are rejected.
+`.env.staging.example`). Every box that enables either Sofra compose profile must set
+`CATALOGUE_READ_RATE_LIMIT_MAX_REQUESTS` and
+`CATALOGUE_READ_RATE_LIMIT_WINDOW_MS` to positive safe integers. The sample
+configuration uses 300 requests per 900000 milliseconds. Run
+`python3 ./verify-sofra-catalogue-env.py` on each box before a Sofra rollout; it checks
+the resolved values passed to both services without printing secrets. Missing or
+invalid values fail the preflight and make catalogue API reads return 503. The app has
+no fallback rate limit.
 
 One-time database and role setup on the Sofra box:
 
@@ -265,6 +271,7 @@ docker pull ghcr.io/piwas-21/sofra:migrate-staging
 docker run --rm --network deploy_rumi \
   -e DATABASE_URL="postgresql://sofra_staging:<SOFRA_STAGING_DB_PASSWORD>@postgres:5432/sofra_staging" \
   ghcr.io/piwas-21/sofra:migrate-staging
+python3 ./verify-sofra-catalogue-env.py
 docker compose -f docker-compose.prod.yml pull sofra-staging
 docker compose -f docker-compose.prod.yml up -d sofra-staging
 ```
