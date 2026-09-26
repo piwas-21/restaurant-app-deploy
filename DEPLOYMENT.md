@@ -183,21 +183,28 @@ docker run --rm --network deploy_rumi \
 ```
 
 The checked-in manifest set is intentionally unpublished until operator/editorial review
-is recorded. Validate and store the current draft set with the same owner credential:
+is recorded. Validate the draft set without writing it to the catalogue database:
 
 ```bash
 docker run --rm --network deploy_rumi \
   ghcr.io/piwas-21/sofra:migrate node scripts/catalogue/validate-manifests.mjs
+```
+
+The validator prints manifest counts, per-revision locale coverage and blockers. The
+sync command leaves unpublished drafts in version-controlled source and does not insert
+them. After restaurant-operator, editorial, rights and locale review, mark a manifest
+reviewed and published and rerun sync. In one transaction it inserts the immutable
+revision and appends the publication event; it rejects changed content at an existing
+revision. Withdrawing a public revision requires an explicit withdrawal manifest.
+After those checks pass, run the publisher with the owner credential:
+
+```bash
 docker run --rm --network deploy_rumi \
   -e CATALOGUE_DATABASE_URL="postgresql://sofra_catalogue_owner:<SOFRA_CATALOGUE_OWNER_PASSWORD>@postgres:5432/sofra_catalogue" \
   ghcr.io/piwas-21/sofra:migrate node scripts/catalogue/sync-manifests.mjs
 ```
 
-The validator prints manifest counts, per-revision locale coverage and blockers. The
-sync command is append-only: it stores drafts without publishing, rejects a changed
-content hash at an existing revision, and records publication events only when a
-manifest explicitly passes the operator-review and editorial gates. For a develop
-release, use the `:migrate-staging` image for both one-off commands. Then start the
+For a develop release, use the `:migrate-staging` image for both one-off commands. Then start the
 control-plane profiles with `docker compose -f docker-compose.prod.yml up -d sofra`
 and, when opted in, `up -d sofra-staging`.
 
