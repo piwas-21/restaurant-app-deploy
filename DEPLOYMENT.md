@@ -156,7 +156,10 @@ plane's `sofra` and `sofra_staging` databases. The runtime role can select only 
 published views; migrations and manifest synchronization use the owner role from a
 one-off container. Set `SOFRA_CATALOGUE_READER_PASSWORD` and
 `SOFRA_CATALOGUE_OWNER_PASSWORD` in the box `.env` (placeholders are in
-`.env.staging.example`).
+`.env.staging.example`). Public read throttling is configurable through
+`CATALOGUE_READ_RATE_LIMIT_MAX_REQUESTS` and `CATALOGUE_READ_RATE_LIMIT_WINDOW_MS`;
+the application defaults are 300 requests per 900000 milliseconds, and non-positive
+or non-integer overrides are rejected.
 
 One-time database and role setup on the Sofra box:
 

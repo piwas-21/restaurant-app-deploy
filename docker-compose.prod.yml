@@ -297,6 +297,8 @@ services:
       # Curated shared catalogue lives in a separate DB. Both Sofra control planes
       # use its read-only role; migrations and publishing use the owner one-off.
       CATALOGUE_DATABASE_URL: "postgresql://sofra_catalogue_reader:${SOFRA_CATALOGUE_READER_PASSWORD:-}@postgres:5432/sofra_catalogue"
+      CATALOGUE_READ_RATE_LIMIT_MAX_REQUESTS: "${CATALOGUE_READ_RATE_LIMIT_MAX_REQUESTS:-}"
+      CATALOGUE_READ_RATE_LIMIT_WINDOW_MS: "${CATALOGUE_READ_RATE_LIMIT_WINDOW_MS:-}"
       AUTH_SECRET: "${SOFRA_AUTH_SECRET:-}"
       NEXTAUTH_URL: "${SOFRA_APP_URL:-https://sofrapiwas.com}"
       # Mollie subscription billing (S9, sofra ADR-011 Job A). Unset -> billing
@@ -482,6 +484,8 @@ services:
       # The curated central catalogue is shared and read-only in both Sofra control
       # planes. Keep schema changes on the additive founder-run migration path.
       CATALOGUE_DATABASE_URL: "postgresql://sofra_catalogue_reader:${SOFRA_CATALOGUE_READER_PASSWORD:-}@postgres:5432/sofra_catalogue"
+      CATALOGUE_READ_RATE_LIMIT_MAX_REQUESTS: "${CATALOGUE_READ_RATE_LIMIT_MAX_REQUESTS:-}"
+      CATALOGUE_READ_RATE_LIMIT_WINDOW_MS: "${CATALOGUE_READ_RATE_LIMIT_WINDOW_MS:-}"
       # Its own secret — sharing prod's would make a staging session token valid on
       # sofrapiwas.com.
       AUTH_SECRET: "${SOFRA_STAGING_AUTH_SECRET:-}"
