@@ -51,6 +51,10 @@ COMPOSE_PROFILES="$(grep -E '^COMPOSE_PROFILES=' .env | cut -d= -f2- | tr -d '"'
 CATALOGUE_REQUIRED=0
 case ",${COMPOSE_PROFILES//[[:space:]]/}," in
   *,sofra,*|*,sofra-staging,*) CATALOGUE_REQUIRED=1 ;;
+  *)
+    # Other profile sets intentionally keep the separate catalogue DB optional.
+    CATALOGUE_REQUIRED=0
+    ;;
 esac
 CATALOGUE_EXISTS="$($DEPLOY_COMPOSE exec -T postgres psql -U "$PGUSER" -d postgres -Atc \
   "SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'sofra_catalogue')")"
