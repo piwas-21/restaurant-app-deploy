@@ -146,6 +146,7 @@ services:
       # The empty/default path is false so tenants provisioned before this key existed remain
       # on V1, while an explicit true/false in the tenant .env survives re-provisioning.
       TenantFeatures__ServerWorkspaceV2: "${TENANT_SERVER_WORKSPACE_V2:-false}"
+      TenantFeatures__OptionSetMaterializationEnabled: "${TENANT_OPTION_SET_MATERIALIZATION_ENABLED:-false}"
       # Partner attribution (SOFRA-PARTNER-PLAN §11d, channel C) — the same shape as
       # Modules__Enabled above, and for the same reason: the footer credit is
       # operator-controlled per-tenant data, so it rides a re-provision plus a container
