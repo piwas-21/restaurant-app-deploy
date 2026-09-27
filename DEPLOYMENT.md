@@ -163,11 +163,16 @@ one-off container. Set `SOFRA_CATALOGUE_READER_PASSWORD` and
 `CATALOGUE_READ_RATE_LIMIT_WINDOW_MS` to positive safe integers. The sample
 configuration uses 300 requests per 900000 milliseconds. Run
 `python3 ./verify-sofra-catalogue-env.py` on each box before a Sofra rollout; it checks
-the resolved values passed to both services without printing secrets. Missing or
-invalid values fail the preflight and make catalogue API reads return 503. The app has
-no fallback rate limit. Current release gate: both live box `.env` files currently
-lack these two settings. Set them and pass this preflight on each box before enabling
-the catalogue.
+the resolved values passed to both services without printing secrets. It also checks
+the database pool settings against the app's bounds and verifies both services match.
+Pool tuning is optional: Compose supplies defaults of 5 connections, 2000 ms connection
+timeout, and 30000 ms idle timeout. Overrides must keep connections within 1–10,
+connection timeout within 100–60000 ms, and idle timeout within 1000–600000 ms.
+Missing or invalid rate-limit values fail the preflight and make catalogue API reads
+return 503; the app has no fallback rate limit. Invalid pool overrides also fail the
+preflight. Current release gate: both live box `.env` files currently lack the two
+required rate-limit settings. Set them and pass this preflight on each box before
+enabling the catalogue.
 
 One-time database and role setup on the Sofra box:
 

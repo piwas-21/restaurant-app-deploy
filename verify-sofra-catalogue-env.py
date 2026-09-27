@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the resolved catalogue rate limits before a Sofra rollout."""
+"""Validate resolved catalogue limits and pool settings before a Sofra rollout."""
 
 from __future__ import annotations
 
@@ -12,10 +12,16 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parent
-ENVIRONMENT_KEYS = (
+RATE_LIMIT_KEYS = (
     "CATALOGUE_READ_RATE_LIMIT_MAX_REQUESTS",
     "CATALOGUE_READ_RATE_LIMIT_WINDOW_MS",
 )
+POOL_BOUNDS = {
+    "CATALOGUE_POOL_MAX": (1, 10),
+    "CATALOGUE_POOL_CONNECTION_TIMEOUT_MS": (100, 60_000),
+    "CATALOGUE_POOL_IDLE_TIMEOUT_MS": (1_000, 600_000),
+}
+ENVIRONMENT_KEYS = RATE_LIMIT_KEYS + tuple(POOL_BOUNDS)
 SOFRA_SERVICES = ("sofra", "sofra-staging")
 MAX_SAFE_INTEGER = 9_007_199_254_740_991
 
@@ -28,6 +34,13 @@ def positive_safe_integer(value: object) -> bool:
     return int(value) <= MAX_SAFE_INTEGER
 
 
+def bounded_pool_integer(value: object, minimum: int, maximum: int) -> bool:
+    return (
+        positive_safe_integer(value)
+        and minimum <= int(value) <= maximum
+    )
+
+
 def validate_service_environment(
     service_name: str,
     service: object,
@@ -38,10 +51,18 @@ def validate_service_environment(
 
     values: dict[str, str] = {}
     problems: list[str] = []
-    for key in ENVIRONMENT_KEYS:
+    for key in RATE_LIMIT_KEYS:
         value = environment.get(key)
         if not positive_safe_integer(value):
             problems.append(f"{service_name} requires {key} to be a positive safe integer.")
+        elif isinstance(value, str):
+            values[key] = value
+    for key, (minimum, maximum) in POOL_BOUNDS.items():
+        value = environment.get(key)
+        if not bounded_pool_integer(value, minimum, maximum):
+            problems.append(
+                f"{service_name} requires {key} to be an integer between {minimum} and {maximum}."
+            )
         elif isinstance(value, str):
             values[key] = value
     return values, problems
@@ -63,7 +84,7 @@ def validate_compose_config(config: object) -> list[str]:
         problems.extend(service_problems)
 
     if len(validated) == len(SOFRA_SERVICES) and validated["sofra"] != validated["sofra-staging"]:
-        problems.append("sofra and sofra-staging must use the same catalogue rate limits.")
+        problems.append("sofra and sofra-staging must use the same catalogue limits and pool settings.")
     return problems
 
 
@@ -77,8 +98,8 @@ def main() -> int:
         return 1
 
     # Validate the box .env as the source of truth, even if the invoking shell has
-    # catalogue settings exported. Compose resolves the file and we inspect only the
-    # two rate-limit fields; its rendered secrets never reach the terminal.
+    # catalogue settings exported. Compose resolves the file; its rendered secrets
+    # never reach the terminal.
     compose_environment = os.environ.copy()
     for key in ENVIRONMENT_KEYS:
         compose_environment.pop(key, None)
@@ -117,7 +138,7 @@ def main() -> int:
             print(f"FAIL: {problem}", file=sys.stderr)
         return 1
 
-    print("OK: both Sofra services have valid, matching catalogue rate limits.")
+    print("OK: both Sofra services have valid, matching catalogue limits and pool settings.")
     return 0
 
 
