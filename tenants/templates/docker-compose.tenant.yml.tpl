@@ -36,6 +36,9 @@ services:
       # can't exhaust the shared server's max_connections=300 (cost plan §5.2).
       ConnectionStrings__restaurantdb: "Host=postgres;Port=5432;Database=${TENANT_DB};Username=${TENANT_DB_ROLE};Password=${TENANT_DB_PASSWORD};Maximum Pool Size=20"
       ConnectionStrings__redis: "redis-__SLUG__:6379"
+      # Per-tenant catalogue source. Keep independent from the box-level RUMI
+      # setting because production tenants may share the staging infrastructure.
+      Catalogue__ApiBaseUrl: "${TENANT_CATALOGUE_API_BASE_URL:-}"
       # Fresh per-tenant admin bootstrap (backend #116): the seeder creates the
       # admin from these on first boot of an empty DB and skips when they're
       # absent. Values live only in the tenant .env on the box.

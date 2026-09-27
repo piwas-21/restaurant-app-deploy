@@ -170,9 +170,23 @@ timeout, and 30000 ms idle timeout. Overrides must keep connections within 1–1
 connection timeout within 100–60000 ms, and idle timeout within 1000–600000 ms.
 Missing or invalid rate-limit values fail the preflight and make catalogue API reads
 return 503; the app has no fallback rate limit. Invalid pool overrides also fail the
-preflight. Current release gate: both live box `.env` files currently lack the two
-required rate-limit settings. Set them and pass this preflight on each box before
-enabling the catalogue.
+preflight. Both box `.env` files have the sample rate limits as of 2026-09-27;
+`verify-sofra-catalogue-env.py` passed on each box after the deploy release synced.
+The staging box also has the separate catalogue database and owner/reader roles.
+The staging catalogue schema was migrated and its restricted reader was verified on
+2026-09-27. The six starter manifests remain unpublished drafts pending restaurant
+operator, editorial, rights, and locale review. A staging backup was restored into
+a disposable Postgres container and verified on 2026-09-27.
+
+Tenant backends discover/import through the Sofra public catalogue API. Set
+`CATALOGUE_API_BASE_URL` in the box `.env` for the main RUMI backend and
+`TENANT_CATALOGUE_API_BASE_URL` in each managed tenant's own `.env`; Compose maps
+both to `Catalogue__ApiBaseUrl`. Use `https://sofrapiwas.com` for production
+tenants and `https://staging.sofrapiwas.com` only for develop/demo tenants.
+The tenant setting is intentionally independent of the box setting because
+production tenants also run on the staging box. It is preserved on
+re-provision. Leaving either value empty closes catalogue discovery/import for
+that instance; existing menu and order routes continue to work.
 
 One-time database and role setup on the Sofra box:
 
