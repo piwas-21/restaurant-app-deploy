@@ -357,6 +357,12 @@ cluster-wide `pg_dumpall` (see §Backups & restore).
 
 ## Tenant provisioning (S14 v1 — sofra ADR-001/003/007)
 
+### Optional menu translation provider
+
+The backend's translation workbench always supports manual review. Provider generation is disabled in both the main stack and tenant template by default. Once the provider's billing, processing region and tenant-data terms are approved, set the four `TRANSLATION_ASSISTANCE_*` values in the main box `.env`, or the four `TENANT_TRANSLATION_ASSISTANCE_*` values in that tenant's own `.env`: enable the switch, mark data approval, supply the HTTPS Responses API URL and a secret API key. Recreate only that backend container and read back its four resolved settings without printing the key. Existing tenants' `.env` files are preserved by re-provisioning; the Compose defaults keep any missing values disabled. Never copy one tenant's approval into another tenant's `.env`.
+
+The workbench persists suggestion review separately from guest menu text. A failed or disabled provider leaves manual editing and Save available. Keep both switches false until the backend translation release and approval are in place.
+
 Each tenant is its **own compose project** (backend + frontend + redis) behind
 the box's shared Caddy and Postgres, stamped out by `provision-tenant.sh` from
 the committed registry (`tenants/registry.yml`). Founder-operated; the control
