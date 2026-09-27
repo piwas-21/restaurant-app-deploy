@@ -769,7 +769,9 @@ if [[ -f "$TENANT_DIR/.env" ]]; then
   set_env_line TENANT_LANGUAGES "$(strip_ws "$REG_LANGUAGES")"
   set_env_line TENANT_MODULES "$(strip_ws "$REG_MODULES")"
   validate_bool_env_line TENANT_SERVER_WORKSPACE_V2 "$SLUG"
-  # Both operator controls bind to C# bools and are validated here before Compose forwards them.
+  validate_bool_env_line TENANT_OPTION_SET_MATERIALIZATION_ENABLED "$SLUG" \
+    || { echo "ERROR: tenant '$SLUG' has an invalid TENANT_OPTION_SET_MATERIALIZATION_ENABLED value" >&2; exit 1; }
+  # Operator controls bind to C# bools; validate before Compose forwards them.
   # They are not registry facts, so re-provisioning preserves their explicit values unchanged.
   validate_bool_env_line TENANT_MODULES_ENFORCE "$SLUG" \
     || { echo "ERROR: tenant '$SLUG' has an invalid TENANT_MODULES_ENFORCE value; the backend would crash-loop" >&2; exit 1; }
