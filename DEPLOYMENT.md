@@ -205,6 +205,15 @@ enabling the production tenants on the same box. Set the value back to `false`
 and recreate its backend to stop further apply/update jobs; existing guest
 menu and order paths remain available.
 
+Required-sauce validation has its own restaurant-scoped switch. The main backend
+reads `ENFORCE_SAUCE_MINIMUM` from the box `.env`; managed tenants read
+`TENANT_ENFORCE_SAUCE_MINIMUM` from their own `.env`. Both map to
+`TenantFeatures__EnforceSauceMinimum` and default to `false`. Re-provision a
+managed tenant after changing its value; provisioning recreates its backend.
+For a direct `.env` edit outside provisioning, recreate that backend explicitly.
+Read back `/api/tenant/features`. Enable this only after the restaurant's
+legacy and current order clients have passed the sauce-choice checks.
+
 One-time database and role setup on the Sofra box:
 
 ```bash
