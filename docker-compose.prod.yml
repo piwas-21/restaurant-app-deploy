@@ -120,6 +120,9 @@ services:
       # RUMI/main-stack equivalent of the per-tenant Server Workspace V2 switch.
       # False by default; this grants no module or role access.
       TenantFeatures__ServerWorkspaceV2: "${TENANT_SERVER_WORKSPACE_V2:-false}"
+      # Optional Sofra catalogue discovery/import. Empty keeps the feature closed;
+      # configure this RUMI instance explicitly for its release environment.
+      Catalogue__ApiBaseUrl: "${CATALOGUE_API_BASE_URL:-}"
       # Fleet observability roll-up (Track S) — this backend pushes its device roster +
       # missed-order/error counts to the one sofra control plane (/admin/fleet). Shared bearer
       # from the box .env; the slug is this deployment's own (RUMI = the main stack). Inert until

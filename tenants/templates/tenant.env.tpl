@@ -70,6 +70,12 @@ TENANT_SERVER_WORKSPACE_V2=false
 # Server-rendered tenant-feature request deadline. Existing tenant files may omit this:
 # the compose template supplies the same operational default.
 TENANT_FEATURES_REQUEST_TIMEOUT_MS=3000
+# Optional Sofra catalogue source (origin only, e.g. https://sofrapiwas.com).
+# Set explicitly for this tenant: production tenants use the production origin,
+# develop/demo tenants use the staging origin. An empty value closes discovery
+# and import, without affecting locally authored menus or ordering.
+# Re-provisioning preserves this operator-controlled value.
+TENANT_CATALOGUE_API_BASE_URL=
 # UI template (frontend ADR-006 / S15 T2): classic | craft, from the registry's
 # optional `template` field (absent -> classic; anything else fails provisioning).
 # NEXT_PUBLIC_* are baked at frontend image build, so this line records intent —
