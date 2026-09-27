@@ -30,6 +30,11 @@ push to main ─► sync-to-box.yml (prod) + sync-to-staging.yml (staging) ─�
 - **`.env` on the box pins what's running:** `BACKEND_TAG` / `FRONTEND_TAG`.
   `deploy.sh` persists whatever tag it deploys, so a rollback survives restarts
   and the next real release moves the service forward again.
+- **Keep the box `.env` readable and writable by the deploy user (`rumi`).**
+  `deploy.sh` reads it and updates the image tag before starting Compose. A
+  root-owned mode-640 file can pass a root-side inspection but fail the normal
+  CI SSH deploy before any container changes. After a root-side edit, restore
+  `rumi:rumi` ownership and mode 600, then verify access as `rumi`.
 
 ---
 
