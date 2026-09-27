@@ -21,11 +21,30 @@ MAX_SAFE_INTEGER = 9_007_199_254_740_991
 
 
 def positive_safe_integer(value: object) -> bool:
-    if not isinstance(value, str) or re.fullmatch(r"[1-9][0-9]*", value) is None:
+    if not isinstance(value, str) or re.fullmatch(r"[1-9]\d*", value, flags=re.ASCII) is None:
         return False
     if len(value) > len(str(MAX_SAFE_INTEGER)):
         return False
     return int(value) <= MAX_SAFE_INTEGER
+
+
+def validate_service_environment(
+    service_name: str,
+    service: object,
+) -> tuple[dict[str, str], list[str]]:
+    environment = service.get("environment") if isinstance(service, dict) else None
+    if not isinstance(environment, dict):
+        return {}, [f"{service_name} has no resolved environment map."]
+
+    values: dict[str, str] = {}
+    problems: list[str] = []
+    for key in ENVIRONMENT_KEYS:
+        value = environment.get(key)
+        if not positive_safe_integer(value):
+            problems.append(f"{service_name} requires {key} to be a positive safe integer.")
+        elif isinstance(value, str):
+            values[key] = value
+    return values, problems
 
 
 def validate_compose_config(config: object) -> list[str]:
@@ -33,27 +52,18 @@ def validate_compose_config(config: object) -> list[str]:
         return ["Compose config has no services object."]
 
     services = config["services"]
-    problems: list[str] = []
     validated: dict[str, dict[str, str]] = {}
+    problems: list[str] = []
     for service_name in SOFRA_SERVICES:
-        service = services.get(service_name)
-        environment = service.get("environment") if isinstance(service, dict) else None
-        if not isinstance(environment, dict):
-            problems.append(f"{service_name} has no resolved environment map.")
-            continue
-
-        values: dict[str, str] = {}
-        for key in ENVIRONMENT_KEYS:
-            value = environment.get(key)
-            if not positive_safe_integer(value):
-                problems.append(f"{service_name} requires {key} to be a positive safe integer.")
-            elif isinstance(value, str):
-                values[key] = value
+        values, service_problems = validate_service_environment(
+            service_name,
+            services.get(service_name),
+        )
         validated[service_name] = values
+        problems.extend(service_problems)
 
-    if all(service in validated for service in SOFRA_SERVICES):
-        if validated["sofra"] != validated["sofra-staging"]:
-            problems.append("sofra and sofra-staging must use the same catalogue rate limits.")
+    if len(validated) == len(SOFRA_SERVICES) and validated["sofra"] != validated["sofra-staging"]:
+        problems.append("sofra and sofra-staging must use the same catalogue rate limits.")
     return problems
 
 

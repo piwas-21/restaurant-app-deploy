@@ -165,7 +165,9 @@ configuration uses 300 requests per 900000 milliseconds. Run
 `python3 ./verify-sofra-catalogue-env.py` on each box before a Sofra rollout; it checks
 the resolved values passed to both services without printing secrets. Missing or
 invalid values fail the preflight and make catalogue API reads return 503. The app has
-no fallback rate limit.
+no fallback rate limit. Current release gate: both live box `.env` files currently
+lack these two settings. Set them and pass this preflight on each box before enabling
+the catalogue.
 
 One-time database and role setup on the Sofra box:
 

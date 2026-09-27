@@ -97,4 +97,13 @@ else
   bad "large-value failure did not identify the setting: $output"
 fi
 
+printf 'CATALOGUE_READ_RATE_LIMIT_MAX_REQUESTS=300١\nCATALOGUE_READ_RATE_LIMIT_WINDOW_MS=900000\n' > "$TMP/.env"
+if output="$(PATH="$TMP/bin:$PATH" "$CHECK" "$TMP/.env" 2>&1)"; then
+  bad "a non-ASCII numeral was accepted"
+elif [[ "$output" == *"CATALOGUE_READ_RATE_LIMIT_MAX_REQUESTS to be a positive safe integer"* ]]; then
+  pass "non-ASCII digits are rejected"
+else
+  bad "non-ASCII digit failure did not identify the setting: $output"
+fi
+
 echo "sofra-catalogue-config: all checks passed"
