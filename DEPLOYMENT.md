@@ -193,6 +193,18 @@ production tenants also run on the staging box. It is preserved on
 re-provision. Leaving either value empty closes catalogue discovery/import for
 that instance; existing menu and order routes continue to work.
 
+Reusable option-set apply/update is a separate tenant rollout. The main backend
+reads `OPTION_SET_MATERIALIZATION_ENABLED` from the box `.env`; managed tenants
+read `TENANT_OPTION_SET_MATERIALIZATION_ENABLED` from their own `.env`. Both map
+to `TenantFeatures__OptionSetMaterializationEnabled` and default to `false`.
+Set `true` only for a verified pilot tenant, re-provision that tenant to render
+its Compose file, then force-recreate its backend. Read back
+`/api/tenant/features` and require `optionSetMaterializationEnabled: true`
+before testing apply/update. The demo tenant on staging can be enabled without
+enabling the production tenants on the same box. Set the value back to `false`
+and recreate its backend to stop further apply/update jobs; existing guest
+menu and order paths remain available.
+
 One-time database and role setup on the Sofra box:
 
 ```bash
