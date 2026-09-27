@@ -39,6 +39,11 @@ services:
       # Per-tenant catalogue source. Keep independent from the box-level RUMI
       # setting because production tenants may share the staging infrastructure.
       Catalogue__ApiBaseUrl: "${TENANT_CATALOGUE_API_BASE_URL:-}"
+      # Per-tenant provider opt-in; missing settings never send tenant menu text.
+      TranslationAssistance__Enabled: "${TENANT_TRANSLATION_ASSISTANCE_ENABLED:-false}"
+      TranslationAssistance__TenantDataApproved: "${TENANT_TRANSLATION_ASSISTANCE_DATA_APPROVED:-false}"
+      TranslationAssistance__ApiUrl: "${TENANT_TRANSLATION_ASSISTANCE_API_URL:-}"
+      TranslationAssistance__ApiKey: "${TENANT_TRANSLATION_ASSISTANCE_API_KEY:-}"
       # Fresh per-tenant admin bootstrap (backend #116): the seeder creates the
       # admin from these on first boot of an empty DB and skips when they're
       # absent. Values live only in the tenant .env on the box.
