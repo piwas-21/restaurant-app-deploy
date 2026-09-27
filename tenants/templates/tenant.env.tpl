@@ -76,6 +76,13 @@ TENANT_FEATURES_REQUEST_TIMEOUT_MS=3000
 # and import, without affecting locally authored menus or ordering.
 # Re-provisioning preserves this operator-controlled value.
 TENANT_CATALOGUE_API_BASE_URL=
+# Menu translation assistance is disabled until the provider's billing, processing
+# region and tenant-data terms are approved for this restaurant. Keep the API key
+# only in this box-local file; re-provisioning preserves these operator values.
+TENANT_TRANSLATION_ASSISTANCE_ENABLED=false
+TENANT_TRANSLATION_ASSISTANCE_DATA_APPROVED=false
+TENANT_TRANSLATION_ASSISTANCE_API_URL=
+TENANT_TRANSLATION_ASSISTANCE_API_KEY=
 # UI template (frontend ADR-006 / S15 T2): classic | craft, from the registry's
 # optional `template` field (absent -> classic; anything else fails provisioning).
 # NEXT_PUBLIC_* are baked at frontend image build, so this line records intent —
