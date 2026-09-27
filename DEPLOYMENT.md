@@ -118,8 +118,9 @@ image `ghcr.io/piwas-21/sofra`) — see the `sofra` service in
 `docker-compose.prod.yml`. It is gated behind the `sofra` compose profile: the
 staging box sets `COMPOSE_PROFILES=sofra` (plus `SOFRA_DOMAIN`,
 `SOFRA_WWW_DOMAIN`, and the waitlist vars — see `.env.staging.example`) in its
-`.env`; prod sets none of them, so nothing changes there. Roll out with
-`docker compose -f docker-compose.prod.yml up -d sofra` and remember a changed
+`.env`; prod sets none of them, so nothing changes there. Before enabling/updating a
+Sofra service, run `python3 ./verify-sofra-catalogue-env.py` on that box, then roll out
+with `docker compose -f docker-compose.prod.yml up -d sofra` and remember a changed
 `Caddyfile.staging` needs `up -d --force-recreate caddy` (bind-mount inode
 gotcha). Verify: `https://sofrapiwas.com/en` (200) and the RUMI staging URL
 still healthy.
@@ -145,7 +146,107 @@ docker pull ghcr.io/piwas-21/sofra:migrate
 docker run --rm --network deploy_rumi \
   -e DATABASE_URL="postgresql://sofra:<SOFRA_DB_PASSWORD>@postgres:5432/sofra" \
   ghcr.io/piwas-21/sofra:migrate          # = prisma migrate deploy
+python3 ./verify-sofra-catalogue-env.py
 docker compose -f docker-compose.prod.yml up -d sofra
+```
+
+#### Shared curated catalogue (separate database and role)
+
+Both `sofra` and `sofra-staging` read one Sofra-owned catalogue database through the
+restricted `sofra_catalogue_reader` role. This database is separate from the control
+plane's `sofra` and `sofra_staging` databases. The runtime role can select only the
+published views; migrations and manifest synchronization use the owner role from a
+one-off container. Set `SOFRA_CATALOGUE_READER_PASSWORD` and
+`SOFRA_CATALOGUE_OWNER_PASSWORD` in the box `.env` (placeholders are in
+`.env.staging.example`). Every box that enables either Sofra compose profile must set
+`CATALOGUE_READ_RATE_LIMIT_MAX_REQUESTS` and
+`CATALOGUE_READ_RATE_LIMIT_WINDOW_MS` to positive safe integers. The sample
+configuration uses 300 requests per 900000 milliseconds. Run
+`python3 ./verify-sofra-catalogue-env.py` on each box before a Sofra rollout; it checks
+the resolved values passed to both services without printing secrets. It also checks
+the database pool settings against the app's bounds and verifies both services match.
+Pool tuning is optional: Compose supplies defaults of 5 connections, 2000 ms connection
+timeout, and 30000 ms idle timeout. Overrides must keep connections within 1–10,
+connection timeout within 100–60000 ms, and idle timeout within 1000–600000 ms.
+Missing or invalid rate-limit values fail the preflight and make catalogue API reads
+return 503; the app has no fallback rate limit. Invalid pool overrides also fail the
+preflight. Current release gate: both live box `.env` files currently lack the two
+required rate-limit settings. Set them and pass this preflight on each box before
+enabling the catalogue.
+
+One-time database and role setup on the Sofra box:
+
+```bash
+cd /opt/rumi/deploy
+docker compose -f docker-compose.prod.yml exec postgres \
+  psql -U rumi -d postgres \
+    -c "CREATE ROLE sofra_catalogue_owner LOGIN PASSWORD '<SOFRA_CATALOGUE_OWNER_PASSWORD>'" \
+    -c "CREATE ROLE sofra_catalogue_reader LOGIN PASSWORD '<SOFRA_CATALOGUE_READER_PASSWORD>'" \
+    -c "CREATE DATABASE sofra_catalogue OWNER sofra_catalogue_owner" \
+    -c "GRANT CONNECT ON DATABASE sofra_catalogue TO sofra_catalogue_reader"
+```
+
+Apply its handwritten migrations independently of the control-plane migration. Use the
+image that contains the code being released; catalogue migrations are additive and the
+runtime never runs them at startup.
+
+```bash
+docker pull ghcr.io/piwas-21/sofra:migrate
+docker run --rm --network deploy_rumi \
+  -e CATALOGUE_DATABASE_URL="postgresql://sofra_catalogue_owner:<SOFRA_CATALOGUE_OWNER_PASSWORD>@postgres:5432/sofra_catalogue" \
+  ghcr.io/piwas-21/sofra:migrate \
+  sh scripts/catalogue/migrate-deploy.sh
+```
+
+The checked-in manifest set is intentionally unpublished until operator/editorial review
+is recorded. Validate the draft set without writing it to the catalogue database:
+
+```bash
+docker run --rm --network deploy_rumi \
+  ghcr.io/piwas-21/sofra:migrate node scripts/catalogue/validate-manifests.mjs
+```
+
+The validator prints manifest counts, per-revision locale coverage and blockers. The
+sync command leaves unpublished drafts in version-controlled source and does not insert
+them. After restaurant-operator, editorial, rights and locale review, mark a manifest
+reviewed and published and rerun sync. In one transaction it inserts the immutable
+revision and appends the publication event; it rejects changed content at an existing
+revision. Withdrawing a public revision requires an explicit withdrawal manifest.
+After those checks pass, run the publisher with the owner credential:
+
+```bash
+docker run --rm --network deploy_rumi \
+  -e CATALOGUE_DATABASE_URL="postgresql://sofra_catalogue_owner:<SOFRA_CATALOGUE_OWNER_PASSWORD>@postgres:5432/sofra_catalogue" \
+  ghcr.io/piwas-21/sofra:migrate node scripts/catalogue/sync-manifests.mjs
+```
+
+For a develop release, use the `:migrate-staging` image for both one-off commands. Then start the
+control-plane profiles with `docker compose -f docker-compose.prod.yml up -d sofra`
+and, when opted in, `up -d sofra-staging`.
+
+The admin-only `GET /api/admin/catalogue/health` probe reports catalogue view
+availability and database latency. It is intentionally separate from public
+`/api/health`, which remains dependency-free. If this database is unavailable, template
+suggestions/imports return 503; existing menus, baskets and orders use tenant databases
+and keep working.
+
+The nightly box backup already includes the catalogue in the full `pg_dumpall`; when
+the database exists, `backup-dump.sh` also writes a standalone custom-format
+`dumps/catalogue-<ts>.dump`. The whole dumps directory is sent off-box by
+`backup-offsite.sh`. Rehearse an artifact without connecting to the live server:
+
+```bash
+./verify-catalogue-backup.sh /opt/rumi/backups/dumps/catalogue-<ts>.dump
+```
+
+The check restores to a disposable `postgres:16` container and confirms the catalogue
+schema, revision table, and published views exist. Zero stored revisions are valid while
+the starter manifests remain source-only drafts. It checks that the runtime role can
+read both published views and has no base-table access or write permissions. Exercise
+both an empty catalogue and a synthetic one-revision archive locally with:
+
+```bash
+./tests/catalogue-backup-restore.sh
 ```
 
 #### Sofra STAGING control plane (develop-tracking)
@@ -177,6 +278,7 @@ docker pull ghcr.io/piwas-21/sofra:migrate-staging
 docker run --rm --network deploy_rumi \
   -e DATABASE_URL="postgresql://sofra_staging:<SOFRA_STAGING_DB_PASSWORD>@postgres:5432/sofra_staging" \
   ghcr.io/piwas-21/sofra:migrate-staging
+python3 ./verify-sofra-catalogue-env.py
 docker compose -f docker-compose.prod.yml pull sofra-staging
 docker compose -f docker-compose.prod.yml up -d sofra-staging
 ```
@@ -625,6 +727,80 @@ pass 2 had dropped both.
 
 **To turn it off**, set `TENANT_MODULES_ENFORCE=false` (or delete the line) and recreate the
 backend. Nothing else is stateful.
+
+### Server Workspace V2 rollout flag
+
+The server redesign is rolled out with an operator-controlled, per-tenant feature flag. It is
+not a commercial module, does not grant authorization, and is deliberately independent from
+`TENANT_MODULES`. New tenant `.env` files contain:
+
+```dotenv
+TENANT_SERVER_WORKSPACE_V2=false
+```
+
+This is a tenant-wide pilot switch: every server/admin user in that tenant receives the same
+value. There is no per-user database override in this rollout. The value is read while the
+server route subtree is rendered, so it does not make unrelated app routes dynamic.
+
+The main RUMI stack uses the same `TENANT_SERVER_WORKSPACE_V2` variable in the box-level `.env`;
+`docker-compose.prod.yml` maps it to the backend and supplies the frontend's bounded feature
+lookup deadline. Recreate both services after changing it. Provisioned tenants use their own
+tenant-directory `.env` and the template mapping described below.
+
+The tenant compose template maps that value to the backend's
+`TenantFeatures__ServerWorkspaceV2` configuration key. A tenant provisioned before this flag
+existed has the same effective value because compose defaults an absent key to `false`.
+
+To enable it for one tenant, edit that tenant's box-only `.env` and recreate the backend:
+
+```bash
+cd /opt/rumi/tenants/<slug>
+sed -i '/^TENANT_SERVER_WORKSPACE_V2=/d' .env
+echo 'TENANT_SERVER_WORKSPACE_V2=true' >> .env
+docker compose up -d --force-recreate backend-<slug>
+```
+
+`provision-tenant.sh` does not overwrite this operator choice during re-provisioning. It validates
+an existing value and refuses anything except `true` or `false`; fresh provisioning starts at
+`false`. As with every environment change, a bare `docker compose restart` is insufficient because
+Compose does not re-read `.env` into an existing container.
+
+Verify both the running backend and the server entry seam:
+
+```bash
+curl -s https://<domain>/api/tenant/features
+# expected: {"data":{"serverWorkspaceV2":true}, ...}
+```
+
+The frontend reads this endpoint server-side with `no-store`; a 404, malformed response, or
+network failure fails closed to Server Workspace V1. The current V2 entry seam intentionally uses
+the safe V1 workspace fallback until the redesigned floor UI is complete, so enabling the flag
+does not expose a broken or redirecting route. Confirm `/server` after a fresh browser reload and
+check that the response contains the expected current server workspace. An already-open tab keeps
+the flag value it mounted with; staff must hard-reload or close and reopen `/server` to observe a
+changed tenant value. The backend endpoint is
+anonymous because the shell needs the answer before authentication; authorization remains the
+existing `server` module and role checks.
+
+To roll back immediately, set the same value to `false` and force-recreate the backend. No
+database migration, registry edit, image rebuild, billing change, or printer-app update is
+required:
+
+```bash
+cd /opt/rumi/tenants/<slug>
+sed -i '/^TENANT_SERVER_WORKSPACE_V2=/d' .env
+echo 'TENANT_SERVER_WORKSPACE_V2=false' >> .env
+docker compose up -d --force-recreate backend-<slug>
+curl -s https://<domain>/api/tenant/features
+```
+
+Rollback is not complete until every staff member hard-reloads the server page, or closes and
+reopens the tab/app. Existing tabs retain their already-mounted tenant-wide flag until that
+reload; require this step before treating a V2 cutover or rollback as real.
+
+The deploy repository's `tests/tenant-server-workspace-v2.sh` covers the fresh false default,
+explicit true/false preservation, and invalid-value refusal. Run it alongside `bash -n`,
+`shellcheck`, and `docker compose config -q` before releasing the template.
 
 **Proven on `demo` 2026-07-29** — the first tenant ever flipped, so this is the only evidence
 that the gates gate rather than that the unrestricted path works:
@@ -1361,7 +1537,7 @@ restic. Each box's data ends up **encrypted on the other box**:
 
 | Script | Runs on | Produces |
 |---|---|---|
-| `backup-dump.sh` | both boxes, 02:15 box-local (cron) | `/opt/rumi/backups/dumps/`: `pg_dumpall` of the whole cluster (all DBs + roles), uploads-volume tar, `/opt/rumi/tenants` tar, box-config tar (`.env`, `app-secrets.json`, `dozzle-users.yml`); **plus `dumps/tenants/<slug>/<slug>-scheduled-<ts>.sql.gz`, one per managed tenant** (calls `backup-tenant.sh`); keeps 7 days locally, then prunes the archive on its own clock |
+| `backup-dump.sh` | both boxes, 02:15 box-local (cron) | `/opt/rumi/backups/dumps/`: `pg_dumpall` of the whole cluster (all DBs + roles), uploads-volume tar, `/opt/rumi/tenants` tar, box-config tar (`.env`, `app-secrets.json`, `dozzle-users.yml`); when present, a standalone `catalogue-<ts>.dump`; **plus `dumps/tenants/<slug>/<slug>-scheduled-<ts>.sql.gz`, one per managed tenant** (calls `backup-tenant.sh`); keeps 7 days locally, then prunes the archive on its own clock | <!-- pragma: allowlist secret -->
 | `backup-tenant.sh <slug>` | both boxes, from the nightly loop or on demand | one tenant's `pg_dump` + a `.sha256` sidecar. **Complements, never replaces, the cluster dump** — see below |
 | `backup-archive-tenant.sh <slug>` | both boxes, from `deprovision-tenant.sh` or by hand | `archive/<slug>/<ts>/{db.sql.gz,uploads.tar.gz,manifest.json}` — the **long-retention** copy of a departed tenant. `--prune` expires archives past the horizon |
 | `restore-tenant.sh <slug>` | both boxes | **rehearses** a restore into a throwaway database (default), or performs a real one with `--into <db> --force` |

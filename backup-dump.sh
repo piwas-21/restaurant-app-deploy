@@ -2,6 +2,7 @@
 # Nightly LOCAL backup dump — runs on BOTH boxes from /opt/rumi/deploy (cron;
 # see DEPLOYMENT.md §Backups & restore). Produces under /opt/rumi/backups/dumps/:
 #   cluster-<ts>.sql.gz        pg_dumpall of the shared postgres (all DBs + roles)
+#   catalogue-<ts>.dump        standalone custom-format Sofra catalogue database backup
 #   uploads-<ts>.tar.gz        the base stack's uploads volume (RUMI images)
 #   tenants-<ts>.tar.gz        /opt/rumi/tenants (per-tenant uploads + .env/app-secrets)
 #   deploy-config-<ts>.tar.gz  box-local never-in-git config (.env, app-secrets.json, dozzle-users.yml)
@@ -41,6 +42,37 @@ echo "==> pg_dumpall (all databases + roles)"
 $DEPLOY_COMPOSE exec -T postgres pg_dumpall -U "$PGUSER" --clean --if-exists \
   | gzip > "${DUMP_DIR}/cluster-${TS}.sql.gz.tmp"
 mv "${DUMP_DIR}/cluster-${TS}.sql.gz.tmp" "${DUMP_DIR}/cluster-${TS}.sql.gz"
+
+# The cluster dump remains the full box-loss backup (including roles); this separate
+# custom-format file makes the independently owned catalogue DB easy to restore and
+# rehearse without unpacking the entire cluster. The whole dumps/ directory is already
+# shipped off-box by backup-offsite.sh.
+COMPOSE_PROFILES="$(grep -E '^COMPOSE_PROFILES=' .env | cut -d= -f2- | tr -d '"' || true)"
+CATALOGUE_REQUIRED=0
+case ",${COMPOSE_PROFILES//[[:space:]]/}," in
+  *,sofra,*|*,sofra-staging,*) CATALOGUE_REQUIRED=1 ;;
+  *)
+    # Other profile sets intentionally keep the separate catalogue DB optional.
+    CATALOGUE_REQUIRED=0
+    ;;
+esac
+CATALOGUE_EXISTS="$($DEPLOY_COMPOSE exec -T postgres psql -U "$PGUSER" -d postgres -Atc \
+  "SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'sofra_catalogue')")"
+if [[ "$CATALOGUE_EXISTS" == "t" ]]; then
+  echo "==> standalone Sofra catalogue dump"
+  $DEPLOY_COMPOSE exec -T postgres pg_dump -Fc -U "$PGUSER" -d sofra_catalogue \
+    > "${DUMP_DIR}/catalogue-${TS}.dump.tmp"
+  # A truncated or empty archive must not acquire a final backup name.
+  [[ -s "${DUMP_DIR}/catalogue-${TS}.dump.tmp" ]] || { echo "ERROR: empty catalogue dump" >&2; exit 1; }
+  $DEPLOY_COMPOSE exec -T postgres pg_restore --list \
+    < "${DUMP_DIR}/catalogue-${TS}.dump.tmp" >/dev/null
+  mv "${DUMP_DIR}/catalogue-${TS}.dump.tmp" "${DUMP_DIR}/catalogue-${TS}.dump"
+elif [[ "$CATALOGUE_REQUIRED" == "1" ]]; then
+  echo "ERROR: Sofra profile is enabled but sofra_catalogue database is missing" >&2
+  exit 1
+else
+  echo "   skip: sofra_catalogue database is not configured on this box"
+fi
 
 # Per-tenant dumps — one restorable artifact per managed tenant, beside (NOT instead of)
 # the cluster dump above. The cluster dump is the box-loss path: it alone carries the

@@ -91,6 +91,8 @@ services:
       # runtime; empty -> the SDK is a no-op. SENTRY_ENVIRONMENT labels per box.
       SENTRY_DSN: "${SENTRY_DSN:-}"
       SENTRY_ENVIRONMENT: "${SENTRY_ENVIRONMENT:-}"
+      # Server-rendered rollout discovery fails closed to V1 when this deadline expires.
+      TENANT_FEATURES_REQUEST_TIMEOUT_MS: "${TENANT_FEATURES_REQUEST_TIMEOUT_MS:-3000}"
     depends_on:
       - backend
     networks: [rumi]
@@ -115,6 +117,9 @@ services:
       # labels events per box (both boxes run ASPNETCORE_ENVIRONMENT=Production).
       SENTRY_DSN: "${SENTRY_DSN:-}"
       SENTRY_ENVIRONMENT: "${SENTRY_ENVIRONMENT:-}"
+      # RUMI/main-stack equivalent of the per-tenant Server Workspace V2 switch.
+      # False by default; this grants no module or role access.
+      TenantFeatures__ServerWorkspaceV2: "${TENANT_SERVER_WORKSPACE_V2:-false}"
       # Fleet observability roll-up (Track S) — this backend pushes its device roster +
       # missed-order/error counts to the one sofra control plane (/admin/fleet). Shared bearer
       # from the box .env; the slug is this deployment's own (RUMI = the main stack). Inert until
@@ -289,6 +294,14 @@ services:
       # are founder-run one-offs via ghcr.io/piwas-21/sofra-migrate — never on
       # container start (see DEPLOYMENT.md "Sofra control plane").
       DATABASE_URL: "postgresql://sofra:${SOFRA_DB_PASSWORD:-}@postgres:5432/sofra"
+      # Curated shared catalogue lives in a separate DB. Both Sofra control planes
+      # use its read-only role; migrations and publishing use the owner one-off.
+      CATALOGUE_DATABASE_URL: "postgresql://sofra_catalogue_reader:${SOFRA_CATALOGUE_READER_PASSWORD:-}@postgres:5432/sofra_catalogue"
+      CATALOGUE_READ_RATE_LIMIT_MAX_REQUESTS: "${CATALOGUE_READ_RATE_LIMIT_MAX_REQUESTS:-}"
+      CATALOGUE_READ_RATE_LIMIT_WINDOW_MS: "${CATALOGUE_READ_RATE_LIMIT_WINDOW_MS:-}"
+      CATALOGUE_POOL_MAX: "${CATALOGUE_POOL_MAX:-5}"
+      CATALOGUE_POOL_CONNECTION_TIMEOUT_MS: "${CATALOGUE_POOL_CONNECTION_TIMEOUT_MS:-2000}"
+      CATALOGUE_POOL_IDLE_TIMEOUT_MS: "${CATALOGUE_POOL_IDLE_TIMEOUT_MS:-30000}"
       AUTH_SECRET: "${SOFRA_AUTH_SECRET:-}"
       NEXTAUTH_URL: "${SOFRA_APP_URL:-https://sofrapiwas.com}"
       # Mollie subscription billing (S9, sofra ADR-011 Job A). Unset -> billing
@@ -471,6 +484,14 @@ services:
       # Own database + role on the shared server. NEVER point this at `sofra`: the whole
       # value of the environment is that a destructive test cannot reach production data.
       DATABASE_URL: "postgresql://sofra_staging:${SOFRA_STAGING_DB_PASSWORD:-}@postgres:5432/sofra_staging"
+      # The curated central catalogue is shared and read-only in both Sofra control
+      # planes. Keep schema changes on the additive founder-run migration path.
+      CATALOGUE_DATABASE_URL: "postgresql://sofra_catalogue_reader:${SOFRA_CATALOGUE_READER_PASSWORD:-}@postgres:5432/sofra_catalogue"
+      CATALOGUE_READ_RATE_LIMIT_MAX_REQUESTS: "${CATALOGUE_READ_RATE_LIMIT_MAX_REQUESTS:-}"
+      CATALOGUE_READ_RATE_LIMIT_WINDOW_MS: "${CATALOGUE_READ_RATE_LIMIT_WINDOW_MS:-}"
+      CATALOGUE_POOL_MAX: "${CATALOGUE_POOL_MAX:-5}"
+      CATALOGUE_POOL_CONNECTION_TIMEOUT_MS: "${CATALOGUE_POOL_CONNECTION_TIMEOUT_MS:-2000}"
+      CATALOGUE_POOL_IDLE_TIMEOUT_MS: "${CATALOGUE_POOL_IDLE_TIMEOUT_MS:-30000}"
       # Its own secret — sharing prod's would make a staging session token valid on
       # sofrapiwas.com.
       AUTH_SECRET: "${SOFRA_STAGING_AUTH_SECRET:-}"
