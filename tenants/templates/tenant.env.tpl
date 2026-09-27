@@ -70,6 +70,8 @@ TENANT_SERVER_WORKSPACE_V2=false
 # Reusable option-set apply/update stays off until this restaurant's rollout is verified.
 # An existing tenant's explicit value is preserved by re-provisioning.
 TENANT_OPTION_SET_MATERIALIZATION_ENABLED=false
+# Required-sauce order validation; enable only after this tenant's choices are verified.
+TENANT_ENFORCE_SAUCE_MINIMUM=false
 # Server-rendered tenant-feature request deadline. Existing tenant files may omit this:
 # the compose template supplies the same operational default.
 TENANT_FEATURES_REQUEST_TIMEOUT_MS=3000

@@ -771,6 +771,8 @@ if [[ -f "$TENANT_DIR/.env" ]]; then
   validate_bool_env_line TENANT_SERVER_WORKSPACE_V2 "$SLUG"
   validate_bool_env_line TENANT_OPTION_SET_MATERIALIZATION_ENABLED "$SLUG" \
     || { echo "ERROR: tenant '$SLUG' has an invalid TENANT_OPTION_SET_MATERIALIZATION_ENABLED value" >&2; exit 1; }
+  validate_bool_env_line TENANT_ENFORCE_SAUCE_MINIMUM "$SLUG" \
+    || { echo "ERROR: tenant '$SLUG' has an invalid TENANT_ENFORCE_SAUCE_MINIMUM value" >&2; exit 1; }
   # Operator controls bind to C# bools; validate before Compose forwards them.
   # They are not registry facts, so re-provisioning preserves their explicit values unchanged.
   validate_bool_env_line TENANT_MODULES_ENFORCE "$SLUG" \
