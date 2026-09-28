@@ -2,7 +2,7 @@
 # Unit test for the Server Workspace V2 rollout flag.
 #
 # The flag is deliberately an operator control, not a registry/module field. New tenants
-# receive false from the env template, while re-provisioning must preserve an explicit true
+# receive true from the env template, while re-provisioning must preserve an explicit true
 # or false. The validator is extracted from provision-tenant.sh so this test follows the
 # production preservation path rather than copying its logic.
 set -euo pipefail
@@ -11,7 +11,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT="$HERE/../provision-tenant.sh"
 TEMPLATE="$HERE/../tenants/templates/tenant.env.tpl"
 MAIN_COMPOSE="$HERE/../docker-compose.prod.yml"
-[[ -f "$SCRIPT" && -f "$TEMPLATE" && -f "$MAIN_COMPOSE" ]] \
+TENANT_COMPOSE="$HERE/../tenants/templates/docker-compose.tenant.yml.tpl"
+[[ -f "$SCRIPT" && -f "$TEMPLATE" && -f "$MAIN_COMPOSE" && -f "$TENANT_COMPOSE" ]] \
   || { echo "missing rollout inputs" >&2; exit 1; }
 
 FNS="$(mktemp)"
@@ -28,17 +29,25 @@ fail=0
 pass() { local description="$1"; printf '  ok   %s\n' "$description"; }
 bad() { local description="$1"; printf '  FAIL %s\n' "$description"; fail=1; }
 
-if grep -q '^TENANT_SERVER_WORKSPACE_V2=false$' "$TEMPLATE"; then
-  pass 'fresh tenant template defaults Server Workspace V2 to false'
+if grep -q '^TENANT_SERVER_WORKSPACE_V2=true$' "$TEMPLATE"; then
+  pass 'fresh tenant template defaults Server Workspace V2 to true'
 else
-  bad 'fresh tenant template is missing the false default'
+  bad 'fresh tenant template is missing the true default'
 fi
 
-if grep -Fq 'TenantFeatures__ServerWorkspaceV2: "${TENANT_SERVER_WORKSPACE_V2:-false}"' "$MAIN_COMPOSE" \
+# shellcheck disable=SC2016 # Match literal Compose variable syntax.
+if grep -Fq 'TenantFeatures__ServerWorkspaceV2: "${TENANT_SERVER_WORKSPACE_V2:-true}"' "$MAIN_COMPOSE" \
     && grep -Fq 'TENANT_FEATURES_REQUEST_TIMEOUT_MS: "${TENANT_FEATURES_REQUEST_TIMEOUT_MS:-3000}"' "$MAIN_COMPOSE"; then
-  pass 'main RUMI compose carries the disabled backend flag and bounded frontend lookup'
+  pass 'main RUMI compose carries the enabled backend flag and bounded frontend lookup'
 else
   bad 'main RUMI compose cannot carry the Server Workspace V2 rollout contract'
+fi
+
+# shellcheck disable=SC2016 # Match literal Compose variable syntax.
+if grep -Fq 'TenantFeatures__ServerWorkspaceV2: "${TENANT_SERVER_WORKSPACE_V2:-true}"' "$TENANT_COMPOSE"; then
+  pass 'provisioned tenant compose enables V2 when an older env lacks the flag'
+else
+  bad 'provisioned tenant compose is missing the enabled default'
 fi
 
 TENANT_DIR="$WORK/tenant"
