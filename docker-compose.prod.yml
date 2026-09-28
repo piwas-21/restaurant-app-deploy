@@ -118,8 +118,8 @@ services:
       SENTRY_DSN: "${SENTRY_DSN:-}"
       SENTRY_ENVIRONMENT: "${SENTRY_ENVIRONMENT:-}"
       # RUMI/main-stack equivalent of the per-tenant Server Workspace V2 switch.
-      # False by default; this grants no module or role access.
-      TenantFeatures__ServerWorkspaceV2: "${TENANT_SERVER_WORKSPACE_V2:-false}"
+      # Enabled by default; this grants no module or role access.
+      TenantFeatures__ServerWorkspaceV2: "${TENANT_SERVER_WORKSPACE_V2:-true}"
       # Apply/update of reusable option sets is an explicit tenant rollout.
       TenantFeatures__OptionSetMaterializationEnabled: "${OPTION_SET_MATERIALIZATION_ENABLED:-false}"
       # Required-sauce validation is enabled per restaurant after order-path checks.

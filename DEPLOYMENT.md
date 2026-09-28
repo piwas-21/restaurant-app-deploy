@@ -774,17 +774,17 @@ pass 2 had dropped both.
 **To turn it off**, set `TENANT_MODULES_ENFORCE=false` (or delete the line) and recreate the
 backend. Nothing else is stateful.
 
-### Server Workspace V2 rollout flag
+### Server Workspace V2
 
-The server redesign is rolled out with an operator-controlled, per-tenant feature flag. It is
+The server redesign uses an operator-controlled, per-tenant feature flag. It is
 not a commercial module, does not grant authorization, and is deliberately independent from
 `TENANT_MODULES`. New tenant `.env` files contain:
 
 ```dotenv
-TENANT_SERVER_WORKSPACE_V2=false
+TENANT_SERVER_WORKSPACE_V2=true
 ```
 
-This is a tenant-wide pilot switch: every server/admin user in that tenant receives the same
+This is a tenant-wide switch: every server/admin user in that tenant receives the same
 value. There is no per-user database override in this rollout. The value is read while the
 server route subtree is rendered, so it does not make unrelated app routes dynamic.
 
@@ -794,8 +794,8 @@ lookup deadline. Recreate both services after changing it. Provisioned tenants u
 tenant-directory `.env` and the template mapping described below.
 
 The tenant compose template maps that value to the backend's
-`TenantFeatures__ServerWorkspaceV2` configuration key. A tenant provisioned before this flag
-existed has the same effective value because compose defaults an absent key to `false`.
+`TenantFeatures__ServerWorkspaceV2` configuration key. Compose defaults an absent key to `true`;
+an explicit `false` in an existing tenant `.env` must be changed to enable V2.
 
 To enable it for one tenant, edit that tenant's box-only `.env` and recreate the backend:
 
@@ -808,7 +808,7 @@ docker compose up -d --force-recreate backend-<slug>
 
 `provision-tenant.sh` does not overwrite this operator choice during re-provisioning. It validates
 an existing value and refuses anything except `true` or `false`; fresh provisioning starts at
-`false`. As with every environment change, a bare `docker compose restart` is insufficient because
+`true`. As with every environment change, a bare `docker compose restart` is insufficient because
 Compose does not re-read `.env` into an existing container.
 
 Verify both the running backend and the server entry seam:
@@ -819,10 +819,8 @@ curl -s https://<domain>/api/tenant/features
 ```
 
 The frontend reads this endpoint server-side with `no-store`; a 404, malformed response, or
-network failure fails closed to Server Workspace V1. The current V2 entry seam intentionally uses
-the safe V1 workspace fallback until the redesigned floor UI is complete, so enabling the flag
-does not expose a broken or redirecting route. Confirm `/server` after a fresh browser reload and
-check that the response contains the expected current server workspace. An already-open tab keeps
+network failure fails closed to Server Workspace V1. Confirm `/server` after a fresh browser reload and
+check that the redesigned floor and table routes load. An already-open tab keeps
 the flag value it mounted with; staff must hard-reload or close and reopen `/server` to observe a
 changed tenant value. The backend endpoint is
 anonymous because the shell needs the answer before authentication; authorization remains the
@@ -844,7 +842,7 @@ Rollback is not complete until every staff member hard-reloads the server page, 
 reopens the tab/app. Existing tabs retain their already-mounted tenant-wide flag until that
 reload; require this step before treating a V2 cutover or rollback as real.
 
-The deploy repository's `tests/tenant-server-workspace-v2.sh` covers the fresh false default,
+The deploy repository's `tests/tenant-server-workspace-v2.sh` covers the fresh true default,
 explicit true/false preservation, and invalid-value refusal. Run it alongside `bash -n`,
 `shellcheck`, and `docker compose config -q` before releasing the template.
 
