@@ -63,10 +63,9 @@ TENANT_MODULES=__MODULES__
 # backend-<slug>`.
 TENANT_MODULES_ENFORCE=true
 # Server Workspace V2 rollout (server redesign). This is an operator-controlled UI
-# switch, not a purchased module or an authorization boundary. New tenants stay on
-# the proven V1 workspace until explicitly enabled; re-provisioning preserves a
-# deliberate true/false value on an existing tenant.
-TENANT_SERVER_WORKSPACE_V2=false
+# switch, not a purchased module or an authorization boundary. New tenants use
+# V2 by default; an explicit false remains the emergency rollback setting.
+TENANT_SERVER_WORKSPACE_V2=true
 # Reusable option-set apply/update stays off until this restaurant's rollout is verified.
 # An existing tenant's explicit value is preserved by re-provisioning.
 TENANT_OPTION_SET_MATERIALIZATION_ENABLED=false
