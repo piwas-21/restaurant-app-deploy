@@ -22,3 +22,7 @@ caddy-tenants/*.caddy
 
 # Claude Code per-repo settings (machine-local)
 .claude/
+
+# Regenerable Python policy-reader caches
+__pycache__/
+*.pyc

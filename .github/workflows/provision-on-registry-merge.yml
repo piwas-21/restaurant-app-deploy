@@ -266,6 +266,7 @@ jobs:
             || { echo "::error::python3 PyYAML missing on the runner image"; exit 1; }
           python3 - "$STATE/candidates.json" <<'PY'
           import json, re, sys, yaml
+          from public_discovery_policy import public_discovery_policy
 
           # fullmatch, and no trailing `$`: Python's `$` also matches just before a
           # trailing newline, so `re.match(r"...$", "demo\n")` PASSES. provision-tenant.yml
@@ -329,6 +330,11 @@ jobs:
               # default is the CLASSIC TEMPLATE's palette — RUMI RED #c00000 and white — so
               # a tenant with another brand colour that leaves these unset is framed in
               # another restaurant's red on their customers' home screens.
+              try:
+                  discovery = public_discovery_policy(t)
+              except (ValueError, TypeError) as error:
+                  reject(slug, str(error))
+                  continue
               pwa_theme_color = str(t.get("pwa_theme_color") or "")
               pwa_background_color = str(t.get("pwa_background_color") or "")
               image_tag = str(t.get("frontend_tag") or f"tenant-{slug}")
@@ -373,6 +379,7 @@ jobs:
               candidates.append({
                   "slug": slug, "domain": domain, "name": name,
                   "template": template, "currency": currency, "locale": locale,
+                  **discovery,
                   "image_tag": image_tag,
                   "pwa_theme_color": pwa_theme_color,
                   "pwa_background_color": pwa_background_color,
@@ -579,6 +586,10 @@ jobs:
             # older artifact) yields the empty default rather than the string "null".
             PWA_THEME_COLOR="$(jq -r ".todo[$i].pwa_theme_color // \"\"" "$STATE/plan.json")"
             PWA_BACKGROUND_COLOR="$(jq -r ".todo[$i].pwa_background_color // \"\"" "$STATE/plan.json")"
+            PUBLIC_DEFAULT_LOCALE="$(jq -r '.todo['"$i"'].public_default_locale // "en"' "$STATE/plan.json")"
+            PUBLIC_HOME_LOCALES="$(jq -r '.todo['"$i"'].public_home_locales // "en"' "$STATE/plan.json")"
+            PUBLIC_MENU_LOCALES="$(jq -r '.todo['"$i"'].public_menu_locales // "en"' "$STATE/plan.json")"
+            PUBLIC_INDEXING="$(jq -r '.todo['"$i"'].public_indexing // "false"' "$STATE/plan.json")"
             IMAGE_TAG="$(jq -r ".todo[$i].image_tag" "$STATE/plan.json")"
             BOX_STATE="$(jq -r ".todo[$i].boxState" "$STATE/plan.json")"
 
@@ -603,13 +614,13 @@ jobs:
             # being able to rehearse on a laptop.
             since="$(python3 -c 'import datetime as d; print((d.datetime.now(d.timezone.utc) - d.timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
             echo "==> dispatching build-tenant-image for $IMAGE_TAG"
-            # MERGE ORDER on `-f locale` below, and it is not cosmetic: this dispatch
+            # MERGE ORDER on the public discovery inputs below, and it is not cosmetic: this dispatch
             # targets $FRONTEND_REF, which defaults to `main`. A workflow_dispatch REJECTS
             # an input the target ref does not declare (422 "Unexpected inputs provided"),
             # and this step runs under `set -euo pipefail` — so passing `locale` before the
             # frontend release carrying it reaches `main` does not merely lose the locale,
             # it ABORTS the provisioning loop: no image, no provision, tenant left absent.
-            # The frontend `locale` input landed on develop in restaurant-app-frontend#694.
+            # Release the frontend workflow with these inputs before this provisioning caller.
             #
             # The comment sits HERE rather than inside the invocation because a `#` line
             # between two backslash-continued lines TERMINATES the command: the preceding
@@ -623,6 +634,10 @@ jobs:
               -f template="$TEMPLATE" \
               -f currency="$CURRENCY" \
               -f locale="$LOCALE" \
+              -f public_default_locale="$PUBLIC_DEFAULT_LOCALE" \
+              -f public_home_locales="$PUBLIC_HOME_LOCALES" \
+              -f public_menu_locales="$PUBLIC_MENU_LOCALES" \
+              -f public_indexing="$PUBLIC_INDEXING" \
               -f pwa_theme_color="$PWA_THEME_COLOR" \
               -f pwa_background_color="$PWA_BACKGROUND_COLOR"
             wait_for_build "$IMAGE_TAG" "$since"

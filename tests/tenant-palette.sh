@@ -102,7 +102,7 @@ run_reader() { # $1 = registry yaml body; prints candidates.json
   local body="$1" dir="$WORK/run"
   rm -rf "$dir"; mkdir -p "$dir/tenants"
   printf '%s\n' "$body" > "$dir/tenants/registry.yml"
-  ( cd "$dir" && python3 - candidates.json < "$WORK/reader.py" ) >/dev/null
+  ( cd "$dir" && PYTHONPATH="$HERE/.." python3 - candidates.json < "$WORK/reader.py" ) >/dev/null
   cat "$dir/candidates.json"
 }
 
