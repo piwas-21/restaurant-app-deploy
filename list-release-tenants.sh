@@ -115,6 +115,7 @@ use_fake = "LIST_RELEASE_TENANTS_FAKE_DNS" in os.environ
 fake_hosts = set(fake.split())
 
 import yaml
+from public_discovery_policy import public_discovery_policy
 
 # fullmatch and no trailing `$`, for the reason provision-on-registry-merge.yml spells
 # out: Python's `$` also matches just before a trailing newline, so a re.match with `$`
@@ -196,6 +197,11 @@ for slug, t in sorted((reg.get("tenants") or {}).items()):
     # Paired with `currency:` and never derived from it: EUR is spoken in fr-FR, nl-NL
     # and de-DE, which place and punctuate the same amount three different ways.
     locale = str(t.get("locale") or "de-CH")
+    try:
+        discovery = public_discovery_policy(t)
+    except (ValueError, TypeError) as error:
+        refuse(slug, str(error), blocked)
+        continue
     pwa_theme_color = str(t.get("pwa_theme_color") or "")
     pwa_background_color = str(t.get("pwa_background_color") or "")
     image_tag = str(t.get("frontend_tag") or f"tenant-{slug}")
@@ -242,6 +248,7 @@ for slug, t in sorted((reg.get("tenants") or {}).items()):
     eligible.append({
         "slug": slug, "domain": domain, "name": name, "template": template,
         "currency": currency, "locale": locale, "image_tag": image_tag, "box": box,
+        **discovery,
         "pwa_theme_color": pwa_theme_color,
         "pwa_background_color": pwa_background_color,
     })

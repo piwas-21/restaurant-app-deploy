@@ -81,6 +81,12 @@
 #                 time, alongside `currency`, so changing it is an image rebuild and not a
 #                 re-provision. Absent behaves exactly as before the field existed (the
 #                 Swiss default), which is why every entry predating it is left alone.
+#   public_indexing: boolean, absent = false. Enable only after a public-content audit.
+#   public_default_locale: supported language code for public URLs, independent from `locale`.
+#   public_home_locales / public_menu_locales: reviewed candidate language lists. The frontend
+#                 narrows menu alternates to complete current translation coverage on each read.
+#                 Every list must contain public_default_locale. Changing these fields needs
+#                 a frontend rebuild; runtime RestaurantInfo and catalogue facts remain local.
 #   currency / languages / modules: recorded per ADR-010; provisioning writes them into the
 #                 tenant instance env. The VOCABULARY is validated: modules must come from
 #                 core | kitchen-board | cashier | server | reservations | loyalty |
@@ -274,6 +280,10 @@ tenants:
     frontend_tag: latest
     currency: CHF
     languages: [en, de, tr, it, ar, fr, nl, es, ru, zh]
+    public_default_locale: fr
+    public_home_locales: [fr, en, tr]
+    public_menu_locales: [fr, en, tr]
+    public_indexing: true
     # Grandfathered: tenant 1 keeps every module (ADR-010 v1 scope).
     modules: [core, kitchen-board, cashier, server, reservations, loyalty, printing, extra-languages]
     # RUMI prod went live on the Netcup box on 2026-06-29 (ROADMAP).
@@ -303,6 +313,10 @@ tenants:
     frontend_tag: tenant-demo
     currency: EUR
     languages: [en, nl]
+    public_default_locale: fr
+    public_home_locales: [fr, en]
+    public_menu_locales: [fr, en]
+    public_indexing: false
     # The full-service bundle, because that is what the demo actually SHOWS: kitchen
     # board, cashier, server, reservations and loyalty are all reachable on it today.
     # ENFORCED: demo was the FIRST tenant flipped, by hand, back when enforcement was
@@ -420,6 +434,10 @@ tenants:
     frontend_tag: tenant-kebabdilhan
     currency: EUR
     languages: [fr, en]
+    public_default_locale: fr
+    public_home_locales: [fr, en]
+    public_menu_locales: [fr, en]
+    public_indexing: true
     modules: [core, kitchen-board, cashier, server, reservations, loyalty, printing, extra-languages]
     # classic on the partner's standing preference — he reported craft looking
     # broken on his client content 2026-08-21 and obresse was switched for it.
@@ -473,6 +491,10 @@ tenants:
     # tenant renders `EUR 8.00` instead of `8,00 €`.
     locale: fr-FR
     languages: [fr, en]
+    public_default_locale: fr
+    public_home_locales: [fr, en]
+    public_menu_locales: [fr, en]
+    public_indexing: true
     # MC FOOD does not offer table reservations. Omitting `reservations` is deliberate:
     # the existing module enforcement path removes the home CTA/nav entries and returns
     # ModuleNotEnabled from reservation endpoints after the next re-provision.
