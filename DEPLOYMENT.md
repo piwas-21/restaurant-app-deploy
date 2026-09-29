@@ -1095,6 +1095,20 @@ Both share `/tmp/rumi-deploy.lock` with the RUMI rolls.
 
 ### A FRONTEND release: rebuild, then roll (`list-release-tenants.sh`)
 
+**Public search policy is also a build input.** `public_default_locale` is the language of the
+stable public URLs; it is independent from `locale`, which formats prices. `public_home_locales`
+and `public_menu_locales` are audited candidate lists, narrowed by the frontend's current menu
+translation coverage. `public_indexing` defaults to false until that audit is explicit. Demo and
+staging always build with indexing disabled. Canonicals use the registry `domain`; `domain_aliases`
+keep redirecting to it.
+
+Provisioning and release readers share `public_discovery_policy.py`, so a typo refuses the build
+plan rather than silently publishing another language. Existing tenants need a frontend image
+rebuild when these registry fields change. The release builder forwards them automatically.
+Release the frontend's new `build-tenant-image.yml` inputs **before** the provisioning workflow
+forwards them: GitHub rejects an undeclared dispatch input instead of ignoring it. Validate the
+result with the workspace [public-discovery runbook](../docs/runbooks/public-search-discovery.md).
+
 The table above is the whole story for the **backend**, whose image is domain-agnostic,
 so a release is a `pull` + `up -d`. It is **not** the story for the frontend, and the
 difference cost two live tenants a release each.
