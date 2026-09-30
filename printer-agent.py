@@ -11,6 +11,7 @@ from pathlib import Path
 import yaml
 from printer_agent_storage import begin_rotation, finish_rotation, install_key, read_key
 
+HTTPS = "https://"
 SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,79}$")
 KEY = re.compile(r"^[a-f0-9]{64}$")
 
@@ -24,18 +25,20 @@ def env_file(path):
     return values
 
 
+def tenant_selected(slug, tenant, box, selected):
+    return (bool(SLUG.fullmatch(slug)) and (not selected or slug in selected)
+        and tenant.get("status") == "active" and tenant.get("box") == box
+        and ("printing" in tenant.get("modules", []) or tenant.get("managed") == "legacy"))
+
+
 def targets(root, env):
     registry = yaml.safe_load((root / "tenants/registry.yml").read_text())["tenants"]
     selected = set(filter(None, env.get("PRINTER_AGENT_TENANTS", "").split(",")))
     found = {}
     for slug, tenant in registry.items():
-        if not SLUG.fullmatch(slug) or (selected and slug not in selected):
-            continue
-        if tenant.get("status") != "active" or tenant.get("box") != env["BOX_ROLE"]:
+        if not tenant_selected(slug, tenant, env["BOX_ROLE"], selected):
             continue
         legacy = tenant.get("managed") == "legacy"
-        if "printing" not in tenant.get("modules", []) and not legacy:
-            continue
         base = root if legacy else root.parent / "tenants" / slug
         if base.is_symlink() or not base.is_dir():
             continue
@@ -49,26 +52,26 @@ def targets(root, env):
 def verified(domain, key):
     if not key:
         return False
-    request = urllib.request.Request("https://" + domain + "/api/orders/printer-feed",
+    request = urllib.request.Request(HTTPS + domain + "/api/orders/printer-feed",
                                      headers={"X-Api-Key": key})
     try:
         with urllib.request.urlopen(request, timeout=15) as response:
             return response.status == 200
-    except (urllib.error.URLError, OSError, ValueError):
+    except (OSError, ValueError):
         return False
 
 
 def rejected(domain, key):
     if not key:
         return True
-    request = urllib.request.Request("https://" + domain + "/api/orders/printer-feed",
+    request = urllib.request.Request(HTTPS + domain + "/api/orders/printer-feed",
                                      headers={"X-Api-Key": key})
     try:
         with urllib.request.urlopen(request, timeout=15):
             return False
     except urllib.error.HTTPError as error:
         return error.code == 401
-    except (urllib.error.URLError, OSError, ValueError):
+    except (OSError, ValueError):
         return False
 
 
@@ -129,7 +132,7 @@ def main():
     if not secret:
         return
     url = env.get("PRINTER_AGENT_URL", "").rstrip("/")
-    if not url.startswith("https://"):
+    if not url.startswith(HTTPS):
         raise ValueError("PRINTER_AGENT_URL must use HTTPS")
     current = targets(root, env)
     if args.dry_run:
@@ -143,6 +146,10 @@ def main():
     jobs = sync(url, secret, env["BOX_ROLE"], inventory).get("jobs", [])
     if not isinstance(jobs, list) or len(jobs) > 100:
         raise ValueError("Invalid job response")
+    run_jobs(current, env, url, secret, jobs)
+
+
+def run_jobs(current, env, url, secret, jobs):
     for job in jobs:
         if not isinstance(job, dict):
             raise ValueError("Invalid job")
