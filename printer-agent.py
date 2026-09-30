@@ -12,6 +12,13 @@ import yaml
 from printer_agent_storage import begin_rotation, finish_rotation, install_key, read_key
 
 HTTPS = "https://"
+PROBE_TIMEOUT_SECONDS = 15
+SYNC_TIMEOUT_SECONDS = 30
+BACKEND_RESTART_TIMEOUT_SECONDS = 120
+RENEWAL_VERIFY_ATTEMPTS = 20
+VERIFY_INTERVAL_SECONDS = 2
+MAX_RESPONSE_BYTES = 64_000
+MAX_JOBS = 100
 SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,79}$")
 KEY = re.compile(r"^[a-f0-9]{64}$")
 
@@ -55,7 +62,7 @@ def verified(domain, key):
     request = urllib.request.Request(HTTPS + domain + "/api/orders/printer-feed",
                                      headers={"X-Api-Key": key})
     try:
-        with urllib.request.urlopen(request, timeout=15) as response:
+        with urllib.request.urlopen(request, timeout=PROBE_TIMEOUT_SECONDS) as response:
             return response.status == 200
     except (OSError, ValueError):
         return False
@@ -67,7 +74,7 @@ def rejected(domain, key):
     request = urllib.request.Request(HTTPS + domain + "/api/orders/printer-feed",
                                      headers={"X-Api-Key": key})
     try:
-        with urllib.request.urlopen(request, timeout=15):
+        with urllib.request.urlopen(request, timeout=PROBE_TIMEOUT_SECONDS):
             return False
     except urllib.error.HTTPError as error:
         return error.code == 401
@@ -79,8 +86,11 @@ def sync(url, secret, box, inventory):
     request = urllib.request.Request(url + "/api/printers/sync",
         data=json.dumps({"box": box, "credentials": inventory}).encode(),
         headers={"Authorization": "Bearer " + secret, "Content-Type": "application/json"})
-    with urllib.request.urlopen(request, timeout=30) as response:
-        return json.loads(response.read(64001))
+    with urllib.request.urlopen(request, timeout=SYNC_TIMEOUT_SECONDS) as response:
+        body = response.read(MAX_RESPONSE_BYTES + 1)
+        if len(body) > MAX_RESPONSE_BYTES:
+            raise ValueError("Oversized response")
+        return json.loads(body)
 
 
 def restart(target):
@@ -88,7 +98,7 @@ def restart(target):
     compose = "docker-compose.prod.yml" if target["legacy"] else "docker-compose.yml"
     subprocess.run(["docker", "compose", "-f", str(base / compose), "up", "-d",
                     "--no-deps", "--force-recreate", "--pull", "never", "backend" if target["legacy"] else "backend-" + target["slug"]],
-                   cwd=base, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
+                   cwd=base, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=BACKEND_RESTART_TIMEOUT_SECONDS)
 
 
 def rotate(target, key):
@@ -102,11 +112,11 @@ def rotate(target, key):
         restart(target)
         # Backend starts and runs its normal migrations before it can answer.
         import time
-        for _ in range(20):
+        for _ in range(RENEWAL_VERIFY_ATTEMPTS):
             if verified(target["domain"], key) and (old == key or rejected(target["domain"], old)):
                 finish_rotation(target["base"])
                 return True
-            time.sleep(2)
+            time.sleep(VERIFY_INTERVAL_SECONDS)
     except (OSError, ValueError, subprocess.SubprocessError):
         pass
     # Restore the entire existing secret document's other fields; only the key changes.
@@ -144,7 +154,7 @@ def main():
         inventory.append({"tenantSlug": slug, "key": key, "verified": verified(target["domain"], key),
             "renewable": not target["legacy"] or env.get("PRINTER_AGENT_ALLOW_LEGACY_RENEW") == "true"})
     jobs = sync(url, secret, env["BOX_ROLE"], inventory).get("jobs", [])
-    if not isinstance(jobs, list) or len(jobs) > 100:
+    if not isinstance(jobs, list) or len(jobs) > MAX_JOBS:
         raise ValueError("Invalid job response")
     run_jobs(current, env, url, secret, jobs)
 

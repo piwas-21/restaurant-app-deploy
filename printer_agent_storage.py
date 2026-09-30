@@ -6,6 +6,9 @@ import subprocess
 from pathlib import Path
 
 
+OWNERSHIP_TIMEOUT_SECONDS = 30
+
+
 def fsync_directory(base):
     descriptor = os.open(base, os.O_RDONLY)
     try:
@@ -48,7 +51,7 @@ def install_key(base, key):
             subprocess.run(["docker", "run", "--rm", "--network", "none", "--pull", "never",
                 "--user", "0", "-v", str(base) + ":/tenant", "alpine:3", "chown",
                 str(original.st_uid) + ":" + str(original.st_gid), "/tenant/" + Path(temp).name],
-                check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
+                check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=OWNERSHIP_TIMEOUT_SECONDS)
         os.replace(temp, path)
         fsync_directory(base)
     finally:
