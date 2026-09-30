@@ -1201,8 +1201,8 @@ fi
 $DEPLOY_COMPOSE exec caddy caddy reload --config /etc/caddy/Caddyfile
 
 # Printer-app onboarding bundle — the three values the tenant enters in the printer-app's
-# Settings screen. The key is a box-only secret (never committed); surfaced here once so the
-# founder can hand it over if the tenant buys the printer service.
+# Settings screen. Keys are never printed here; the host agent imports them encrypted
+# into Sofra admin so the founder can reveal and hand them over privately.
 
 # What the RUNNING backend says about modules — never what the .env says. The .env is
 # intent; this is the effective set, and they diverge for real reasons: an empty list
