@@ -2056,7 +2056,7 @@ missed-order/error counts to the sofra control plane's `/api/telemetry/fleet` ro
 **Printer-app onboarding for a tenant** who buys the printer service: they enter three values
 in the app's Settings — **API Base URL** (`https://<their-domain>`), **Tenant Slug**, and
 **Printer Key** (`PrinterSettings.ApiKey`, auto-generated per tenant). `provision-tenant.sh`
-prints all three in its summary; the key also lives in `/opt/rumi/tenants/<slug>/app-secrets.json`.
+prints the base URL and tenant slug in its summary; the key stays in `/opt/rumi/tenants/<slug>/app-secrets.json`.
 Admins can manage this access in `/admin/printers` once the host printer agent is configured.
 Sofra stores printer-only keys encrypted (ADR-015); tenant servers initiate sync and renewal,
 and the control plane still holds no SSH or Docker capability (ADR-012).
