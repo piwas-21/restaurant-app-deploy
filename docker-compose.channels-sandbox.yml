@@ -56,6 +56,10 @@ services:
       # The receiver fails closed with 503 while unconfigured.
       UberSandbox__ClientSecret: "${UBER_SANDBOX_CLIENT_SECRET:-}"
       UberSandbox__StoreIds__0: "${UBER_SANDBOX_STORE_ID:?Set the approved test store UUID}"
+      SandboxConsole__Enabled: "${CHANNELS_CONSOLE_ENABLED:-false}"
+      SandboxConsole__PublicBaseUrl: "${CHANNELS_CONSOLE_ORIGIN:-}"
+      SandboxConsole__OwnerAccessHash: "${CHANNELS_CONSOLE_ACCESS_HASH:-}"
+      SandboxConsole__EncryptionKey: "${CHANNELS_CONSOLE_ENCRYPTION_KEY:-}"
     networks: [channels-private, rumi]
     logging:
       driver: json-file

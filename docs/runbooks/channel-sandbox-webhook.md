@@ -2,8 +2,8 @@
 
 Run on **STAGING ONLY**, through `.ssh/staging.sh`; never a tenant or control-plane database.
 Source: backend ADR-005; image `ghcr.io/piwas-21/sofra-channel-gateway:sha-<reviewed-develop-commit>`.
-This receives signed notification references. It does **not** publish menus, accept orders or inject orders.
-Do not place a test order until its accept/deny flow is implemented.
+This receives signed notification references and provides a private sandbox console for merchant connection,
+test-menu publishing/readback and explicit order accept/deny. It does not inject orders into tenant POS.
 
 ## Configuration
 
@@ -15,7 +15,8 @@ for every webhook. Never put credentials in Git, commands, PRs or logs. Double l
 
 The webhook origin is `channels-sandbox.sofrapiwas.com` (wildcard A record points to staging). No production
 key, store or tenant mapping is configured. Keep DB owner and ingress passwords independent; the API receives
-only its own role password, with INSERT/SELECT privileges and no schema, UPDATE or DELETE permission.
+only its own role password, with INSERT/SELECT privileges on receipts and no schema or receipt UPDATE/DELETE
+permission. The console adds CRUD grants on its own session/state/token/action tables only.
 
 ## First deployment
 
@@ -62,8 +63,7 @@ Sending that reply requires the owner's explicit authorization.
 
 ## Operations and rollback
 
-The dedicated `channels_db` volume preserves sandbox notification metadata across restarts. Before order
-processing, add the approved backup/restore, retention, encrypted payload storage, monitoring and alerting policy.
+The dedicated `channels_db` volume preserves sandbox notification/action metadata across restarts.
 There is no raw-body/customer data store or tenant credential in this initial inbox. Status remains `Received`;
 it does not imply an order was processed. Acknowledge only when the insert commits; DB outage and rate throttling
 return 503 so Uber can retry. Same event ID with changed bytes returns 409 for investigation.
@@ -71,3 +71,74 @@ return 503 so Uber can retry. Same event ID with changed bytes returns 409 for i
 Rollback: remove only `caddy-tenants/channels-sandbox.caddy` and reload Caddy; stop only this standalone compose
 project's API. Preserve its database volume. Pin the previous reviewed image to roll back code. Never use
 `down -v`, alter tenant stacks or delete receipts to recover an ingress deployment.
+
+## Enable the private console
+
+Before upgrading the API, take a mode-600 custom-format `pg_dump` of `channels_sandbox` in
+`.channels-sandbox-backups/`; validate with `pg_restore --list`. This dedicated sandbox is outside the tenant
+nightly dump. Back up before each operator test session and code/configuration change; retain seven local
+snapshots, independently of tenant backups. Store the mode-600 `.env.channels-sandbox` key/config backup
+separately in the owner's credential vault. A DB copy alone cannot decrypt token/PKCE ciphertext.
+
+Apply `/app/migrations/002_sandbox_console.sql` from the exact reviewed new gateway image once, using the
+same extraction and `ON_ERROR_STOP=1` procedure as 001. Do not reapply or edit 001. Then, as channels_owner:
+
+```sql
+GRANT SELECT, INSERT, UPDATE, DELETE ON channel_console_sessions, channel_authorization_states,
+  channel_sandbox_tokens, channel_sandbox_order_actions TO channels_ingress;
+```
+
+Generate a random 32-byte base64 encryption key and an independent 32-byte base64url console access key.
+Save **only the SHA256 hash** of the latter as `CHANNELS_CONSOLE_ACCESS_HASH`; save the encryption key as
+`CHANNELS_CONSOLE_ENCRYPTION_KEY`. Deliver the raw console access key in a private mode-600 file to the owner,
+not email/chat/PRs or shell arguments. Set `CHANNELS_CONSOLE_ORIGIN` to the approved HTTPS origin and
+`CHANNELS_CONSOLE_ENABLED=true`. The API validates exactly one sandbox store and refuses production Uber
+origins. Docker Compose must never print the resolved environment to logs.
+
+Update the rendered Caddy fragment from `channels/webhook.caddy.template`, validate, reload, then start
+only the standalone API using the new pinned image. Verify `/console/` and assets serve with no-store/CSP,
+anonymous `/api/sandbox/uber/receipts` returns 401, expired/missing callback state cannot connect, and existing
+signed webhook deduplication/tenant health remains intact. Prove the ingress role still cannot UPDATE/DELETE
+receipts or CREATE a schema. Console grants never apply to any tenant database.
+
+Register the testing application's redirect URI only after the real callback is deployed:
+`https://channels-sandbox.sofrapiwas.com/api/sandbox/uber/callback`. The owner signs in to the private console
+then uses **Connect with Uber** and personally approves the test merchant authorization. No support-side
+grant or replacement client secret is required. Browser confirmation/credential entry remains the owner's
+step. The callback discovers exact store access, nominates order-manager access while retaining tablet acceptance, and reads configuration back.
+
+Publish and verify the previewed sandbox fixture. Enable/resume order testing runs a new session-bound merchant
+OAuth flow: it reactivates safely, verifies menu readback, then requests console acceptance using merchant-token
+POST. App-token PATCH can only pause/relinquish access. Require a confirmed Sofra order
+manager (not pending). Sign in to Uber Eats Orders with the supplied restaurant account, set the test store
+Open, and place a sandbox customer order using its Hoofddorp address. Keep the console open: notifications
+refresh every 30 seconds, and each newly created order needs a prompt explicit accept/deny. If Uber requires
+separate customer sandbox access, ask support for it; the supplied account is a Restaurant account.
+
+Verify one acceptance, one denial, duplicate delivery and an order with customer/item instructions. Record
+provider readback, not just HTTP 200. Synthetic ingress proves durability only. Never claim a tenant POS
+order, printed kitchen ticket, live merchant approval or production certification from this console test.
+
+## Recovery, retention and rotation
+
+The console stores no order payload/customer details. Receipt/action metadata remain for sandbox diagnosis;
+do not delete action guards while a test order can still be active. Sessions expire in 60 minutes and states
+in 10 minutes; login deletes expired sessions and their states. App token expiry is enforced on every read.
+The isolated DB and private backup files are bounded by the sandbox test window; purge/archive according to
+the production privacy policy before enabling any real merchant rather than importing test records.
+
+If an order decision times out, refresh its canonical state. Pending/Unknown blocks any second decision;
+ACCEPTED/DENIED readback resolves only the matching action. A canceled, finished or opposite-state order
+needs inspection in Uber Eats Orders/support, never deleting the action row to force a resend. No background
+job silently accepts orders. Missing DB, invalid token encryption or provider scope failure remains visible.
+
+For console access-key rotation: pause testing, generate a new key/hash, delete console sessions (cascades
+states), update the mode-600 environment, and recreate only the API. For encryption-key rotation: disable
+the console, back up DB/key together, delete cached app tokens and console sessions/states only, replace the
+encryption key, then recreate and enable. Fresh app authentication remints tokens; receipt/action guards
+remain. Never reuse the app client secret as an encryption or console-access key. Client-secret rotation
+also affects webhook signatures and must follow Uber's separate app credential process.
+
+Restore into an isolated disposable database first and compare table counts/constraints and action guards;
+never restore over the serving DB or a tenant. API rollback uses the previous reviewed image while retaining
+002 tables. Set `CHANNELS_CONSOLE_ENABLED=false` to withdraw console access while keeping signed ingress.
