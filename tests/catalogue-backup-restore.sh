@@ -34,8 +34,9 @@ POSTGRES_PASSWORD="$catalogue_fixture_password" docker run -d --rm --network non
 unset catalogue_fixture_password
 
 ready=0
+# The image's temporary init server listens only on a socket; wait for the final TCP server.
 for _ in $(seq 1 30); do
-  if docker exec "$CONTAINER" pg_isready -U restore_admin >/dev/null 2>&1; then
+  if docker exec "$CONTAINER" pg_isready -h 127.0.0.1 -U restore_admin >/dev/null 2>&1; then
     ready=1
     break
   fi
