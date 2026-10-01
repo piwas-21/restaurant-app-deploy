@@ -71,6 +71,9 @@ jobs:
             --exclude='.ssh/' \
             --exclude='.env' \
             --exclude='.env.channels-sandbox' \
+            --exclude='.uber-sandbox-store-token.json' \
+            --exclude='.channels-console-access' \
+            --exclude='.channels-sandbox-backups/' \
             --exclude='app-secrets.json' \
             --exclude='dozzle-users.yml' \
             --exclude='*.bak' \
@@ -97,6 +100,9 @@ jobs:
             --exclude='.ssh/' \
             --exclude='.env' \
             --exclude='.env.channels-sandbox' \
+            --exclude='.uber-sandbox-store-token.json' \
+            --exclude='.channels-console-access' \
+            --exclude='.channels-sandbox-backups/' \
             --exclude='app-secrets.json' \
             --exclude='dozzle-users.yml' \
             --exclude='*.bak' \
