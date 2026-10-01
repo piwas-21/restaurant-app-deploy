@@ -1,0 +1,71 @@
+# Opt-in, STAGING ONLY. No changes to the existing tenant/control-plane stack.
+# Pin CHANNELS_SANDBOX_IMAGE to the reviewed backend develop commit's sha-* image.
+name: channels-sandbox
+services:
+  channels-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    mem_limit: 256m
+    cpus: "0.5"
+    # Copy off the bind mount: host filesystems can forbid script execution.
+    entrypoint:
+      - bash
+      - -c
+      - >-
+        set -euo pipefail;
+        cp /bootstrap/10-ingress-role.sh /docker-entrypoint-initdb.d/10-ingress-role.sh;
+        chmod 0644 /docker-entrypoint-initdb.d/10-ingress-role.sh;
+        exec /usr/local/bin/docker-entrypoint.sh postgres
+    environment:
+      POSTGRES_DB: channels_sandbox
+      POSTGRES_USER: channels_owner
+      POSTGRES_PASSWORD: "${CHANNELS_OWNER_PASSWORD:?Set an independent sandbox database owner password}"
+      CHANNELS_INGRESS_PASSWORD: "${CHANNELS_INGRESS_PASSWORD:?Set an independent ingress role password}"
+    volumes:
+      - channels_db:/var/lib/postgresql/data
+      - ./channels/postgres-init.sh:/bootstrap/10-ingress-role.sh:ro
+    networks: [channels-private]
+    healthcheck:
+      # TCP excludes the temporary init server; the role check detects failed initialization.
+      test:
+        - CMD-SHELL
+        - >-
+          pg_isready -h 127.0.0.1 -U channels_owner -d channels_sandbox &&
+          PGPASSWORD="$${POSTGRES_PASSWORD}" psql -h 127.0.0.1 -U channels_owner
+          -d channels_sandbox -Atc "SELECT 1 FROM pg_roles WHERE rolname='channels_ingress'" | grep -qx 1
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+
+  channels-sandbox:
+    image: "${CHANNELS_SANDBOX_IMAGE:?Pin the reviewed sha-* gateway image}"
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: "0.5"
+    read_only: true
+    tmpfs: [/tmp]
+    depends_on:
+      channels-db: {condition: service_healthy}
+    environment:
+      ConnectionStrings__Channels: "Host=channels-db;Database=channels_sandbox;Username=channels_ingress;Password=${CHANNELS_INGRESS_PASSWORD:?Set ingress password}"
+      UberSandbox__ClientId: "${UBER_SANDBOX_CLIENT_ID:?Set the testing application ID}"
+      # Empty until the owner authorizes secure transfer of the existing testing-app secret.
+      # The receiver fails closed with 503 while unconfigured.
+      UberSandbox__ClientSecret: "${UBER_SANDBOX_CLIENT_SECRET:-}"
+      UberSandbox__StoreIds__0: "${UBER_SANDBOX_STORE_ID:?Set the approved test store UUID}"
+    networks: [channels-private, rumi]
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+
+networks:
+  channels-private:
+    internal: true
+  rumi:
+    external: true
+    name: deploy_rumi
+volumes:
+  channels_db:

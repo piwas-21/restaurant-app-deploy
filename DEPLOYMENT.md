@@ -132,6 +132,10 @@ still healthy.
 
 #### Sofra control plane (partner program — DB + migrations)
 
+The separate, opt-in Uber test-app receiver uses its own gateway container/database, not this control plane
+or a tenant backend. See [channel sandbox webhook](docs/runbooks/channel-sandbox-webhook.md) for staging-only
+deployment, signature verification, receipt readback and the primary webhook setup gate.
+
 The sofra app has its own database (`sofra` DB + role) on the shared postgres
 container (sofra ADR-008). One-time setup:
 

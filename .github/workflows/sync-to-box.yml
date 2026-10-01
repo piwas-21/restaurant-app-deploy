@@ -70,6 +70,7 @@ jobs:
             --exclude='.github/' \
             --exclude='.ssh/' \
             --exclude='.env' \
+            --exclude='.env.channels-sandbox' \
             --exclude='app-secrets.json' \
             --exclude='dozzle-users.yml' \
             --exclude='*.bak' \
@@ -95,6 +96,7 @@ jobs:
             --exclude='.github/' \
             --exclude='.ssh/' \
             --exclude='.env' \
+            --exclude='.env.channels-sandbox' \
             --exclude='app-secrets.json' \
             --exclude='dozzle-users.yml' \
             --exclude='*.bak' \

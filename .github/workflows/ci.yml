@@ -90,7 +90,7 @@ jobs:
           if [ ${#files[@]} -eq 0 ]; then echo "no *.sh found"; exit 0; fi
           printf 'Linting %d script(s):\n' "${#files[@]}"
           printf '  %s\n' "${files[@]}"
-          files+=( tests/*.sh )
+          files+=( tests/*.sh channels/*.sh )
           shellcheck --severity=warning --color=always "${files[@]}"
 
   # The first executable test this repo has ever had, and it exists because a real
@@ -141,6 +141,15 @@ jobs:
       # the class that turns into a broken box at deploy time.
       - name: Validate the production compose file
         run: docker compose -f docker-compose.prod.yml config --quiet
+
+      - name: Validate the isolated channel sandbox compose file
+        env:
+          CHANNELS_OWNER_PASSWORD: ci-placeholder-owner # pragma: allowlist secret -- config-validation fixture
+          CHANNELS_INGRESS_PASSWORD: ci-placeholder-ingress # pragma: allowlist secret -- config-validation fixture
+          CHANNELS_SANDBOX_IMAGE: ghcr.io/piwas-21/sofra-channel-gateway:staging
+          UBER_SANDBOX_CLIENT_ID: ci-placeholder-client
+          UBER_SANDBOX_STORE_ID: 89dd9741-66b5-4bb4-b216-a813f3b21b4f
+        run: docker compose -f docker-compose.channels-sandbox.yml config --quiet
 
       # Was pointed at docker-compose.prod.yml with exit-code 0 as a "bed-in".
       # Trivy has no docker-compose misconfiguration scanner, so that combination

@@ -1,0 +1,11 @@
+# Render the approved sandbox host into __CHANNELS_DOMAIN__ before putting this in caddy-tenants/.
+__CHANNELS_DOMAIN__ {
+	header X-Robots-Tag "noindex, nofollow, noarchive"
+	@receiver path /api/webhooks/uber-eats /api/health
+	handle @receiver {
+		reverse_proxy channels-sandbox:8080
+	}
+	handle {
+		respond 404
+	}
+}
