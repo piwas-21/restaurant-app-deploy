@@ -43,11 +43,12 @@ SQL_BODY="$(sed -n '/^acl_public_connect()/,/^}/p' "$SCRIPT" \
 CID="$(docker run -d --rm -e POSTGRES_PASSWORD=t -e POSTGRES_USER=t postgres:16)"
 trap 'docker rm -f "$CID" >/dev/null 2>&1 || true' EXIT
 
+# The image's temporary init server listens only on a socket; wait for the final TCP server.
 for _ in $(seq 1 60); do
-  docker exec "$CID" pg_isready -U t -q && break
+  docker exec "$CID" pg_isready -h 127.0.0.1 -U t -q && break
   sleep 1
 done
-docker exec "$CID" pg_isready -U t -q || { echo "FAIL: postgres never became ready"; exit 1; }
+docker exec "$CID" pg_isready -h 127.0.0.1 -U t -q || { echo "FAIL: postgres never became ready"; exit 1; }
 
 q() { docker exec -i "$CID" psql -v ON_ERROR_STOP=1 -U t -d postgres -tA "$@"; }
 
