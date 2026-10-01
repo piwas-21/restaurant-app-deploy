@@ -25,8 +25,9 @@ pass() { local desc="$1"; printf '  ok   %s\n' "$desc"; }
 bad()  { local desc="$1"; printf '  FAIL %s\n' "$desc"; fail=1; }
 
 docker run --rm -d --name "$CN" -e POSTGRES_PASSWORD=test --network none postgres:16 >/dev/null
-for _ in $(seq 1 60); do docker exec "$CN" pg_isready -U postgres >/dev/null 2>&1 && break; sleep 1; done
-docker exec "$CN" pg_isready -U postgres >/dev/null 2>&1 || { echo "scratch postgres never became ready"; exit 1; }
+# The image's temporary init server listens only on a socket; wait for the final TCP server.
+for _ in $(seq 1 60); do docker exec "$CN" pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1 && break; sleep 1; done
+docker exec "$CN" pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1 || { echo "scratch postgres never became ready"; exit 1; }
 
 db_q() { docker exec -i "$CN" psql -U postgres -d repairtest -v ON_ERROR_STOP=1 -tAq "$@"; }
 export PSQL_CMD="docker exec -i $CN psql -U postgres -d repairtest"

@@ -316,6 +316,9 @@ services:
       CATALOGUE_POOL_CONNECTION_TIMEOUT_MS: "${CATALOGUE_POOL_CONNECTION_TIMEOUT_MS:-2000}"
       CATALOGUE_POOL_IDLE_TIMEOUT_MS: "${CATALOGUE_POOL_IDLE_TIMEOUT_MS:-30000}"
       AUTH_SECRET: "${SOFRA_AUTH_SECRET:-}"
+      PRINTER_CREDENTIAL_ENCRYPTION_KEY: "${PRINTER_CREDENTIAL_ENCRYPTION_KEY:-}"
+      PRINTER_AGENT_SECRET_PROD: "${PRINTER_AGENT_SECRET_PROD:-}"
+      PRINTER_AGENT_SECRET_STAGING: "${PRINTER_AGENT_SECRET_STAGING:-}"
       NEXTAUTH_URL: "${SOFRA_APP_URL:-https://sofrapiwas.com}"
       # Mollie subscription billing (S9, sofra ADR-011 Job A). Unset -> billing
       # UI shows "not configured" and the webhook 503s; the site still serves.
@@ -508,6 +511,8 @@ services:
       # Its own secret — sharing prod's would make a staging session token valid on
       # sofrapiwas.com.
       AUTH_SECRET: "${SOFRA_STAGING_AUTH_SECRET:-}"
+      PRINTER_CREDENTIAL_ENCRYPTION_KEY: "${SOFRA_STAGING_PRINTER_ENCRYPTION_KEY:-}"
+      PRINTER_AGENT_SECRET_STAGING: "${SOFRA_STAGING_PRINTER_AGENT_SECRET:-}"
       NEXTAUTH_URL: "${SOFRA_STAGING_APP_URL:-https://staging.sofrapiwas.com}"
       # The TEST Mollie key, and the reason this environment is worth having: billing
       # flows become exercisable against a deployed control plane. The app itself

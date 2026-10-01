@@ -1201,9 +1201,8 @@ fi
 $DEPLOY_COMPOSE exec caddy caddy reload --config /etc/caddy/Caddyfile
 
 # Printer-app onboarding bundle — the three values the tenant enters in the printer-app's
-# Settings screen. The key is a box-only secret (never committed); surfaced here once so the
-# founder can hand it over if the tenant buys the printer service.
-PRINTER_KEY="$(python3 -c 'import json,sys; print((json.load(open(sys.argv[1])).get("PrinterSettings") or {}).get("ApiKey") or "")' "$TENANT_DIR/app-secrets.json" 2>/dev/null || true)"
+# Settings screen. Keys are never printed here; the host agent imports them encrypted
+# into Sofra admin so the founder can reveal and hand them over privately.
 
 # What the RUNNING backend says about modules — never what the .env says. The .env is
 # intent; this is the effective set, and they diverge for real reasons: an empty list
@@ -1312,8 +1311,8 @@ cat <<EOF
     Printer app (if the tenant buys the printer service — enter in the app's Settings):
                 API Base URL : https://${REG_DOMAIN}
                 Tenant Slug  : ${SLUG}
-                Printer Key  : ${PRINTER_KEY}
-                (the key is PrinterSettings.ApiKey in ${TENANT_DIR}/app-secrets.json)
+                Printer Key  : reveal and copy from Sofra admin /admin/printers
+                (existing server key is imported unchanged by the host printer agent)
     Fleet obs : automatic — this tenant's backend pushes to sofra /admin/fleet when
                 PRINTER_TELEMETRY_SECRET is set on the box (currently: $([[ -n "$BOX_TELEMETRY_SECRET" ]] && echo set || echo UNSET → inert)).
 EOF

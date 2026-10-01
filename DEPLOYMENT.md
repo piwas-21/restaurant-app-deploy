@@ -2056,10 +2056,12 @@ missed-order/error counts to the sofra control plane's `/api/telemetry/fleet` ro
 **Printer-app onboarding for a tenant** who buys the printer service: they enter three values
 in the app's Settings — **API Base URL** (`https://<their-domain>`), **Tenant Slug**, and
 **Printer Key** (`PrinterSettings.ApiKey`, auto-generated per tenant). `provision-tenant.sh`
-prints all three in its summary; the key also lives in `/opt/rumi/tenants/<slug>/app-secrets.json`.
-The control plane deliberately does **not** store the key (ADR-012 — sofra never holds box
-secrets); a self-serve "reveal your printer key" surface would live in the **tenant's own admin**
-(their trust boundary), not the SaaS control plane.
+prints the base URL and tenant slug in its summary; the key stays in `/opt/rumi/tenants/<slug>/app-secrets.json`.
+Admins can manage this access in `/admin/printers` once the host printer agent is configured.
+Sofra stores printer-only keys encrypted (ADR-015); tenant servers initiate sync and renewal,
+and the control plane still holds no SSH or Docker capability (ADR-012).
+See [printer-access.md](docs/runbooks/printer-access.md) for migration, isolated staging setup,
+private handover and renewal verification. Existing tokens are imported unchanged.
 
 ## E2E menu fixture (staging only) — `SEED_E2E_MENU_FIXTURES`
 
