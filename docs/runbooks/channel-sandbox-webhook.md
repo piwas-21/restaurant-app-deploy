@@ -1,9 +1,11 @@
 # Uber channel gateway sandbox ingress
 
-Run on **STAGING ONLY**, through `.ssh/staging.sh`; never a tenant or control-plane database.
+Run on **STAGING ONLY**, through `.ssh/staging.sh`. Gateway SQL belongs only in the dedicated channel database;
+its optional bridge targets the explicitly provisioned isolated sandbox tenant.
 Source: backend ADR-005; image `ghcr.io/piwas-21/sofra-channel-gateway:sha-<reviewed-develop-commit>`.
 This receives signed notification references and provides a private sandbox console for merchant connection,
-test-menu publishing/readback and explicit order accept/deny. It does not inject orders into tenant POS.
+test-menu publishing/readback and explicit order accept/deny. Default inbox mode does not forward orders;
+the optional tenant bridge below enables reviewed sandbox POS integration.
 
 ## Configuration
 
@@ -14,7 +16,7 @@ authorization; a restaurant login password is not a webhook signing secret. Empt
 for every webhook. Never put credentials in Git, commands, PRs or logs. Double literal `$` as `$$` for Compose.
 
 The webhook origin is `channels-sandbox.sofrapiwas.com` (wildcard A record points to staging). No production
-key, store or tenant mapping is configured. Keep DB owner and ingress passwords independent; the API receives
+key or store is configured. Sandbox tenant forwarding is disabled until the optional reviewed binding is installed. Keep DB owner and ingress passwords independent; the API receives
 only its own role password, with INSERT/SELECT privileges on receipts and no schema or receipt UPDATE/DELETE
 permission. The console adds CRUD grants on its own session/state/token/action tables only.
 
@@ -142,3 +144,43 @@ also affects webhook signatures and must follow Uber's separate app credential p
 Restore into an isolated disposable database first and compare table counts/constraints and action guards;
 never restore over the serving DB or a tenant. API rollback uses the previous reviewed image while retaining
 002 tables. Set `CHANNELS_CONSOLE_ENABLED=false` to withdraw console access while keeping signed ingress.
+
+## Enable the isolated tenant bridge
+
+Keep the standalone gateway forwarding disabled until tenant ingress, staff decisions and terminal observations
+are deployed and verified. The optional mode-600 box-only `.env.channels-sandbox-tenant` supplies .NET environment
+keys under `TenantBridge__`; missing configuration retains the application's disabled default. Never print
+`docker compose config` with runtime credentials; validate with `config --quiet`.
+
+The reviewed binding includes exactly one approved sandbox StoreId, TenantId, HTTPS origin BaseUrl, minimal
+ApiToken (`channels:orders:write` only), Currency, CatalogueRevision, PublishedMenuHash and explicit item mappings
+ProviderItemId/ProductId/optional VariationId. Set EnrollmentStartedAt to the deliberate activation boundary so
+older console-only tests are not forwarded. Enable import first with DispatchDecisions false; enable decision
+dispatch only after the retained tenant UUID is confirmed. Paused true stops all claims, including lifecycle reads.
+
+Before upgrading, back up the dedicated database and validate the archive. Extract migrations003 and004 from
+that exact pinned image and apply each once as channels_owner. Runtime grants are narrow:
+
+```sql
+GRANT SELECT, INSERT, UPDATE ON channel_import_jobs, channel_order_observations TO channels_ingress;
+```
+
+No schema CREATE or receipt DELETE privilege is needed. Tenant application EF migrations are applied by the
+standard isolated tenant provisioning workflow; never point its binding at an existing paying tenant.
+
+Environment-file changes require recreation of only channels-sandbox with the reviewed pinned image. The gateway
+starts with binding validation; malformed origins, currency, mappings or enrollment fail closed. Read back gateway
+revision, tenant revision and current store-manager configuration before placing a new sandbox checkout. Test
+orders use the provider's test payment instrument and never real food, payment or courier fulfillment.
+
+Verification must cover webhook receipt, one frozen held tenant order, staff decision, independent canonical
+confirmation before kitchen release, versioned local preparation/ready, then provider cancellation or completion.
+Money/nullable tax stay frozen; source identity and operation history survive restart and lost responses. An
+uncertain provider POST is not resent blindly. Extended menu/modifier capability and production certification
+remain separate acceptance gates in the owning delivery-channel plan.
+
+Encrypted prepared import requests expire within the configured bound (maximum seven days); imported or
+quarantined jobs immediately erase their ciphertext. Cleanup continues while paused/disabled with this gateway
+version. Backups containing this ciphertext must also expire within seven days and before restore resume; retaining
+seven snapshots alone does not establish an age bound. Before rollback to code without cleanup, pause forwarding
+and enforce the same deletion/backup lifetime. Preserve credentials and database volumes when rolling back.

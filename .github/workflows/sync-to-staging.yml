@@ -72,6 +72,7 @@ jobs:
             --exclude='.ssh/' \
             --exclude='.env' \
             --exclude='.env.channels-sandbox' \
+            --exclude='.env.channels-sandbox-tenant' \
             --exclude='.uber-sandbox-store-token.json' \
             --exclude='.channels-console-access' \
             --exclude='.channels-sandbox-backups/' \
@@ -101,6 +102,7 @@ jobs:
             --exclude='.ssh/' \
             --exclude='.env' \
             --exclude='.env.channels-sandbox' \
+            --exclude='.env.channels-sandbox-tenant' \
             --exclude='.uber-sandbox-store-token.json' \
             --exclude='.channels-console-access' \
             --exclude='.channels-sandbox-backups/' \
