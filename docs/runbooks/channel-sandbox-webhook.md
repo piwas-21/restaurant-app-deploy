@@ -232,6 +232,8 @@ Compose environment. Set these matching values:
 - Tenant `DeliveryChannels.Stores` retains the exact existing approved sandbox UUID and currency. Management
   is rejected on either side if the tenant/store identity differs.
 
+Render the current `channels/webhook.caddy.template` into the existing isolated sandbox fragment before enabling management. Its allowlist includes only `/api/tenant-management/uber` and its subtree alongside the existing sandbox paths. Validate the complete Caddy configuration and reload the directory-mounted fragment. An anonymous management request must reach the gateway and return 403 with `Cache-Control: no-store`; unrelated paths still return 404. A valid server credential with a foreign tenant/store binding must also return 403. A proxy 404 without the no-store header does not prove gateway authorization.
+
 Preserve all existing app secrets, item identities and enrollment boundary. Validate both settings without
 printing their values, run `docker compose config --quiet`, and recreate only the isolated gateway API and
 isolated tenant backend using the reviewed images. The other tenants remain outside this rollout.
