@@ -236,6 +236,11 @@ Preserve all existing app secrets, item identities and enrollment boundary. Vali
 printing their values, run `docker compose config --quiet`, and recreate only the isolated gateway API and
 isolated tenant backend using the reviewed images. The other tenants remain outside this rollout.
 
+The isolated tenant registry includes `server` alongside `core`, `kitchen-board`, `cashier` and `printing`.
+Preserve that exact module set in its private `TENANT_MODULES` configuration when rolling out the staff screens.
+The registry sync does not re-provision an already provisioned tenant; apply this change only to the Uber sandbox
+and confirm the server workspace is available. Commercial delivery-channel packaging remains deferred.
+
 Tenant OAuth stores the PKCE verifier encrypted and the random authorization state as a SHA256 hash on
 the gateway. Uber redirects the user agent to the gateway callback with a short-lived authorization code,
 which the gateway exchanges server-side. The callback dispatches by durable state to the tenant flow or
@@ -254,14 +259,18 @@ A timed availability pause changes future item sellability. It does not block de
 for orders already received. The dashboard distinguishes local intent from confirmed provider availability;
 expiry resumes reconciliation with current tenant stock. Disconnect relinquishes provider order-manager
 access and pauses future sellability. Verify each side independently; the provider menu can remain visible
-and active orders remain the operator's responsibility.
+and active orders remain the operator's responsibility. Disconnect cancels pending tenant authorizations;
+callback completion and disconnect use the same store lease, so a stale callback cannot reconnect the store.
+Management intent is durably audited before any local mutation or provider dispatch.
 
 For acceptance, verify tenant Admin access, forbidden staff/machine/anonymous management requests, wrong
 binding rejection, draft changes that do not affect active imports, stale-preview rejection, confirmed menu
 readback, timeout recovery, timed pause/resume and the exception inbox. Then verify labelled provider-paid
 orders in cashier/admin, explicit accept/reject, held kitchen release until provider confirmation, and versioned
-preparation/ready in server/kitchen screens. Use the printer sink/emulator for this remote session. A real Uber
-checkout, merchant approval/certification and physical printer output require their own evidence.
+preparation/ready in server/kitchen screens. Verify printer bytes and rendered output through a printer
+sink/emulator. ROADMAP SD1 confirms no thermal-printer hardware exists; physical output is not an acceptance
+gate. Windows behavior is verified through its build and app tests under SD5. A real Uber checkout and merchant
+approval/certification require their own evidence.
 
 Rollback management access by setting both new Enabled flags false and pinning the previous reviewed images.
 Retain the schema, immutable publications, operation guards and private key backup. Do not drop new tables,
