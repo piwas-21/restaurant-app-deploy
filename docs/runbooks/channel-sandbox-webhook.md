@@ -204,11 +204,12 @@ pre-existing installations may already have. These additive grants preserve rece
 
 ```sql
 GRANT SELECT, INSERT ON channel_availability_bindings TO channels_ingress;
-GRANT SELECT, INSERT, UPDATE ON channel_availability_states, channel_catalogue_publications,
+GRANT SELECT, INSERT, UPDATE ON channel_availability_states,
   channel_catalogue_mapping_drafts, channel_tenant_oauth_flows, channel_availability_overrides,
   channel_management_connections TO channels_ingress;
-GRANT SELECT, INSERT ON channel_management_audit TO channels_ingress;
-GRANT USAGE, SELECT ON SEQUENCE channel_catalogue_publications_sequence_seq,
+GRANT SELECT, INSERT ON channel_catalogue_publications, channel_management_audit TO channels_ingress;
+GRANT UPDATE (state, provider_hash, verified_at) ON channel_catalogue_publications TO channels_ingress;
+GRANT USAGE ON SEQUENCE channel_catalogue_publications_sequence_seq,
   channel_management_audit_sequence_seq TO channels_ingress;
 ```
 
