@@ -71,7 +71,7 @@ if not t:
 for k in ("name", "status", "managed", "box", "domain", "domain_mode",
           "base_domain", "domain_aliases", "db", "db_role", "compose_project",
           "backend_tag", "frontend_tag", "currency", "languages", "modules",
-          "admin_email", "city", "template", "stripe_account", "payments_commission_bps",
+          "admin_email", "admin_email_env", "city", "template", "stripe_account", "payments_commission_bps",
           "payments_link_url",
           "mail_from", "partner_name", "partner_url", "partner_attribution"):
     v = t.get(k, "")
@@ -83,6 +83,11 @@ PY
 
 [[ "$REG_MANAGED" == "scripts" ]] || { echo "ERROR: tenant '$SLUG' is managed:'$REG_MANAGED' — this script only touches managed:scripts tenants (ADR-006 protects tenant 1)" >&2; exit 1; }
 [[ "$REG_BOX" == "$BOX_ROLE" ]] || { echo "ERROR: tenant '$SLUG' belongs on box '$REG_BOX' but this box is '$BOX_ROLE'" >&2; exit 1; }
+# Optional box-local bootstrap identity, resolved without sourcing .env or logging it.
+if [[ -n "$REG_ADMIN_EMAIL_ENV" ]]; then
+  [[ -z "$REG_ADMIN_EMAIL" ]] || { echo "ERROR: choose admin_email or admin_email_env, never both" >&2; exit 1; }
+  REG_ADMIN_EMAIL="$(python3 resolve-tenant-admin-email.py "$REG_ADMIN_EMAIL_ENV")"
+fi
 for f in name domain db db_role compose_project frontend_tag admin_email; do
   var="REG_$(echo "$f" | tr '[:lower:]' '[:upper:]')"
   [[ -n "${!var}" ]] || { echo "ERROR: registry entry '$SLUG' missing required field '$f'" >&2; exit 1; }

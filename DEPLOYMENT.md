@@ -437,6 +437,12 @@ plane later calls the same scripts (ADR-003 — no parallel mechanism).
    `build-tenant-image.yml`, and since frontend #644 an archive with `icon.svg` but
    without all three manifest PNGs **fails the build** instead of putting the platform
    icon on a tenant's customers' phones.
+   For a bootstrap identity kept off the registry, use `admin_email_env` instead of
+   `admin_email`, naming a box `.env` key prefixed `TENANT_BOOTSTRAP_`. Set one bare
+   email address under that key before provisioning. Resolution rejects missing,
+   duplicate or malformed settings before creating anything; it never evaluates
+   dotenv text. Existing literal registry identities keep their current behavior.
+
 2. **DNS**: subdomain tenants under **our** base domain ride the
    `*.sofrapiwas.com` wildcard A record (already points at the staging box, added
    2026-07-06 via `./domainio-dns.sh add-a sofrapiwas.com '*' 159.195.34.105`).
