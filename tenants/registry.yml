@@ -304,8 +304,7 @@ tenants:
     # demo is a develop-TRACKING showcase, NOT a customer — so its backend rides
     # `:staging` (the develop build) rather than the `:latest` every generated entry
     # gets. Keeps the demo backend on develop-tip so the frontend's runtime palette +
-    # newest develop-only APIs round-trip. This is the ONE tenant for which that trade
-    # is right: it has no paying owner, so develop's migrations landing in its database
+    # newest develop-only APIs round-trip. This showcase has no paying owner, so develop's migrations landing in its database
     # on every merge costs nothing. provision-tenant.sh prints a NOTE saying as much.
     # (Do not read DEPLOYMENT.md §"do not pin BACKEND_TAG=latest" as support for this —
     # that rule is about the RUMI staging STACK's own .env, not a tenant registry entry.)
@@ -338,6 +337,34 @@ tenants:
     # IP). A showcase is meant to be poked at, and 5 fumbled logins locked the
     # single demo admin out for a quarter of an hour. Production tenants keep the
     # tight default — see the note in templates/docker-compose.tenant.yml.tpl.
+
+  # Dedicated Uber test-store receiver. No paying owner, production provider
+  # access or online payments; its own EUR database and catalogue isolate tests.
+  ubereats-sandbox:
+    name: Sofra Uber Sandbox
+    status: provisioning
+    managed: scripts
+    box: staging
+    domain: ubereats-sandbox.sofrapiwas.com
+    domain_mode: subdomain
+    db: tenant_ubereats_sandbox
+    db_role: tenant_ubereats_sandbox
+    compose_project: tenant-ubereats-sandbox
+    backend_tag: staging
+    frontend_tag: tenant-ubereats-sandbox
+    currency: EUR
+    locale: nl-NL
+    languages: [en, nl]
+    public_default_locale: nl
+    public_home_locales: [nl, en]
+    public_menu_locales: [nl, en]
+    public_indexing: false
+    modules: [core, kitchen-board, cashier, printing]
+    template: craft
+    pwa_theme_color: "#1c302a"
+    pwa_background_color: "#ffffff"
+    admin_email: mahmutkaya@piwas.nl
+    city: Hoofddorp
 
   # PERMANENT TEST FIXTURE — the provisioning smoke suite's tenant
   # (.github/workflows/provisioning-smoke.yml). Nothing runs here between smoke
