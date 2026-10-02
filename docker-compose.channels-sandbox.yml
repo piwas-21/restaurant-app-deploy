@@ -64,6 +64,10 @@ services:
       SandboxConsole__PublicBaseUrl: "${CHANNELS_CONSOLE_ORIGIN:-}"
       SandboxConsole__OwnerAccessHash: "${CHANNELS_CONSOLE_ACCESS_HASH:-}"
       SandboxConsole__EncryptionKey: "${CHANNELS_CONSOLE_ENCRYPTION_KEY:-}"
+      TenantManagement__Enabled: "${CHANNELS_TENANT_MANAGEMENT_ENABLED:-false}"
+      TenantManagement__CredentialHash: "${CHANNELS_TENANT_MANAGEMENT_CREDENTIAL_HASH:-}"
+      TenantManagement__CallbackUrl: "${CHANNELS_TENANT_MANAGEMENT_CALLBACK_URL:-}"
+      TenantManagement__ReturnUrl: "${CHANNELS_TENANT_MANAGEMENT_RETURN_URL:-}"
     networks: [channels-private, rumi]
     logging:
       driver: json-file

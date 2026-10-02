@@ -184,3 +184,84 @@ quarantined jobs immediately erase their ciphertext. Cleanup continues while pau
 version. Backups containing this ciphertext must also expire within seven days and before restore resume; retaining
 seven snapshots alone does not establish an age bound. Before rollback to code without cleanup, pause forwarding
 and enforce the same deletion/backup lifetime. Preserve credentials and database volumes when rolling back.
+
+## Enable tenant dashboard management
+
+The tenant dashboard at `/admin/delivery-channels` uses the tenant API's authenticated Admin policy. It does
+not embed or redirect operators to the shared private console. Cashier, Server and KitchenStaff continue
+using their own order workspaces; neither the catalogue-read token nor the order-ingress token grants Admin
+management access. This remains an opt-in integration for the single approved isolated Uber sandbox store.
+
+Management currently requires the private console configuration to remain enabled: retain
+`CHANNELS_CONSOLE_ENABLED=true`, its existing public origin and encryption/access-hash settings. This
+provides the sandbox provider/token configuration; it does not grant console access to tenant operators.
+Complete the private-console activation above before enabling management on a fresh deployment.
+
+Before enabling either management endpoint, back up the gateway database and its encryption/configuration
+keys separately, then apply migration008 from the exact reviewed gateway image as `channels_owner`. Keep
+001–007 unchanged. Apply the runtime privileges below as `channels_owner`, including the SQL006/007 dependencies that
+pre-existing installations may already have. These additive grants preserve receipt and schema restrictions:
+
+```sql
+GRANT SELECT, INSERT ON channel_availability_bindings TO channels_ingress;
+GRANT SELECT, INSERT, UPDATE ON channel_availability_states, channel_catalogue_publications,
+  channel_catalogue_mapping_drafts, channel_tenant_oauth_flows, channel_availability_overrides,
+  channel_management_connections TO channels_ingress;
+GRANT SELECT, INSERT ON channel_management_audit TO channels_ingress;
+GRANT USAGE, SELECT ON SEQUENCE channel_catalogue_publications_sequence_seq,
+  channel_management_audit_sequence_seq TO channels_ingress;
+```
+
+Do not grant schema CREATE or receipt UPDATE/DELETE. Test that denied privileges remain denied.
+
+Generate an independent random 32-byte base64url management credential on the box. Save its SHA256 hex hash
+as `CHANNELS_TENANT_MANAGEMENT_CREDENTIAL_HASH`; the raw value belongs only in the isolated tenant's
+`app-secrets.json` under `DeliveryChannelManagement.ServerCredential`. Keep it separate from all console,
+merchant, order-ingress and catalogue-read credentials. Never expose either configuration file or a resolved
+Compose environment. Set these matching values:
+
+- Gateway `CHANNELS_TENANT_MANAGEMENT_ENABLED=true`, callback URL equal to the existing registered
+  `https://channels-sandbox.sofrapiwas.com/api/sandbox/uber/callback`, and return URL equal to the isolated
+  tenant origin plus `/admin/delivery-channels/callback`.
+- Tenant `DeliveryChannelManagement.Enabled=true`, `TenantId` exactly equal to `TenantBridge.Store.TenantId`,
+  `GatewayBaseUrl` equal to `https://channels-sandbox.sofrapiwas.com/`, and the private raw `ServerCredential`.
+- Gateway `TenantBridge.UseTenantCatalogue=true`, `SyncAvailability=true` and the dedicated
+  catalogue-read credential are prerequisites for menu and availability operations. Retain the reviewed
+  store/item bootstrap and enrollment boundary from the isolated bridge setup.
+- Tenant `DeliveryChannels.Stores` retains the exact existing approved sandbox UUID and currency. Management
+  is rejected on either side if the tenant/store identity differs.
+
+Preserve all existing app secrets, item identities and enrollment boundary. Validate both settings without
+printing their values, run `docker compose config --quiet`, and recreate only the isolated gateway API and
+isolated tenant backend using the reviewed images. The other tenants remain outside this rollout.
+
+Tenant OAuth stores the PKCE verifier encrypted and the random authorization state as a SHA256 hash on
+the gateway. Uber redirects the user agent to the gateway callback with a short-lived authorization code,
+which the gateway exchanges server-side. The callback dispatches by durable state to the tenant flow or
+the existing console flow; the tenant frontend receives only a flow ID and status, never a merchant token
+or authorization code. The owner personally authorizes the merchant and checks the
+returned restaurant/store identity in the tenant dashboard. Expired, replayed or wrong-store state must fail.
+
+Menu mapping is a saved draft. The review shows source prices, item compatibility and the reviewed service
+hours. Publication replaces the complete provider menu; stale draft/source revisions and unsupported choices
+block the write. Only independent provider readback promotes the immutable mapping used by new imports.
+An uncertain upload requires reconciliation against that saved intent rather than an unconditional resend.
+Historical verified mappings remain available for previously discovered jobs. Service-hour edits, modifiers,
+bundles and channel-specific price overrides remain outside the supported sandbox contract.
+
+A timed availability pause changes future item sellability. It does not block decisions or lifecycle updates
+for orders already received. The dashboard distinguishes local intent from confirmed provider availability;
+expiry resumes reconciliation with current tenant stock. Disconnect relinquishes provider order-manager
+access and pauses future sellability. Verify each side independently; the provider menu can remain visible
+and active orders remain the operator's responsibility.
+
+For acceptance, verify tenant Admin access, forbidden staff/machine/anonymous management requests, wrong
+binding rejection, draft changes that do not affect active imports, stale-preview rejection, confirmed menu
+readback, timeout recovery, timed pause/resume and the exception inbox. Then verify labelled provider-paid
+orders in cashier/admin, explicit accept/reject, held kitchen release until provider confirmation, and versioned
+preparation/ready in server/kitchen screens. Use the printer sink/emulator for this remote session. A real Uber
+checkout, merchant approval/certification and physical printer output require their own evidence.
+
+Rollback management access by setting both new Enabled flags false and pinning the previous reviewed images.
+Retain the schema, immutable publications, operation guards and private key backup. Do not drop new tables,
+erase uncertain operations or restore a backup over the serving database to force a retry.
