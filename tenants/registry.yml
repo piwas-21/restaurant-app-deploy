@@ -154,6 +154,9 @@
 #                 application fee, it silently CAPS it at 100% of the order instead (measured
 #                 2026-09-04), so a fat-fingered value here would not error at Stripe, it would
 #                 just take the whole order.
+#   admin_email_env: OPTIONAL alternative to admin_email, never both. Names one
+#             box-local .env key prefixed TENANT_BOOTSTRAP_; provisioning resolves
+#             it before any write and fails closed if absent, duplicate or malformed.
 #   city:     optional free text — seeds RestaurantInfo.City on the tenant's first boot
 #             (deploy#16 / backend #120, via RestaurantInfoSeed__City). `name` and
 #             `admin_email` seed RestaurantInfo Name/Email the same way; the seeder is a
