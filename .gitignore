@@ -1,6 +1,7 @@
 # Secrets — never commit
 .env
 .env.channels-sandbox
+.env.channels-sandbox-tenant
 .uber-sandbox-store-token.json
 .channels-console-access
 .channels-sandbox-backups/

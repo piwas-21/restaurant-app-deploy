@@ -47,6 +47,10 @@ services:
     cpus: "0.5"
     read_only: true
     tmpfs: [/tmp]
+    # Box-only exact tenant binding. Missing file keeps the bridge disabled by default.
+    env_file:
+      - path: ./.env.channels-sandbox-tenant
+        required: false
     depends_on:
       channels-db: {condition: service_healthy}
     environment:
