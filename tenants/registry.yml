@@ -362,7 +362,7 @@ tenants:
     public_home_locales: [nl, en]
     public_menu_locales: [nl, en]
     public_indexing: false
-    modules: [core, kitchen-board, cashier, printing]
+    modules: [core, kitchen-board, cashier, server, printing]
     template: craft
     pwa_theme_color: "#1c302a"
     pwa_background_color: "#ffffff"
