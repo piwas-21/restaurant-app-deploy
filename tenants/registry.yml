@@ -363,6 +363,8 @@ tenants:
     template: craft
     pwa_theme_color: "#1c302a"
     pwa_background_color: "#ffffff"
+    # ADR-007 operational configuration: provision-tenant.sh requires this field
+    # and renders it as TENANT_ADMIN_EMAIL / SeedSettings__AdminEmail on the box.
     admin_email: mahmutkaya@piwas.nl
     city: Hoofddorp
 
