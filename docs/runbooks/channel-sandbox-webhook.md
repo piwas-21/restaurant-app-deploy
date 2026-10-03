@@ -257,6 +257,17 @@ An uncertain upload requires reconciliation against that saved intent rather tha
 Historical verified mappings remain available for previously discovered jobs. Service-hour edits, modifiers,
 bundles and channel-specific price overrides remain outside the supported sandbox contract.
 
+`CHANNELS_TENANT_CATEGORY_SELECTION_ENABLED` defaults to false. Enable it only for the exact approved isolated
+sandbox binding after deploying reviewed backend/gateway and frontend images that support category selection.
+This expands the menu-selection capability; it does not provision a restaurant, authorize live operations or change
+order/payment ownership. Before publishing, capture the current verified menu and mapping, validate full category
+expansion and individual exclusions beyond the first candidate page, and reject stale source/draft revisions.
+Review and explicitly acknowledge the displayed sandbox tax profile before the complete menu replacement. Do not
+infer a live merchant's tax configuration from this template. Independent provider readback must confirm category
+membership/order and every selected item's content, price, availability and tax profile before promoting mappings.
+Restore the approved test menu after acceptance while retaining historical mappings for existing orders. Roll back
+the capability by setting this flag false and returning to reviewed images; retain durable snapshots and operations.
+
 A timed availability pause changes future item sellability. It does not block decisions or lifecycle updates
 for orders already received. The dashboard distinguishes local intent from confirmed provider availability;
 expiry resumes reconciliation with current tenant stock. Disconnect relinquishes provider order-manager
