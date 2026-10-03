@@ -4,9 +4,10 @@
 #   bash tenant-feature-flags.sh /path/to/.env tenant-label
 
 validate_bool_env_value() { # $1=value $2=key $3=label
-  case "$1" in
+  local value="$1" key="$2" label="$3"
+  case "$value" in
     ''|[Tt][Rr][Uu][Ee]|[Ff][Aa][Ll][Ss][Ee]) return 0 ;;
-    *) echo "ERROR: '$3' has invalid $2; use true or false" >&2; return 1 ;;
+    *) echo "ERROR: '$label' has invalid $key; use true or false" >&2; return 1 ;;
   esac
 }
 
