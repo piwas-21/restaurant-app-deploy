@@ -784,6 +784,66 @@ pass 2 had dropped both.
 **To turn it off**, set `TENANT_MODULES_ENFORCE=false` (or delete the line) and recreate the
 backend. Nothing else is stateful.
 
+### Table accounts, amendments and individual payments
+
+These operator-controlled backend flags default to `false` in both Compose entry points
+and every new env template. Re-provisioning preserves existing explicit choices. They are
+independent from purchased modules; enabling a flag does not bypass role, module, custody,
+visit-state or original-operation ownership checks.
+
+| Box / tenant `.env` key | Backend `TenantFeatures` key | Scope |
+|---|---|---|
+| `TENANT_TABLE_ACCOUNT_V1` | `TableAccountV1` | One visit account across staff and guest rounds |
+| `TENANT_ORDER_AMENDMENTS_V1` | `OrderAmendmentsV1` | Native order quote/commit and kitchen corrections |
+| `TENANT_TABLE_GUEST_VISITS_V1` | `TableGuestVisitsV1` | Current-visit guest admission and rounds |
+| `TENANT_TABLE_ACCOUNT_PAYMENTS_V1` | `TableAccountPaymentsV1` | Staff item, amount and equal-share collection |
+| `TENANT_TABLE_GUEST_ACCOUNT_PAYMENTS_V1` | `TableGuestAccountPaymentsV1` | Guest online contribution checkout |
+| `TENANT_TABLE_VISIT_READINESS_V1` | `TableVisitReadinessV1` | Explicit closed-table reset before the next party |
+| `TENANT_SERVER_ACCOUNT_COLLECTION_V1` | `ServerAccountCollectionV1` | Opt-in collection authority for Server users |
+
+Keep these off until compatible API, UI and printer builds pass the workspace
+`TABLE-ACCOUNT-ORDER-AMENDMENTS-PLAN.md` acceptance matrix on an isolated staging tenant.
+Cash collection additionally requires the accepted cash-rounding policy. Guest online
+collection requires verified test-mode provider configuration and capture/recovery evidence.
+Marketplace-held funds retain their provider custody and cannot be collected locally.
+The Server collection choice applies to every Server user in that tenant; it is not a
+per-person training grant. It also requires the `server` module and base account-payments
+flag. Admin/Cashier authority remains governed by the existing role/module checks.
+
+Before a rollout or rollback, save the current non-secret flag choices and verify image
+versions against the approved release. Edit only the intended tenant's box-local `.env`.
+Missing or empty flags use their Compose default; duplicates and malformed booleans are
+refused. `deploy.sh` and re-provisioning share the validator, which also checks shell
+overrides. For a manual Compose recreation, run it explicitly first:
+
+```bash
+# Run through the infra wrappers, from /opt/rumi/deploy; do not source a box .env.
+bash tenant-feature-flags.sh /opt/rumi/tenants/<slug>/.env <slug>
+cd /opt/rumi/tenants/<slug>
+docker compose up -d --force-recreate backend-<slug>
+curl -sS https://<domain>/api/tenant/features
+```
+
+For the main stack, use `/opt/rumi/deploy/.env` and recreate `backend` with
+`docker compose -f docker-compose.prod.yml up -d --force-recreate backend`.
+A restart does not reload environment values. These runtime flags do not require rebuilding
+frontend images. Verify each intended boolean in the successful feature response, then
+reload staff and guest views and exercise both permitted and refused actions; a healthy
+`/api/health` response alone does not prove rollout correctness.
+
+Rollback disables new actions by restoring the appropriate flags to `false`, validating,
+recreating the backend and reloading clients. Use a compatible recovery-capable API/UI
+release: original-owner operation lookup, replay and reconciliation must remain available
+for previously accepted payments/refunds. Read back pending and completed operations and
+confirm each still belongs to its original actor/visit before declaring rollback complete.
+Do not delete recovery browser storage or roll database migrations down to undo a rollout;
+immutable payment, refund, allocation and kitchen evidence must remain intact. Existing
+pending financial work continues to block closure until authoritatively resolved.
+
+Run `tests/table-account-rollout.sh`, the existing rollout tests, shellcheck and both
+Compose configuration validations before releasing these mappings. Template/source checks
+establish wiring, not real-device, payment-provider or printer acceptance.
+
 ### Server Workspace V2
 
 The server redesign uses an operator-controlled, per-tenant feature flag. It is

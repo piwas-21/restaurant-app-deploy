@@ -15,15 +15,10 @@ TENANT_COMPOSE="$HERE/../tenants/templates/docker-compose.tenant.yml.tpl"
 [[ -f "$SCRIPT" && -f "$TEMPLATE" && -f "$MAIN_COMPOSE" && -f "$TENANT_COMPOSE" ]] \
   || { echo "missing rollout inputs" >&2; exit 1; }
 
-FNS="$(mktemp)"
 WORK="$(mktemp -d)"
-trap 'rm -rf "$FNS" "$WORK"' EXIT
-
-sed -n '/^# --- BEGIN server-workspace-rollout helpers/,/^# --- END server-workspace-rollout helpers/p' "$SCRIPT" > "$FNS"
-grep -q '^validate_bool_env_line() {' "$FNS" \
-  || { echo "validator extraction failed — did the markers move?" >&2; exit 1; }
-# shellcheck disable=SC1090
-source "$FNS"
+trap 'rm -rf "$WORK"' EXIT
+# shellcheck source=../tenant-feature-flags.sh
+source "$HERE/../tenant-feature-flags.sh"
 
 fail=0
 pass() { local description="$1"; printf '  ok   %s\n' "$description"; }
