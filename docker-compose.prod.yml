@@ -120,6 +120,14 @@ services:
       # RUMI/main-stack equivalent of the per-tenant Server Workspace V2 switch.
       # Enabled by default; this grants no module or role access.
       TenantFeatures__ServerWorkspaceV2: "${TENANT_SERVER_WORKSPACE_V2:-true}"
+      # Table account rollout remains off until combined acceptance passes.
+      TenantFeatures__TableAccountV1: "${TENANT_TABLE_ACCOUNT_V1:-false}"
+      TenantFeatures__OrderAmendmentsV1: "${TENANT_ORDER_AMENDMENTS_V1:-false}"
+      TenantFeatures__TableGuestVisitsV1: "${TENANT_TABLE_GUEST_VISITS_V1:-false}"
+      TenantFeatures__TableAccountPaymentsV1: "${TENANT_TABLE_ACCOUNT_PAYMENTS_V1:-false}"
+      TenantFeatures__TableGuestAccountPaymentsV1: "${TENANT_TABLE_GUEST_ACCOUNT_PAYMENTS_V1:-false}"
+      TenantFeatures__TableVisitReadinessV1: "${TENANT_TABLE_VISIT_READINESS_V1:-false}"
+      TenantFeatures__ServerAccountCollectionV1: "${TENANT_SERVER_ACCOUNT_COLLECTION_V1:-false}"
       # Apply/update of reusable option sets is an explicit tenant rollout.
       TenantFeatures__OptionSetMaterializationEnabled: "${OPTION_SET_MATERIALIZATION_ENABLED:-false}"
       # Required-sauce validation is enabled per restaurant after order-path checks.

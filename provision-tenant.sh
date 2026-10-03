@@ -24,6 +24,8 @@
 # Teardown: ./deprovision-tenant.sh <slug> [--drop-db] [--purge]
 set -euo pipefail
 cd "$(dirname "$0")"
+# shellcheck source=tenant-feature-flags.sh
+source ./tenant-feature-flags.sh
 
 SLUG="${1:?usage: $0 <slug>   (a tenant key in tenants/registry.yml)}"
 [[ "$SLUG" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]] || { echo "ERROR: slug must be lowercase [a-z0-9-], 2-31 chars" >&2; exit 2; }
@@ -706,25 +708,6 @@ set_env_line() { # $1=key $2=value (free text)
   fi
 }
 
-# --- BEGIN server-workspace-rollout helpers
-# Validate an operator-controlled boolean without rewriting it. The caller intentionally
-# preserves an existing tenant's explicit true/false, while compose supplies false when the
-# key is absent (including tenants provisioned before this rollout existed).
-validate_bool_env_line() { # $1=key $2=tenant slug (for diagnostics)
-  local key="$1" slug="$2" value
-  # Trim only the edges. Internal whitespace must remain invalid: Compose would otherwise
-  # forward a value such as `t r u e` and the backend's bool binder would reject it later.
-  value="$(grep -m1 "^${key}=" "$TENANT_DIR/.env" | cut -d= -f2- \
-    | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' || true)"
-  if [[ -n "$value" ]]; then
-    shopt -s nocasematch
-    [[ "$value" == "true" || "$value" == "false" ]] \
-      || { echo "ERROR: tenant '$slug' .env has ${key}='$value' — must be true or false (outer whitespace is allowed; internal whitespace is not, and the value binds to a C# bool)" >&2; shopt -u nocasematch; return 1; }
-    shopt -u nocasematch
-  fi
-}
-# --- END server-workspace-rollout helpers
-
 # Free-text values landing in the tenant .env are interpolated by docker
 # compose — a literal $ must be doubled or compose silently mangles it (same
 # trap as DEV_PORTAL_AUTH_HASH; see DEPLOYMENT.md §Developer Portal).
@@ -740,6 +723,7 @@ ENV_CITY="$(compose_escape "$REG_CITY")"
 ENV_PARTNER_NAME="$(compose_escape "$PARTNER_NAME")"
 ENV_PARTNER_URL="$(compose_escape "$PARTNER_URL")"
 
+# --- BEGIN tenant-env-rollout (extracted by tests/table-account-provision-rollout.sh) ---
 echo "==> Tenant .env"
 FRESH_ENV=0
 if [[ -f "$TENANT_DIR/.env" ]]; then
@@ -827,6 +811,9 @@ else
   chmod 600 "$TENANT_DIR/.env"
   echo "   wrote .env (fresh DB password + admin bootstrap credentials)"
 fi
+# Both fresh renders and existing tenant choices must be checked before DB/container work.
+validate_table_account_env "$TENANT_DIR/.env" "$SLUG"
+# --- END tenant-env-rollout ---
 TENANT_DB_PASSWORD="$(grep '^TENANT_DB_PASSWORD=' "$TENANT_DIR/.env" | cut -d= -f2-)"
 
 # Flow the shared fleet/Sentry values into the tenant .env on every run (fresh AND existing),
