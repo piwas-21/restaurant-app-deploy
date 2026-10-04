@@ -66,6 +66,15 @@ TENANT_MODULES_ENFORCE=true
 # switch, not a purchased module or an authorization boundary. New tenants use
 # V2 by default; an explicit false remains the emergency rollback setting.
 TENANT_SERVER_WORKSPACE_V2=true
+# Table accounts and payments: opt in only after combined rollout acceptance.
+# Operator-owned choices survive re-provisioning; all missing/empty values default off.
+TENANT_TABLE_ACCOUNT_V1=false
+TENANT_ORDER_AMENDMENTS_V1=false
+TENANT_TABLE_GUEST_VISITS_V1=false
+TENANT_TABLE_ACCOUNT_PAYMENTS_V1=false
+TENANT_TABLE_GUEST_ACCOUNT_PAYMENTS_V1=false
+TENANT_TABLE_VISIT_READINESS_V1=false
+TENANT_SERVER_ACCOUNT_COLLECTION_V1=false
 # Reusable option-set apply/update stays off until this restaurant's rollout is verified.
 # An existing tenant's explicit value is preserved by re-provisioning.
 TENANT_OPTION_SET_MATERIALIZATION_ENABLED=false

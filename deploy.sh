@@ -20,6 +20,10 @@ BE_REPO="ghcr.io/piwas-21/restaurant-app-backend"
 echo "==> Preflight: required config present"
 [[ -f .env ]] || { echo "ERROR: .env missing (cp .env.example .env and fill in)" >&2; exit 1; }
 [[ -f app-secrets.json ]] || { echo "ERROR: app-secrets.json missing (cp app-secrets.example.json app-secrets.json and fill in)" >&2; exit 1; }
+# Validate the operator flags before pull, tag writes or container recreation.
+# shellcheck source=tenant-feature-flags.sh
+source ./tenant-feature-flags.sh
+validate_table_account_env .env main-stack
 
 # --- BEGIN apple client id guard (extracted by tests/apple-client-id.sh) ---
 # Sign in with Apple fails CLOSED in the backend (AppleAuthSettings): with no accepted `aud`

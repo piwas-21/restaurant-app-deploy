@@ -145,6 +145,14 @@ services:
       # it selects a frontend implementation for the server module and never grants access.
       # The empty/default path is true; an explicit false remains the rollback switch.
       TenantFeatures__ServerWorkspaceV2: "${TENANT_SERVER_WORKSPACE_V2:-true}"
+      # Table account rollout remains off until combined acceptance passes.
+      TenantFeatures__TableAccountV1: "${TENANT_TABLE_ACCOUNT_V1:-false}"
+      TenantFeatures__OrderAmendmentsV1: "${TENANT_ORDER_AMENDMENTS_V1:-false}"
+      TenantFeatures__TableGuestVisitsV1: "${TENANT_TABLE_GUEST_VISITS_V1:-false}"
+      TenantFeatures__TableAccountPaymentsV1: "${TENANT_TABLE_ACCOUNT_PAYMENTS_V1:-false}"
+      TenantFeatures__TableGuestAccountPaymentsV1: "${TENANT_TABLE_GUEST_ACCOUNT_PAYMENTS_V1:-false}"
+      TenantFeatures__TableVisitReadinessV1: "${TENANT_TABLE_VISIT_READINESS_V1:-false}"
+      TenantFeatures__ServerAccountCollectionV1: "${TENANT_SERVER_ACCOUNT_COLLECTION_V1:-false}"
       TenantFeatures__OptionSetMaterializationEnabled: "${TENANT_OPTION_SET_MATERIALIZATION_ENABLED:-false}"
       TenantFeatures__EnforceSauceMinimum: "${TENANT_ENFORCE_SAUCE_MINIMUM:-false}"
       # Partner attribution (SOFRA-PARTNER-PLAN §11d, channel C) — the same shape as
