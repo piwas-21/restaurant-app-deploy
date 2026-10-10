@@ -632,7 +632,8 @@ published. Restaurant opt-outs, unpublished partners, and ambiguous assignments 
 the credit. Legacy registry `partner_attribution: false` remains an opt-out.
 
 The main RUMI backend reads `PARTNER_RUNTIME_URL` and `PARTNER_TENANT_SLUG` from the box
-`.env`; the default is the production API prefix and slug `rumi`. Managed backends read
+`.env`; configure the production API prefix and slug `rumi` as shown in `.env.example`.
+An absent runtime URL retains legacy behavior until the explicit activation step. Managed backends read
 `TENANT_PARTNER_RUNTIME_URL` from each tenant's own `.env` and use their rendered registry
 slug. Production tenants on the staging box must use the production Sofra URL. Demo or
 staging RUMI can use `https://staging.sofrapiwas.com/api/public/tenant-branding` once the

@@ -51,7 +51,7 @@ services:
     patched = yaml.safe_load(compose.read_text())
     runtime = patched['services']['backend-demo']['environment']
     assert runtime['Partner__TenantSlug'] == 'demo'
-    assert runtime['Partner__RuntimeUrl'] == '${TENANT_PARTNER_RUNTIME_URL:-https://sofrapiwas.com/api/public/tenant-branding}'
+    assert runtime['Partner__RuntimeUrl'] == '${TENANT_PARTNER_RUNTIME_URL:-}'
     for key in module.RUNTIME_KEYS:
         runtime.pop('Partner__' + key)
     assert patched == yaml.safe_load(original), 'unrelated compose values changed'

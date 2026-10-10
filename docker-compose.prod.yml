@@ -136,7 +136,7 @@ services:
       # configure this RUMI instance explicitly for its release environment.
       Catalogue__ApiBaseUrl: "${CATALOGUE_API_BASE_URL:-}"
       # Published attribution is read from Sofra; ordinary brand edits need no deploy.
-      Partner__RuntimeUrl: "${PARTNER_RUNTIME_URL:-https://sofrapiwas.com/api/public/tenant-branding}"
+      Partner__RuntimeUrl: "${PARTNER_RUNTIME_URL:-}"
       Partner__TenantSlug: "${PARTNER_TENANT_SLUG:-rumi}"
       Partner__RefreshSeconds: "${PARTNER_REFRESH_SECONDS:-60}"
       Partner__MaxStaleSeconds: "${PARTNER_MAX_STALE_SECONDS:-300}"
