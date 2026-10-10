@@ -646,11 +646,14 @@ URL is absent. Dynamic mode never falls back to them.
 Release Sofra and apply its `TenantBranding` migration before activating tenant runtime
 reads. Release the matching backend/frontend, then sync this deploy release to both boxes.
 For main RUMI, recreate only the backend from the synced Compose file. For an existing
-managed tenant, apply the narrow configuration patch below instead of re-provisioning:
+managed tenant, use the canonical provisioning workflow's `--runtime-branding-only` mode.
+It generates the exact runtime mappings from the current template and verifies every
+unrelated Compose value is unchanged. It exits before normal credential/image, database,
+container and Caddy provisioning paths:
 
 ```bash
 cd /opt/rumi/deploy
-python3 ./configure-runtime-branding.py demo \
+./provision-tenant.sh demo --runtime-branding-only \
   --runtime-url https://staging.sofrapiwas.com/api/public/tenant-branding
 # For production tenants, omit --runtime-url (production prefix is the default).
 # The patch backs up Compose/.env, changes only Partner__ runtime keys and the URL,

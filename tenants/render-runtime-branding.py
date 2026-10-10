@@ -14,7 +14,6 @@ import yaml
 RUNTIME_KEYS = (
     "RuntimeUrl", "TenantSlug", "RefreshSeconds", "MaxStaleSeconds", "RequestTimeoutSeconds"
 )
-DEFAULT_URL = "https://sofrapiwas.com/api/public/tenant-branding"
 
 
 def read_box_role(path: Path) -> str:
@@ -80,12 +79,18 @@ def write_with_backup(path: Path, content: str, suffix: str) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("slug")
-    parser.add_argument("--runtime-url", default=DEFAULT_URL)
-    parser.add_argument("--deploy-dir", type=Path, default=Path(__file__).resolve().parent)
+    parser.add_argument("--runtime-url")
+    parser.add_argument("--deploy-dir", type=Path, default=Path(__file__).resolve().parent.parent)
     parser.add_argument("--tenants-dir", type=Path, default=Path("/opt/rumi/tenants"))
     args = parser.parse_args()
     if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", args.slug):
         raise ValueError("invalid tenant slug")
+    if args.runtime_url is None:
+        template_env = (args.deploy_dir / "tenants/templates/tenant.env.tpl").read_text()
+        defaults = re.findall(r"^TENANT_PARTNER_RUNTIME_URL=([^\r\n]+)$", template_env, re.MULTILINE)
+        if len(defaults) != 1:
+            raise ValueError("tenant template must configure one runtime branding URL")
+        args.runtime_url = defaults[0]
     url = urlsplit(args.runtime_url)
     if (url.scheme != "https" or not url.hostname or url.username or url.password
             or url.query or url.fragment or url.port or url.path != "/api/public/tenant-branding"):

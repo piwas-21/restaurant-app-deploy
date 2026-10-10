@@ -10,7 +10,7 @@ import tempfile
 import yaml
 
 root = Path(sys.argv[1]).resolve()
-spec = importlib.util.spec_from_file_location('runtime_branding', root / 'configure-runtime-branding.py')
+spec = importlib.util.spec_from_file_location('runtime_branding', root / 'tenants/render-runtime-branding.py')
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 with tempfile.TemporaryDirectory() as tmp:
@@ -21,6 +21,7 @@ with tempfile.TemporaryDirectory() as tmp:
     (box / 'tenants/templates').mkdir(parents=True)
     template = (root / 'tenants/templates/docker-compose.tenant.yml.tpl').read_text()
     (box / 'tenants/templates/docker-compose.tenant.yml.tpl').write_text(template)
+    (box / 'tenants/templates/tenant.env.tpl').write_text((root / 'tenants/templates/tenant.env.tpl').read_text())
     registry = {'tenants': {'demo': {'managed': 'scripts', 'status': 'active', 'box': 'staging'}}}
     registry_file = box / 'tenants/registry.yml'
     registry_file.write_text(yaml.safe_dump(registry))
@@ -42,7 +43,7 @@ services:
     compose.write_text(original)
     env.write_text('BACKEND_TAG=old-sha\nTENANT_PARTNER_NAME=Old partner\nSECRET=not-to-be-printed\n')
     env.chmod(0o600)
-    command = [sys.executable, str(root / 'configure-runtime-branding.py'), 'demo',
+    command = ['bash', str(root / 'provision-tenant.sh'), 'demo', '--runtime-branding-only',
                '--deploy-dir', str(box), '--tenants-dir', str(tenants)]
     result = subprocess.run(command, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
