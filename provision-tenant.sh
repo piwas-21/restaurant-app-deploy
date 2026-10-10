@@ -6,6 +6,7 @@
 # synced here.
 #
 #   ./provision-tenant.sh <slug>
+#   ./provision-tenant.sh <slug> --runtime-branding-only [--runtime-url <HTTPS API prefix>]
 #
 # What it does, in order:
 #   1. preflight    — BOX_ROLE matches the registry entry; refuses managed:legacy
@@ -24,11 +25,19 @@
 # Teardown: ./deprovision-tenant.sh <slug> [--drop-db] [--purge]
 set -euo pipefail
 cd "$(dirname "$0")"
-# shellcheck source=tenant-feature-flags.sh
-source ./tenant-feature-flags.sh
-
 SLUG="${1:?usage: $0 <slug>   (a tenant key in tenants/registry.yml)}"
 [[ "$SLUG" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]] || { echo "ERROR: slug must be lowercase [a-z0-9-], 2-31 chars" >&2; exit 2; }
+
+# Template-owned migration mode: generate only the runtime branding section. Exit
+# before reading shared credentials, changing image pins, DBs, containers or Caddy.
+# The renderer performs active/scripts/box checks, backs up changed files and proves
+# every unrelated Compose value remains unchanged. It never writes the registry.
+if [[ "${2:-}" == "--runtime-branding-only" ]]; then
+  exec python3 ./tenants/render-runtime-branding.py "$SLUG" "${@:3}"
+fi
+[[ $# -eq 1 ]] || { echo "ERROR: unknown provisioning mode" >&2; exit 2; }
+# shellcheck source=tenant-feature-flags.sh
+source ./tenant-feature-flags.sh
 
 REGISTRY="tenants/registry.yml"
 TENANT_DIR="/opt/rumi/tenants/${SLUG}"

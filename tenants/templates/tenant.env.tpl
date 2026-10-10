@@ -137,22 +137,17 @@ STRIPE_CONNECTED_ACCOUNT_ID=
 # it at 100% of the order instead (measured 2026-09-04).
 STRIPE_COMMISSION_BPS=0
 
-# --- Partner attribution (SOFRA-PARTNER-PLAN §11d, channel C) ----------------------------
-# "Site by <name>", linked, in the tenant footer — the reseller who built and provisioned
-# this site. Both lines are written by provision-tenant.sh on EVERY run from the registry's
-# `partner_name` / `partner_url` / `partner_attribution`, so editing them by hand is
-# overwritten on the next re-provision.
-#
-# The registry's BOOLEAN does not appear here, deliberately: provision-tenant.sh resolves it
-# and writes EMPTY values when attribution is off, so this file — and the backend that reads
-# it — carries exactly one meaning, WHAT TO DISPLAY. Empty = display nothing, which is also
-# the state of every tenant with no partner. That is what makes switching attribution off
-# REMOVE the credit on the next re-provision instead of merely not adding it.
-#
-# Literal empties rather than __PLACEHOLDER__ substitutions, for the same reason the three
-# STRIPE_ lines above are: set_env_line rewrites both on every run, so a placeholder would
-# only ever be visible if that rewrite failed — and it would then render as the literal
-# string `__PARTNER_NAME__` in a diner's footer. Safe by default: a half-finished provision
-# credits nobody rather than crediting a placeholder.
+# --- Runtime branding ----------------------------------------------------------
+# Public read-only Sofra API route prefix; the backend appends its configured slug.
+# Use the staging control plane only for a rehearsal with staging tenant mappings.
+# These operator-owned values survive re-provision; production tenants on a staging
+# BOX still use the production Sofra control plane.
+TENANT_PARTNER_RUNTIME_URL=https://sofrapiwas.com/api/public/tenant-branding
+TENANT_PARTNER_REFRESH_SECONDS=60
+TENANT_PARTNER_MAX_STALE_SECONDS=300
+TENANT_PARTNER_REQUEST_TIMEOUT_SECONDS=3
+
+# Legacy registry attribution is retained for old backend images only.
+# Runtime-enabled images never use it after a failed/withdrawn runtime response.
 TENANT_PARTNER_NAME=
 TENANT_PARTNER_URL=
