@@ -622,38 +622,55 @@ per-account TWINT flip until Stripe approves the platform's own `twint_payments`
 refusal is deliberate. Full walk-through, including what the founder and the buyer should see
 afterwards: workspace `docs/runbooks/signup-to-live-tenant.md` §2b.5.
 
-### Crediting a partner in a tenant footer (`partner_name` / `partner_url` / `partner_attribution`)
+### Runtime tenant footer branding
 
-A reseller who built a tenant's site can be credited in its footer as *"Site by &lt;name&gt;"*,
-linked (SOFRA-PARTNER-PLAN §11d). Three optional registry keys, flat on the tenant entry:
+Partner publication is database-backed in Sofra. A partner saves and publishes once;
+linked active tenants inherit the public name and website within 60 seconds. Active
+tenants without a partner display Sofra, `https://sofrapiwas.com`, and `sofra@piwas.nl`
+from Sofra's `config/tenant-branding.json`. Private partner contact details are never
+published. Restaurant opt-outs, unpublished partners, and ambiguous assignments suppress
+the credit. Legacy registry `partner_attribution: false` remains an opt-out.
 
-```yaml
-    partner_name: Solution Eva
-    partner_url: https://solutioneva.com
-    partner_attribution: true      # optional; ABSENT MEANS TRUE
+The main RUMI backend reads `PARTNER_RUNTIME_URL` and `PARTNER_TENANT_SLUG` from the box
+`.env`; the default is the production API prefix and slug `rumi`. Managed backends read
+`TENANT_PARTNER_RUNTIME_URL` from each tenant's own `.env` and use their rendered registry
+slug. Production tenants on the staging box must use the production Sofra URL. Demo or
+staging RUMI can use `https://staging.sofrapiwas.com/api/public/tenant-branding` once the
+staging control plane has their assignment records.
+
+Refresh, maximum stale age and timeout defaults are 60, 300 and 3 seconds respectively.
+On Sofra failure, a bounded cache keeps ordering independent; expired attribution disappears.
+Legacy `Partner__Name`/`Partner__Url` are retained for compatibility only when the runtime
+URL is absent. Dynamic mode never falls back to them.
+
+Release Sofra and apply its `TenantBranding` migration before activating tenant runtime
+reads. Release the matching backend/frontend, then sync this deploy release to both boxes.
+For main RUMI, recreate only the backend from the synced Compose file. For an existing
+managed tenant, apply the narrow configuration patch below instead of re-provisioning:
+
+```bash
+cd /opt/rumi/deploy
+python3 ./configure-runtime-branding.py demo \
+  --runtime-url https://staging.sofrapiwas.com/api/public/tenant-branding
+# For production tenants, omit --runtime-url (production prefix is the default).
+# The patch backs up Compose/.env, changes only Partner__ runtime keys and the URL,
+# and refuses inactive/legacy/wrong-box tenants. It never modifies DBs, images,
+# modules, printers, Caddy, credentials, or legacy attribution values.
+cd /opt/rumi/tenants/demo
+docker compose up -d --no-deps --force-recreate --pull never backend-demo
 ```
 
-`provision-tenant.sh` resolves them into **two** tenant `.env` values —
-`TENANT_PARTNER_NAME` and `TENANT_PARTNER_URL` — and the boolean does **not** travel: the
-`.env`, and therefore the backend and the footer, carry one meaning only, *what to display*.
+Read back `/api/tenant/partner` and `/api/frontend/version` from every active tenant.
+Confirm the footer website/email in a browser, including a tenant linked to a published
+partner. With a staging fixture, verify publication updates an open page after a refresh,
+withdrawal and restaurant opt-out hide it, and an unknown slug yields no brand. Partner
+edits after this initial rollout require no registry PR, provisioning, rebuild or restart.
+Rollback by restoring the patch's Compose/.env backups and recreating only that backend;
+restore the previous backend image separately if needed.
 
-Three things to know before editing them:
-
-- **`partner_attribution` is the RESTAURANT's off-switch**, not the partner's. Absent = true
-  (the partner built the site). It is only consulted when `partner_name` is set, and setting
-  it without one is refused as a contradiction.
-- **Off REMOVES the credit**, it does not merely stop adding it: both `.env` lines are
-  rewritten on every run, and off writes them EMPTY — byte-for-byte the state of a tenant
-  with no partner. So the way to take a partner's name off a live tenant is
-  `partner_attribution: false` **plus a re-provision** (the container recreate is what applies
-  it, exactly as with `modules` — `docker compose restart` re-reads nothing).
-- It must be a **YAML boolean**. `yes` / `on` / `1` are refused loudly. The reason is in
-  `provision-tenant.sh`'s own comment: the registry reader is `yaml.safe_load` + `str(v)`, so
-  a YAML boolean reaches the shell CAPITALISED (`False`), and a comparison against `"false"`
-  would never match — the off-switch would be a silent no-op that reads as ON.
-
-`partner_url` is `https://` plus a bare host or the provision refuses it: it becomes an
-`href` on the restaurant's public page. Covered by `tests/partner-attribution.sh`.
+The older registry `partner_name` / `partner_url` fields are still validated and copied by
+`provision-tenant.sh` for old images. They no longer publish new partner changes. Historical
+URL validation is covered by `tests/partner-attribution.sh`.
 
 ### Tenant sending identity (`PLATFORM_MAIL_DOMAIN` — EMAIL-IDENTITY-PLAN)
 
