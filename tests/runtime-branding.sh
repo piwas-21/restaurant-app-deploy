@@ -10,6 +10,11 @@ import tempfile
 import yaml
 
 root = Path(sys.argv[1]).resolve()
+base = yaml.safe_load((root / 'docker-compose.prod.yml').read_text())
+for service in ['sofra', 'sofra-staging']:
+    settings = base['services'][service]['environment']
+    for key in ['SOFRA_BRAND_NAME', 'SOFRA_BRAND_URL', 'SOFRA_BRAND_EMAIL']:
+        assert settings[key] == '${' + key + ':-}', 'missing platform config carriage'
 spec = importlib.util.spec_from_file_location('runtime_branding', root / 'tenants/render-runtime-branding.py')
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)

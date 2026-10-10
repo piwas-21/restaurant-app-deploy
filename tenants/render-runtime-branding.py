@@ -28,7 +28,7 @@ def prepare_compose(text: str, template: str, slug: str) -> str:
     environment = source["services"][f"backend-{slug}"]["environment"]
     if not isinstance(environment, dict):
         raise ValueError("backend environment must use mapping syntax")
-    anchor = list(re.finditer(r'^([ ]+)Partner__Url:.*$', text, re.MULTILINE))
+    anchor = list(re.finditer(r'^( +)Partner__Url:.*$', text, re.MULTILINE))
     if len(anchor) != 1:
         raise ValueError("expected exactly one legacy Partner__Url mapping")
     indent = anchor[0].group(1)
@@ -76,6 +76,22 @@ def write_with_backup(path: Path, content: str, suffix: str) -> None:
             os.unlink(temp_name)
 
 
+def resolve_runtime_url(runtime_url: str | None, deploy_dir: Path) -> str:
+    if runtime_url is None:
+        template_env = (deploy_dir / "tenants/templates/tenant.env.tpl").read_text()
+        defaults = re.findall(r"^TENANT_PARTNER_RUNTIME_URL=([^\r\n]+)$", template_env, re.MULTILINE)
+        if len(defaults) != 1:
+            raise ValueError("tenant template must configure one runtime branding URL")
+        runtime_url = defaults[0]
+    url = urlsplit(runtime_url)
+    if (url.scheme != "https" or not url.hostname or url.username or url.password
+            or url.query or url.fragment or url.port or url.path != "/api/public/tenant-branding"):
+        raise ValueError("runtime URL must be an HTTPS public tenant-branding API prefix")
+    if any(char.isspace() for char in runtime_url) or any(char in runtime_url for char in '$"\\'):
+        raise ValueError("runtime URL contains invalid characters")
+    return runtime_url
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("slug")
@@ -85,18 +101,7 @@ def main() -> None:
     args = parser.parse_args()
     if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", args.slug):
         raise ValueError("invalid tenant slug")
-    if args.runtime_url is None:
-        template_env = (args.deploy_dir / "tenants/templates/tenant.env.tpl").read_text()
-        defaults = re.findall(r"^TENANT_PARTNER_RUNTIME_URL=([^\r\n]+)$", template_env, re.MULTILINE)
-        if len(defaults) != 1:
-            raise ValueError("tenant template must configure one runtime branding URL")
-        args.runtime_url = defaults[0]
-    url = urlsplit(args.runtime_url)
-    if (url.scheme != "https" or not url.hostname or url.username or url.password
-            or url.query or url.fragment or url.port or url.path != "/api/public/tenant-branding"):
-        raise ValueError("runtime URL must be an HTTPS public tenant-branding API prefix")
-    if any(char.isspace() for char in args.runtime_url) or any(char in args.runtime_url for char in '$"\\'):
-        raise ValueError("runtime URL contains invalid characters")
+    args.runtime_url = resolve_runtime_url(args.runtime_url, args.deploy_dir)
     registry = yaml.safe_load((args.deploy_dir / "tenants/registry.yml").read_text())["tenants"]
     tenant = registry.get(args.slug)
     if not tenant or tenant.get("managed") != "scripts" or tenant.get("status") != "active":

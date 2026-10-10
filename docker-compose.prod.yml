@@ -334,6 +334,10 @@ services:
       PRINTER_AGENT_SECRET_PROD: "${PRINTER_AGENT_SECRET_PROD:-}"
       PRINTER_AGENT_SECRET_STAGING: "${PRINTER_AGENT_SECRET_STAGING:-}"
       NEXTAUTH_URL: "${SOFRA_APP_URL:-https://sofrapiwas.com}"
+      # Public footer defaults for tenants without a partner; required runtime config.
+      SOFRA_BRAND_NAME: "${SOFRA_BRAND_NAME:-}"
+      SOFRA_BRAND_URL: "${SOFRA_BRAND_URL:-}"
+      SOFRA_BRAND_EMAIL: "${SOFRA_BRAND_EMAIL:-}"
       # Mollie subscription billing (S9, sofra ADR-011 Job A). Unset -> billing
       # UI shows "not configured" and the webhook 503s; the site still serves.
       MOLLIE_API_KEY: "${MOLLIE_API_KEY:-}"
@@ -528,6 +532,10 @@ services:
       PRINTER_CREDENTIAL_ENCRYPTION_KEY: "${SOFRA_STAGING_PRINTER_ENCRYPTION_KEY:-}"
       PRINTER_AGENT_SECRET_STAGING: "${SOFRA_STAGING_PRINTER_AGENT_SECRET:-}"
       NEXTAUTH_URL: "${SOFRA_STAGING_APP_URL:-https://staging.sofrapiwas.com}"
+      # Public footer defaults for tenants without a partner; required runtime config.
+      SOFRA_BRAND_NAME: "${SOFRA_BRAND_NAME:-}"
+      SOFRA_BRAND_URL: "${SOFRA_BRAND_URL:-}"
+      SOFRA_BRAND_EMAIL: "${SOFRA_BRAND_EMAIL:-}"
       # The TEST Mollie key, and the reason this environment is worth having: billing
       # flows become exercisable against a deployed control plane. The app itself
       # refuses the dangerous combination — `webhookUrl()` throws if MOLLIE_WEBHOOK_URL

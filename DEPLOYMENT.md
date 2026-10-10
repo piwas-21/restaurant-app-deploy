@@ -627,7 +627,10 @@ afterwards: workspace `docs/runbooks/signup-to-live-tenant.md` §2b.5.
 Partner publication is database-backed in Sofra. A partner saves and publishes once;
 linked active tenants inherit the public name and website within 60 seconds. Active
 tenants without a partner display Sofra, `https://sofrapiwas.com`, and `sofra@piwas.nl`
-from Sofra's `config/tenant-branding.json`. Private partner contact details are never
+from Sofra's required `SOFRA_BRAND_NAME`, `SOFRA_BRAND_URL` and
+`SOFRA_BRAND_EMAIL` runtime settings in the box `.env`. Both control-plane services
+receive the same public defaults; unset/invalid settings make an unpartnered tenant
+branding read return 503, without affecting tenant ordering. Private partner contact details are never
 published. Restaurant opt-outs, unpublished partners, and ambiguous assignments suppress
 the credit. Legacy registry `partner_attribution: false` remains an opt-out.
 
@@ -644,8 +647,9 @@ On Sofra failure, a bounded cache keeps ordering independent; expired attributio
 Legacy `Partner__Name`/`Partner__Url` are retained for compatibility only when the runtime
 URL is absent. Dynamic mode never falls back to them.
 
-Release Sofra and apply its `TenantBranding` migration before activating tenant runtime
-reads. Release the matching backend/frontend, then sync this deploy release to both boxes.
+Configure the three `SOFRA_BRAND_*` box `.env` values from `.env.example` before
+rolling either Sofra control-plane service. Release Sofra and apply its `TenantBranding`
+migration before activating tenant runtime reads. Release the matching backend/frontend, then sync this deploy release to both boxes.
 For main RUMI, recreate only the backend from the synced Compose file. For an existing
 managed tenant, use the canonical provisioning workflow's `--runtime-branding-only` mode.
 It generates the exact runtime mappings from the current template and verifies every
