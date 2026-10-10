@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Patch only managed-tenant branding configuration; never provision or restart."""
+"""Generate runtime branding from the tenant template without a full re-provision."""
 import argparse
 import os
 from pathlib import Path
@@ -39,13 +39,16 @@ def prepare_compose(text: str, template: str, slug: str) -> str:
             raise ValueError(f"duplicate Partner__{key} mapping")
         text = re.sub(rf'^{indent}Partner__{key}:.*\n?', '', text, flags=re.MULTILINE)
     text = re.sub(r'^\s*# (?:BEGIN|END) runtime-branding.*\n', '', text, flags=re.MULTILINE)
+    generated = yaml.safe_load(template.replace("__SLUG__", slug))
+    generated_environment = generated["services"][f"backend-{slug}"]["environment"]
+    expected = {f"Partner__{key}": generated_environment[f"Partner__{key}"] for key in RUNTIME_KEYS}
+    # Preserve the checked-in template spelling and environment interpolation exactly.
     block = template.split("# BEGIN runtime-branding", 1)[1].split("# END runtime-branding", 1)[0]
     lines = [line for line in block.splitlines() if "Partner__" in line]
     block = "\n".join(indent + line.strip().replace("__SLUG__", slug) for line in lines) + "\n"
     text = re.sub(rf'^{indent}Partner__Url:.*\n', lambda m: m.group(0) + block,
                   text, count=1, flags=re.MULTILINE)
     target = yaml.safe_load(text)
-    expected = yaml.safe_load(block)
     original = dict(environment)
     target_environment = target["services"][f"backend-{slug}"]["environment"]
     if any(target_environment.get(key) != value for key, value in expected.items()):
