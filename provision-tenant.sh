@@ -1176,7 +1176,7 @@ echo "==> Caddy site block + validate + reload"
 sed -e "s|__SLUG__|${SLUG}|g" \
     -e "s|__DOMAIN__|${REG_DOMAIN}|g" \
     tenants/templates/site.caddy.tpl > "caddy-tenants/${SLUG}.caddy"
-# Alias hostnames get their own tiny redirect site (301 to the canonical origin),
+# Alias hostnames get a permanent, method-preserving redirect to the canonical origin,
 # appended to the same file so teardown still removes everything in one unlink.
 for alias in ${DOMAIN_ALIASES[@]+"${DOMAIN_ALIASES[@]}"}; do
   cat >> "caddy-tenants/${SLUG}.caddy" <<CADDY
@@ -1184,7 +1184,8 @@ for alias in ${DOMAIN_ALIASES[@]+"${DOMAIN_ALIASES[@]}"}; do
 # Alias -> canonical. A redirect, not a proxy: the frontend bundle bakes
 # NEXT_PUBLIC_* for one origin (see the alias note in provision-tenant.sh).
 ${alias} {
-	redir https://${REG_DOMAIN}{uri} permanent
+	# Preserve POST bodies for printer registration, acknowledgements and telemetry.
+	redir https://${REG_DOMAIN}{uri} 308
 }
 CADDY
   echo "   alias: ${alias} -> https://${REG_DOMAIN}"
