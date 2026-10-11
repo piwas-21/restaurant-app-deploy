@@ -57,7 +57,12 @@ URL/bearer/allowlist while preserving the box `.env`. Never log either file.
 
 1. Confirm the intended app revision via `/api/health` and migration via the DB.
 2. Agent sync should make the demo card ready. Initial HTML must contain no key.
-3. Reveal/copy setup; paste into printer-app Settings, save and test connection.
+3. Reveal/copy setup; use the canonical API base URL, paste into printer-app Settings,
+   save and test connection. Verify a device heartbeat and a recent successful feed
+   poll as well: a successful GET connection test does not prove POST registration.
+   Tenant aliases must return HTTP 308 to preserve POST bodies. An old 301 alias
+   can turn heartbeat POSTs into GETs (405), leaving the device unregistered and
+   blocking its order feed. Correct the saved API base URL before retrying.
 4. Request renewal by typing the demo slug. Dashboard remains pending until the
    host verifies the replacement; duplicate requests must not issue another key.
 5. Check the old key returns 401, the new key returns 200, and update the emulator.
