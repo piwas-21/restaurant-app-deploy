@@ -972,7 +972,7 @@ places and nothing else does:
   bistronova:
     domain: bistronova.nl
     domain_mode: byo
-    domain_aliases: [www.bistronova.nl]   # optional; 301s to the canonical domain
+    domain_aliases: [www.bistronova.nl]   # optional; 308s to the canonical domain
 ```
 
 Order matters, because a certificate cannot be issued before DNS resolves here:
@@ -986,7 +986,7 @@ Order matters, because a certificate cannot be issued before DNS resolves here:
    cross-origin API calls from the custom domain. Moving an existing tenant to a custom
    domain therefore means a **rebuild**, not just a registry edit.
 3. **Provision** as usual. Caddy issues the certificate on the first request (~30 s).
-4. **Verify** `./verify-env.sh https://bistronova.nl` and that the alias 301s.
+4. **Verify** `./verify-env.sh https://bistronova.nl` and that the alias returns 308 with the canonical Location.
 
 Aliases **redirect**, they do not serve — same baked-origin reason. Two hostnames both
 serving the app is a CORS bug waiting for its first order.
@@ -2149,7 +2149,7 @@ missed-order/error counts to the sofra control plane's `/api/telemetry/fleet` ro
    backend would push as `rumi` too and clobber prod's fleet rows in the single sofra control plane.
 
 **Printer-app onboarding for a tenant** who buys the printer service: they enter three values
-in the app's Settings — **API Base URL** (`https://<their-domain>`), **Tenant Slug**, and
+in the app's Settings — **API Base URL** (the canonical `https://<registry-domain>`), **Tenant Slug**, and
 **Printer Key** (`PrinterSettings.ApiKey`, auto-generated per tenant). `provision-tenant.sh`
 prints the base URL and tenant slug in its summary; the key stays in `/opt/rumi/tenants/<slug>/app-secrets.json`.
 Admins can manage this access in `/admin/printers` once the host printer agent is configured.
